@@ -9,7 +9,6 @@ the GVFG source directly.
 ## Contents
 
 - `sdk/gvfg`: GVFG public C API and internal XDMA backend.
-- `sdk/gdriver_shared/include`: shared driver ABI headers required by the backend.
 - `sdk/gvfg/src/render`: GVFG internal D3D preview/render pipeline.
 - `samples/gvfg_qt_preview`: customer-facing Qt preview sample.
 - `docs`: API and integration notes.
@@ -51,6 +50,6 @@ lib/gvfg.lib
 bin/gvfg.dll
 ```
 
-The XDMA backend and driver ABI headers are implementation details and should not
-be included by customer applications.
+The XDMA backend headers are implementation details and should not be included by
+customer applications.
 

@@ -1,4 +1,4 @@
-﻿#include "xdma_capture_session.h"
+#include "xdma_capture_session.h"
 
 #include "xdma_public.h"
 
@@ -104,77 +104,77 @@ namespace
         return (value == 8u || value == 10u) ? value : fallback;
     }
 
-    static gdriver_pixel_format_t decode_pixel_format(uint32_t rawFormat, uint32_t bitDepth)
+    static xdma_pixel_format_t decode_pixel_format(uint32_t rawFormat, uint32_t bitDepth)
     {
         (void)bitDepth;
         switch (rawFormat & 0x3u)
         {
         case 0:
-            return GDRIVER_PIXFMT_YUY2;
+            return XDMA_PIXFMT_YUY2;
         case 1:
-            return GDRIVER_PIXFMT_RGB24;
+            return XDMA_PIXFMT_RGB24;
         case 2:
-            return GDRIVER_PIXFMT_YUV444;
+            return XDMA_PIXFMT_YUV444;
         case 3:
-            return GDRIVER_PIXFMT_NV12;
+            return XDMA_PIXFMT_NV12;
         default:
-            return GDRIVER_PIXFMT_UNKNOWN;
+            return XDMA_PIXFMT_UNKNOWN;
         }
     }
 
-    static uint32_t bit_depth_for_pixfmt(gdriver_pixel_format_t fmt)
+    static uint32_t bit_depth_for_pixfmt(xdma_pixel_format_t fmt)
     {
         switch (fmt)
         {
-        case GDRIVER_PIXFMT_P010:
-        case GDRIVER_PIXFMT_Y210:
+        case XDMA_PIXFMT_P010:
+        case XDMA_PIXFMT_Y210:
             return 10;
         default:
             return 8;
         }
     }
 
-    static size_t bytes_per_frame(uint32_t width, uint32_t height, gdriver_pixel_format_t fmt, uint32_t bitDepth)
+    static size_t bytes_per_frame(uint32_t width, uint32_t height, xdma_pixel_format_t fmt, uint32_t bitDepth)
     {
         const size_t pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
         switch (fmt)
         {
-        case GDRIVER_PIXFMT_NV12:
+        case XDMA_PIXFMT_NV12:
             return pixels * 3u / 2u;
-        case GDRIVER_PIXFMT_P010:
+        case XDMA_PIXFMT_P010:
             return pixels * 3u;
-        case GDRIVER_PIXFMT_RGB24:
-        case GDRIVER_PIXFMT_YUV444:
+        case XDMA_PIXFMT_RGB24:
+        case XDMA_PIXFMT_YUV444:
             return bitDepth > 8u ? pixels * 6u : pixels * 3u;
-        case GDRIVER_PIXFMT_Y210:
+        case XDMA_PIXFMT_Y210:
             return pixels * 4u;
-        case GDRIVER_PIXFMT_YUY2:
-        case GDRIVER_PIXFMT_UYVY:
+        case XDMA_PIXFMT_YUY2:
+        case XDMA_PIXFMT_UYVY:
         default:
             return pixels * 2u;
         }
     }
 
-    static uint32_t plane_count_for_pixfmt(gdriver_pixel_format_t fmt)
+    static uint32_t plane_count_for_pixfmt(xdma_pixel_format_t fmt)
     {
-        return (fmt == GDRIVER_PIXFMT_NV12 || fmt == GDRIVER_PIXFMT_P010) ? 2u : 1u;
+        return (fmt == XDMA_PIXFMT_NV12 || fmt == XDMA_PIXFMT_P010) ? 2u : 1u;
     }
 
-    static uint32_t plane_stride_for_pixfmt(uint32_t width, gdriver_pixel_format_t fmt, uint32_t bitDepth)
+    static uint32_t plane_stride_for_pixfmt(uint32_t width, xdma_pixel_format_t fmt, uint32_t bitDepth)
     {
         switch (fmt)
         {
-        case GDRIVER_PIXFMT_NV12:
+        case XDMA_PIXFMT_NV12:
             return width;
-        case GDRIVER_PIXFMT_P010:
+        case XDMA_PIXFMT_P010:
             return width * 2u;
-        case GDRIVER_PIXFMT_RGB24:
-        case GDRIVER_PIXFMT_YUV444:
+        case XDMA_PIXFMT_RGB24:
+        case XDMA_PIXFMT_YUV444:
             return bitDepth > 8u ? width * 6u : width * 3u;
-        case GDRIVER_PIXFMT_Y210:
+        case XDMA_PIXFMT_Y210:
             return width * 4u;
-        case GDRIVER_PIXFMT_YUY2:
-        case GDRIVER_PIXFMT_UYVY:
+        case XDMA_PIXFMT_YUY2:
+        case XDMA_PIXFMT_UYVY:
         default:
             return width * 2u;
         }
@@ -256,7 +256,7 @@ namespace
         return oss.str();
     }
 
-    static void reset_stats(xdma_stream_stats_t &stats, gdriver_stream_state_t state)
+    static void reset_stats(xdma_stream_stats_t &stats, xdma_stream_state_t state)
     {
         std::memset(&stats, 0, sizeof(stats));
         stats.state = state;
@@ -343,14 +343,14 @@ namespace gvfg::internal
 
     XdmaCaptureSession::XdmaCaptureSession()
     {
-        stream_desc_.input = GDRIVER_INPUT_SDI;
+        stream_desc_.input = XDMA_INPUT_SDI;
         stream_desc_.width = kDefaultWidth;
         stream_desc_.height = kDefaultHeight;
-        stream_desc_.pixel_format = GDRIVER_PIXFMT_YUY2;
+        stream_desc_.pixel_format = XDMA_PIXFMT_YUY2;
         stream_bit_depth_ = 8;
         stream_desc_.buffer_count = 1;
-        stream_desc_.memory_kind = GDRIVER_MEMORY_DRIVER_COPY;
-        reset_stats(stats_, GDRIVER_STREAM_STOPPED);
+        stream_desc_.memory_kind = XDMA_MEMORY_DRIVER_COPY;
+        reset_stats(stats_, XDMA_STREAM_STOPPED);
     }
 
     XdmaCaptureSession::~XdmaCaptureSession()
@@ -476,11 +476,11 @@ namespace gvfg::internal
         return h;
     }
 
-    xdma_status_t XdmaCaptureSession::set_input(gdriver_input_t input)
+    xdma_status_t XdmaCaptureSession::set_input(xdma_input_t input)
     {
         if (!opened_)
             return XDMA_EINVAL;
-        input_ = input == GDRIVER_INPUT_UNKNOWN ? GDRIVER_INPUT_SDI : input;
+        input_ = input == XDMA_INPUT_UNKNOWN ? XDMA_INPUT_SDI : input;
         stream_desc_.input = input_;
         XDMA_LOG("set_input: input=%u", static_cast<unsigned>(input_));
         return XDMA_OK;
@@ -509,7 +509,7 @@ namespace gvfg::internal
         const bool statusOk = read_user_reg(kFpgaStatusReg, rawStatus);
 
         const uint32_t signalBitDepth = bitDepthOk ? decode_bit_depth(rawBitDepth, 8) : 0;
-        const gdriver_pixel_format_t pixelFormat = formatOk ? decode_pixel_format(rawFormat, signalBitDepth) : stream_desc_.pixel_format;
+        const xdma_pixel_format_t pixelFormat = formatOk ? decode_pixel_format(rawFormat, signalBitDepth) : stream_desc_.pixel_format;
         const uint32_t bufferBitDepth = bit_depth_for_pixfmt(pixelFormat);
 
         XDMA_LOG("signal: fmt_ok=%d fmt_raw=0x%x fps_ok=%d fps_raw=0x%x bit_ok=%d bit_raw=%u status_ok=%d status=0x%08x width_ok=%d width=%u height_ok=%d height=%u configured=%ux%u fmt=%u",
@@ -532,7 +532,7 @@ namespace gvfg::internal
         const bool haveSignalSize = widthOk && heightOk && width != 0 && height != 0;
         const bool sdiLocked = statusOk ? ((rawStatus & bit_n(0)) != 0) : haveSignalSize;
         const bool hdmiLocked = statusOk ? ((rawStatus & bit_n(2)) != 0) : haveSignalSize;
-        out.signal_locked = (input_ == GDRIVER_INPUT_HDMI ? hdmiLocked : sdiLocked) ? 1 : 0;
+        out.signal_locked = (input_ == XDMA_INPUT_HDMI ? hdmiLocked : sdiLocked) ? 1 : 0;
         out.input = input_;
         out.width = haveSignalSize ? width : 0;
         out.height = haveSignalSize ? height : 0;
@@ -568,13 +568,13 @@ namespace gvfg::internal
             return XDMA_ESTATE;
         if (running_)
             return XDMA_ESTATE;
-        if (desc.pixel_format != GDRIVER_PIXFMT_YUY2 &&
-            desc.pixel_format != GDRIVER_PIXFMT_Y210 &&
-            desc.pixel_format != GDRIVER_PIXFMT_RGB24 &&
-            desc.pixel_format != GDRIVER_PIXFMT_NV12 &&
-            desc.pixel_format != GDRIVER_PIXFMT_P010 &&
-            desc.pixel_format != GDRIVER_PIXFMT_YUV444 &&
-            desc.pixel_format != GDRIVER_PIXFMT_UNKNOWN)
+        if (desc.pixel_format != XDMA_PIXFMT_YUY2 &&
+            desc.pixel_format != XDMA_PIXFMT_Y210 &&
+            desc.pixel_format != XDMA_PIXFMT_RGB24 &&
+            desc.pixel_format != XDMA_PIXFMT_NV12 &&
+            desc.pixel_format != XDMA_PIXFMT_P010 &&
+            desc.pixel_format != XDMA_PIXFMT_YUV444 &&
+            desc.pixel_format != XDMA_PIXFMT_UNKNOWN)
             return fail(XDMA_ENOTSUP, "configure_stream(pixel_format)", ERROR_NOT_SUPPORTED);
 
         XDMA_LOG("configure: request input=%u %ux%u fmt=%u buffers=%u mem=%u flags=0x%x",
@@ -589,19 +589,19 @@ namespace gvfg::internal
         // Normalize the requested stream.  The render path may support fewer
         // formats than the FPGA, but the DMA frame size must follow the signal.
         stream_desc_ = desc;
-        stream_desc_.input = desc.input == GDRIVER_INPUT_UNKNOWN ? input_ : desc.input;
+        stream_desc_.input = desc.input == XDMA_INPUT_UNKNOWN ? input_ : desc.input;
         stream_desc_.width = desc.width ? desc.width : kDefaultWidth;
         stream_desc_.height = desc.height ? desc.height : kDefaultHeight;
-        stream_desc_.pixel_format = desc.pixel_format == GDRIVER_PIXFMT_UNKNOWN ? GDRIVER_PIXFMT_YUY2 : desc.pixel_format;
+        stream_desc_.pixel_format = desc.pixel_format == XDMA_PIXFMT_UNKNOWN ? XDMA_PIXFMT_YUY2 : desc.pixel_format;
         uint32_t rawBitDepth = 0;
         stream_bit_depth_ = bit_depth_for_pixfmt(stream_desc_.pixel_format);
         stream_desc_.buffer_count = desc.buffer_count ? desc.buffer_count : 1;
-        stream_desc_.memory_kind = GDRIVER_MEMORY_DRIVER_COPY;
+        stream_desc_.memory_kind = XDMA_MEMORY_DRIVER_COPY;
         configured_ = true;
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            reset_stats(stats_, GDRIVER_STREAM_CONFIGURED);
+            reset_stats(stats_, XDMA_STREAM_CONFIGURED);
             latest_frame_.clear();
             delivery_frame_.clear();
             latest_sequence_ = 0;
@@ -686,7 +686,7 @@ namespace gvfg::internal
             delivered_sequence_ = 0;
             wait_timeout_count_ = 0;
             stream_error_ = false;
-            reset_stats(stats_, GDRIVER_STREAM_RUNNING);
+            reset_stats(stats_, XDMA_STREAM_RUNNING);
         }
         save_frames_after_plug_in_.store(0);
         fix_pulsed_after_plug_in_.store(false);
@@ -769,7 +769,7 @@ namespace gvfg::internal
         if (!wasRunning)
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            stats_.state = configured_ ? GDRIVER_STREAM_CONFIGURED : GDRIVER_STREAM_STOPPED;
+            stats_.state = configured_ ? XDMA_STREAM_CONFIGURED : XDMA_STREAM_STOPPED;
             XDMA_LOG("stop: no active stream state=%u", static_cast<unsigned>(stats_.state));
             return XDMA_OK;
         }
@@ -804,7 +804,7 @@ namespace gvfg::internal
         stop_data_worker();
 
         std::lock_guard<std::mutex> lock(mutex_);
-        stats_.state = configured_ ? GDRIVER_STREAM_CONFIGURED : GDRIVER_STREAM_STOPPED;
+        stats_.state = configured_ ? XDMA_STREAM_CONFIGURED : XDMA_STREAM_STOPPED;
         XDMA_LOG("stop: done captured=%llu delivered=%llu interrupts=%llu dma_errors=%llu",
                  static_cast<unsigned long long>(stats_.frames_captured),
                  static_cast<unsigned long long>(stats_.frames_delivered),
@@ -1267,7 +1267,7 @@ namespace gvfg::internal
             allocatedBytes = bytes;
             pending_events_ = 0;
             stream_error_ = false;
-            stats_.state = GDRIVER_STREAM_RUNNING;
+            stats_.state = XDMA_STREAM_RUNNING;
         }
         XDMA_HOTPLUG_LOG("PLUG_IN resume buffer input=%u path=%u frame_bytes=%zu",
                           static_cast<unsigned>(stream_desc_.input),
@@ -1388,7 +1388,7 @@ namespace gvfg::internal
         latest_frame_.assign(data, data + bytes);
         ++latest_sequence_;
         ++stats_.frames_captured;
-        stats_.state = GDRIVER_STREAM_RUNNING;
+        stats_.state = XDMA_STREAM_RUNNING;
         if (should_log_counter(latest_sequence_))
             XDMA_LOG("publish_frame: id=%llu bytes=%zu captured=%llu",
                      static_cast<unsigned long long>(latest_sequence_),
@@ -1613,7 +1613,7 @@ namespace gvfg::internal
 
     uint32_t XdmaCaptureSession::active_input_path() const
     {
-        return stream_desc_.input == GDRIVER_INPUT_HDMI ? 1u : 0u;
+        return stream_desc_.input == XDMA_INPUT_HDMI ? 1u : 0u;
     }
 
     uint32_t XdmaCaptureSession::event_mask(uint32_t role) const

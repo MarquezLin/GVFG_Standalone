@@ -34,7 +34,7 @@ namespace gvfg::internal
         xdma_status_t open_device_index(size_t deviceIndex);
         xdma_status_t close();
 
-        xdma_status_t set_input(gdriver_input_t input);
+        xdma_status_t set_input(xdma_input_t input);
         xdma_status_t get_signal_status(xdma_signal_status_t &out) const;
 
         xdma_status_t set_event_callback(xdma_event_callback_t callback, void *user, uint32_t eventMask);
@@ -91,7 +91,7 @@ namespace gvfg::internal
 
         xdma_stream_desc_t stream_desc_{};
         uint32_t stream_bit_depth_ = 8;
-        gdriver_input_t input_ = GDRIVER_INPUT_SDI;
+        xdma_input_t input_ = XDMA_INPUT_SDI;
         bool opened_ = false;
         bool configured_ = false;
 

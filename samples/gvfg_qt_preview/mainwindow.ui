@@ -48,6 +48,13 @@
       </widget>
      </item>
      <item>
+      <widget class="QPushButton" name="fullscreenPreviewButton">
+       <property name="text">
+        <string>Fullscreen Preview</string>
+       </property>
+      </widget>
+     </item>
+     <item>
       <widget class="QPushButton" name="startButton">
        <property name="text">
         <string>Start</string>

@@ -138,6 +138,7 @@ MainWindow::MainWindow(QWidget *parent)
                     openDevice();
             });
     connect(ui_->showPreviewButton, &QPushButton::clicked, this, [this]() { showPreviewWindow(); });
+    connect(ui_->fullscreenPreviewButton, &QPushButton::clicked, this, [this]() { showFullscreenPreviewWindow(); });
     connect(ui_->startButton, &QPushButton::clicked, this, [this]() { startCapture(); });
     connect(ui_->stopButton, &QPushButton::clicked, this, [this]() { stopCapture(); });
     connect(signalStatusTimer_, &QTimer::timeout, this, [this]() { updateSignalStatus(true); });
@@ -192,10 +193,20 @@ void MainWindow::refreshDevices()
 
 void MainWindow::showPreviewWindow()
 {
+    updatePreviewSourceSize();
     previewWindow_->showPreview();
 
     if (handle_ && !applyPreview())
         appendLog(QStringLiteral("Show Preview failed: unable to update preview window"));
+}
+
+void MainWindow::showFullscreenPreviewWindow()
+{
+    updatePreviewSourceSize();
+    previewWindow_->showFullscreenPreview();
+
+    if (handle_ && !applyPreview())
+        appendLog(QStringLiteral("Fullscreen Preview failed: unable to update preview window"));
 }
 
 bool MainWindow::openDevice()
@@ -268,6 +279,7 @@ void MainWindow::startCapture()
     if (!handle_ && !openDevice())
         return;
 
+    updatePreviewSourceSize();
     previewWindow_->showPreview();
     if (!applyPreview())
         return;
@@ -323,6 +335,31 @@ bool MainWindow::applyPreview()
     return true;
 }
 
+void MainWindow::updatePreviewSourceSize(const gvfg_runtime_info_t &info)
+{
+    const auto &signal = info.input_signal;
+    const auto &callback = info.callback_frame;
+
+    if (signal.width > 0 && signal.height > 0)
+    {
+        previewWindow_->setSourceSize(signal.width, signal.height);
+        return;
+    }
+
+    if (callback.valid && callback.width > 0 && callback.height > 0)
+        previewWindow_->setSourceSize(callback.width, callback.height);
+}
+
+void MainWindow::updatePreviewSourceSize()
+{
+    if (!handle_)
+        return;
+
+    gvfg_runtime_info_t info{};
+    if (gvfg_get_runtime_info(handle_, &info) == GVFG_OK)
+        updatePreviewSourceSize(info);
+}
+
 void MainWindow::updateSignalStatus(bool writeLog)
 {
     if (!handle_)
@@ -340,6 +377,8 @@ void MainWindow::updateSignalStatus(bool writeLog)
     const bool videoFormatValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_VIDEO_FORMAT);
     const bool bitDepthValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_BIT_DEPTH);
     const bool statusValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_STATUS);
+    if (previewWindow_->isVisible())
+        updatePreviewSourceSize(info);
 
     const QString fpgaResolution = (fpga.width_valid && fpga.height_valid)
                                        ? QStringLiteral("%1x%2").arg(signal.width).arg(signal.height)
@@ -403,6 +442,7 @@ void MainWindow::updateUiState()
     ui_->openButton->setEnabled(!captureRunning_);
     ui_->startButton->setEnabled(deviceOpen && !captureRunning_);
     ui_->stopButton->setEnabled(captureRunning_);
+    ui_->fullscreenPreviewButton->setEnabled(true);
     ui_->refreshButton->setEnabled(!deviceOpen && !captureRunning_);
     ui_->deviceCombo->setEnabled(!deviceOpen && !captureRunning_);
 }

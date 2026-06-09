@@ -28,7 +28,6 @@ target_include_directories(gvfg
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/xdma
-        ${CMAKE_SOURCE_DIR}/sdk/gdriver_shared/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/internal
         ${CMAKE_CURRENT_SOURCE_DIR}/src/render
 )

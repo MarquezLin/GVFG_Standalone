@@ -2,7 +2,8 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "gdriver_abi.h"
+
+#define XDMA_MAX_PLANES 3
 
 typedef enum xdma_status_t
 {
@@ -12,28 +13,61 @@ typedef enum xdma_status_t
     XDMA_ESTATE,
     XDMA_ENOTSUP,
     XDMA_ETIMEOUT,
-    XDMA_EIO,
-    XDMA_EABI
+    XDMA_EIO
 } xdma_status_t;
+
+typedef enum xdma_input_t
+{
+    XDMA_INPUT_UNKNOWN = 0,
+    XDMA_INPUT_SDI = 1,
+    XDMA_INPUT_HDMI = 2
+} xdma_input_t;
+
+typedef enum xdma_pixel_format_t
+{
+    XDMA_PIXFMT_UNKNOWN = 0,
+    XDMA_PIXFMT_YUY2 = 1,
+    XDMA_PIXFMT_UYVY = 2,
+    XDMA_PIXFMT_RGB24 = 3,
+    XDMA_PIXFMT_BGRX32 = 4,
+    XDMA_PIXFMT_NV12 = 5,
+    XDMA_PIXFMT_P010 = 6,
+    XDMA_PIXFMT_Y210 = 7,
+    XDMA_PIXFMT_YUV444 = 8
+} xdma_pixel_format_t;
+
+typedef enum xdma_memory_kind_t
+{
+    XDMA_MEMORY_DRIVER_COPY = 0,
+    XDMA_MEMORY_SHARED_SECTION = 1,
+    XDMA_MEMORY_DMA_RING = 2
+} xdma_memory_kind_t;
+
+typedef enum xdma_stream_state_t
+{
+    XDMA_STREAM_STOPPED = 0,
+    XDMA_STREAM_CONFIGURED = 1,
+    XDMA_STREAM_RUNNING = 2
+} xdma_stream_state_t;
 
 typedef struct xdma_stream_desc_t
 {
-    gdriver_input_t input;
+    xdma_input_t input;
     uint32_t width;
     uint32_t height;
-    gdriver_pixel_format_t pixel_format;
+    xdma_pixel_format_t pixel_format;
     uint32_t buffer_count;
-    gdriver_memory_kind_t memory_kind;
+    xdma_memory_kind_t memory_kind;
     uint32_t flags;
 } xdma_stream_desc_t;
 
 typedef struct xdma_signal_status_t
 {
     int signal_locked;
-    gdriver_input_t input;
+    xdma_input_t input;
     uint32_t width;
     uint32_t height;
-    gdriver_pixel_format_t pixel_format;
+    xdma_pixel_format_t pixel_format;
     uint32_t bit_depth;
     uint32_t fpga_valid_mask;       /* bit0:0x0c, bit1:0x18, bit2:0x1c, bit3:0x180 */
     uint32_t fpga_width_valid;      /* Non-zero when FPGA 0x10 read succeeded. */
@@ -54,18 +88,18 @@ typedef struct xdma_frame_t
     uint64_t timestamp_ns;
     uint32_t width;
     uint32_t height;
-    gdriver_pixel_format_t pixel_format;
+    xdma_pixel_format_t pixel_format;
     uint32_t bit_depth;
     uint32_t plane_count;
-    uint32_t plane_offset_bytes[GDRIVER_MAX_PLANES];
-    uint32_t plane_stride_bytes[GDRIVER_MAX_PLANES];
+    uint32_t plane_offset_bytes[XDMA_MAX_PLANES];
+    uint32_t plane_stride_bytes[XDMA_MAX_PLANES];
     uint32_t driver_buffer_index;
     uint32_t flags;
 } xdma_frame_t;
 
 typedef struct xdma_stream_stats_t
 {
-    gdriver_stream_state_t state;
+    xdma_stream_state_t state;
     uint64_t frames_captured;
     uint64_t frames_delivered;
     uint64_t frames_dropped;

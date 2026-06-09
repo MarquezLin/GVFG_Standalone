@@ -34,11 +34,14 @@ protected:
 private:
     void refreshDevices();
     void showPreviewWindow();
+    void showFullscreenPreviewWindow();
     bool openDevice();
     void closeDevice();
     void startCapture();
     void stopCapture();
     bool applyPreview();
+    void updatePreviewSourceSize(const gvfg_runtime_info_t &info);
+    void updatePreviewSourceSize();
     void updateSignalStatus(bool writeLog);
     void updateUiState();
     void showError(const QString &apiName, gvfg_status_t status);

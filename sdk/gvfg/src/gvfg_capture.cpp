@@ -79,8 +79,6 @@ namespace
             return "timeout";
         case XDMA_EIO:
             return "i/o error";
-        case XDMA_EABI:
-            return "abi mismatch";
         default:
             return "unknown";
         }
@@ -163,25 +161,25 @@ namespace
         return (mask & (1u << bit)) != 0;
     }
 
-    int to_gvfg_pixel_format(gdriver_pixel_format_t fmt)
+    int to_gvfg_pixel_format(xdma_pixel_format_t fmt)
     {
         switch (fmt)
         {
-        case GDRIVER_PIXFMT_YUY2:
+        case XDMA_PIXFMT_YUY2:
             return GVFG_PIXFMT_YUY2;
-        case GDRIVER_PIXFMT_UYVY:
+        case XDMA_PIXFMT_UYVY:
             return GVFG_PIXFMT_UYVY;
-        case GDRIVER_PIXFMT_RGB24:
+        case XDMA_PIXFMT_RGB24:
             return GVFG_PIXFMT_RGB24;
-        case GDRIVER_PIXFMT_BGRX32:
+        case XDMA_PIXFMT_BGRX32:
             return GVFG_PIXFMT_BGRX32;
-        case GDRIVER_PIXFMT_NV12:
+        case XDMA_PIXFMT_NV12:
             return GVFG_PIXFMT_NV12;
-        case GDRIVER_PIXFMT_P010:
+        case XDMA_PIXFMT_P010:
             return GVFG_PIXFMT_P010;
-        case GDRIVER_PIXFMT_Y210:
+        case XDMA_PIXFMT_Y210:
             return GVFG_PIXFMT_Y210;
-        case GDRIVER_PIXFMT_YUV444:
+        case XDMA_PIXFMT_YUV444:
             return GVFG_PIXFMT_YUV444;
         default:
             return GVFG_PIXFMT_UNKNOWN;
@@ -302,7 +300,7 @@ struct gvfg_handle_t
 
         currentIndex = index;
         syncBackendEventCallback();
-        selectedInput = GDRIVER_INPUT_SDI;
+        selectedInput = XDMA_INPUT_SDI;
         resetRuntimeCounters();
         const xdma_status_t stInput = backend->set_input(selectedInput);
         if (stInput != XDMA_OK)
@@ -519,7 +517,7 @@ struct gvfg_handle_t
             height = sig.height;
         if (sig.bit_depth > 0)
             bitDepth = sig.bit_depth;
-        pixelFormat = sig.pixel_format != GDRIVER_PIXFMT_UNKNOWN ? sig.pixel_format : GDRIVER_PIXFMT_YUY2;
+        pixelFormat = sig.pixel_format != XDMA_PIXFMT_UNKNOWN ? sig.pixel_format : XDMA_PIXFMT_YUY2;
         fpgaValidMask = sig.fpga_valid_mask;
         fpgaWidthValid = sig.fpga_width_valid != 0;
         fpgaHeightValid = sig.fpga_height_valid != 0;
@@ -531,13 +529,13 @@ struct gvfg_handle_t
         fpgaStatusRaw = sig.fpga_status_raw;
     }
 
-    static const char *inputName(gdriver_input_t input)
+    static const char *inputName(xdma_input_t input)
     {
         switch (input)
         {
-        case GDRIVER_INPUT_HDMI:
+        case XDMA_INPUT_HDMI:
             return "HDMI";
-        case GDRIVER_INPUT_SDI:
+        case XDMA_INPUT_SDI:
             return "SDI";
         default:
             return "unknown";
@@ -551,7 +549,7 @@ struct gvfg_handle_t
         const bool sdiDdrOk = (fpgaStatusRaw & (1u << 1)) != 0;
         const bool hdmiLocked = (fpgaStatusRaw & (1u << 2)) != 0;
         const bool hdmiDdrOk = (fpgaStatusRaw & (1u << 3)) != 0;
-        const bool selectedReady = (selectedInput == GDRIVER_INPUT_HDMI) ? (hdmiLocked && hdmiDdrOk)
+        const bool selectedReady = (selectedInput == XDMA_INPUT_HDMI) ? (hdmiLocked && hdmiDdrOk)
                                                                          : (sdiLocked && sdiDdrOk);
 
         if (!statusValid || !selectedReady)
@@ -610,7 +608,7 @@ struct gvfg_handle_t
         desc.height = height;
         desc.pixel_format = pixelFormat;
         desc.buffer_count = 1;
-        desc.memory_kind = GDRIVER_MEMORY_DRIVER_COPY;
+        desc.memory_kind = XDMA_MEMORY_DRIVER_COPY;
 
         const xdma_status_t st = backend->configure_stream(desc);
         if (st != XDMA_OK)
@@ -748,7 +746,7 @@ struct gvfg_handle_t
 
         switch (frame.pixel_format)
         {
-        case GDRIVER_PIXFMT_YUY2:
+        case XDMA_PIXFMT_YUY2:
         {
             const int stride = frame.plane_stride_bytes[0] ? static_cast<int>(frame.plane_stride_bytes[0]) : w * 2;
             if (stride < w * 2)
@@ -757,7 +755,7 @@ struct gvfg_handle_t
             uploaded = pipeline->upload_yuy2_frame(base + frame.plane_offset_bytes[0], stride, w, h);
             break;
         }
-        case GDRIVER_PIXFMT_Y210:
+        case XDMA_PIXFMT_Y210:
         {
             const int stride = frame.plane_stride_bytes[0] ? static_cast<int>(frame.plane_stride_bytes[0]) : w * 4;
             if (stride < w * 4)
@@ -766,7 +764,7 @@ struct gvfg_handle_t
             uploaded = pipeline->upload_y210_frame(base + frame.plane_offset_bytes[0], stride, w, h);
             break;
         }
-        case GDRIVER_PIXFMT_NV12:
+        case XDMA_PIXFMT_NV12:
         {
             if (frame.plane_count < 2)
                 return false;
@@ -777,7 +775,7 @@ struct gvfg_handle_t
                                                    base + frame.plane_offset_bytes[1], strideUV, w, h);
             break;
         }
-        case GDRIVER_PIXFMT_P010:
+        case XDMA_PIXFMT_P010:
         {
             if (frame.plane_count < 2)
                 return false;
@@ -886,14 +884,14 @@ struct gvfg_handle_t
 
     std::unique_ptr<gvfg::internal::XdmaCaptureSession> backend;
     int currentIndex = -1;
-    gdriver_input_t selectedInput = GDRIVER_INPUT_SDI;
+    xdma_input_t selectedInput = XDMA_INPUT_SDI;
     gvfg_preview_desc_t previewDesc{};
     void *previewHwnd = nullptr;
 
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t bitDepth = 8;
-    gdriver_pixel_format_t pixelFormat = GDRIVER_PIXFMT_YUY2;
+    xdma_pixel_format_t pixelFormat = XDMA_PIXFMT_YUY2;
     mutable std::mutex stateMutex;
     uint32_t fpgaValidMask = 0;
     bool fpgaWidthValid = false;
