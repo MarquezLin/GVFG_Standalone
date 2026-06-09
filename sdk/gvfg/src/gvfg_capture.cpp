@@ -158,27 +158,6 @@ namespace
         }
     }
 
-    const char *gdriver_pixel_format_name(gdriver_pixel_format_t fmt)
-    {
-        switch (fmt)
-        {
-        case GDRIVER_PIXFMT_YUY2:
-            return "YUY2";
-        case GDRIVER_PIXFMT_Y210:
-            return "Y210";
-        case GDRIVER_PIXFMT_RGB24:
-            return "RGB24";
-        case GDRIVER_PIXFMT_NV12:
-            return "NV12";
-        case GDRIVER_PIXFMT_P010:
-            return "P010";
-        case GDRIVER_PIXFMT_YUV444:
-            return "YUV444";
-        default:
-            return "UNKNOWN";
-        }
-    }
-
     bool fpga_field_valid(uint32_t mask, int bit)
     {
         return (mask & (1u << bit)) != 0;
@@ -380,9 +359,6 @@ struct gvfg_handle_t
             haveSignalSize = fpgaWidthValid && fpgaHeightValid && fpgaWidthRaw != 0 && fpgaHeightRaw != 0;
             out.width = haveSignalSize ? static_cast<int>(fpgaWidthRaw) : 0;
             out.height = haveSignalSize ? static_cast<int>(fpgaHeightRaw) : 0;
-            out.fps = 0.0;
-            out.bit_depth = static_cast<int>(bitDepth ? bitDepth : 8);
-            copy_cstr(out.pixel_format, sizeof(out.pixel_format), gdriver_pixel_format_name(pixelFormat));
             out.fpga.valid_mask = fpgaValidMask;
             out.fpga.width_valid = fpgaWidthValid ? 1 : 0;
             out.fpga.height_valid = fpgaHeightValid ? 1 : 0;

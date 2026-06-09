@@ -269,9 +269,7 @@ typedef struct
 {
     int width;
     int height;
-    double fps;
-    int bit_depth;
-    char pixel_format[32];
+    gvfg_fpga_signal_status_t fpga;
 } gvfg_signal_status_t;
 ```
 
@@ -279,9 +277,7 @@ typedef struct
 | --- | --- |
 | `width` | input 寬度 |
 | `height` | input 高度 |
-| `fps` | Legacy field；GVFG 固定回 `0`，請使用 `fpga.frame_rate_*` |
-| `bit_depth` | Legacy SDK source-buffer bit depth；FPGA bit depth 請使用 `fpga.bit_depth` |
-| `pixel_format` | Legacy SDK source-buffer format；callback buffer format 請使用 `gvfg_runtime_info_t::delivered_frame` |
+| `fpga` | FPGA raw/decoded signal metadata |
 
 
 ### Customer buffer vs FPGA signal
@@ -324,9 +320,6 @@ typedef struct
 {
     int width;                       /* Signal width in pixels, from FPGA when available. */
     int height;                      /* Signal height in pixels, from FPGA when available. */
-    double fps;                      /* Legacy field; GVFG leaves this 0. Use fpga.frame_rate_* instead. */
-    int bit_depth;                   /* Legacy SDK source-buffer field. Prefer fpga.* and runtime delivered_frame. */
-    char pixel_format[32];           /* Legacy SDK source-buffer field. Prefer fpga.* and runtime delivered_frame. */
     gvfg_fpga_signal_status_t fpga;  /* Raw/decoded FPGA signal metadata. */
 } gvfg_signal_status_t;
 ```
@@ -900,7 +893,7 @@ gvfg_signal_status_t sig = {0};
 gvfg_status_t st = gvfg_get_signal_status(handle, &sig);
 
 if (st == GVFG_OK) {
-    printf("Signal legacy: %dx%d\n",
+    printf("Signal: %dx%d\n",
            sig.width,
            sig.height);
 
@@ -1265,7 +1258,6 @@ wait_frame: deliver
 ## Current XDMA Notes
 
 - The current XDMA path exposes decoded FPGA signal metadata through `sig.fpga`.
-- `sig.pixel_format` and `sig.bit_depth` are legacy SDK source-buffer fields.
 - The delivered customer callback buffer is reported by `gvfg_runtime_info_t::delivered_frame`.
 - `sig.fpga.bit_depth=10` does not by itself mean the delivered callback buffer is `Y210`; the current callback path reports BGRA8.
 - `sig.fpga.frame_rate_bits=0001` is not in the supported table, so the UI/API reports it as `--`.

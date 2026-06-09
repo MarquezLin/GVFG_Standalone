@@ -127,9 +127,6 @@ typedef struct
 {
     int width;                       /* Signal width in pixels, from FPGA when available. */
     int height;                      /* Signal height in pixels, from FPGA when available. */
-    double fps;                      /* Legacy field; GVFG leaves this 0. Use fpga.frame_rate_* instead. */
-    int bit_depth;                   /* Legacy SDK source-buffer bit depth. Prefer fpga.* and runtime delivered_frame. */
-    char pixel_format[32];           /* Legacy SDK source-buffer format. Prefer fpga.* and runtime delivered_frame. */
     gvfg_fpga_signal_status_t fpga;  /* Raw/decoded FPGA signal metadata. */
 } gvfg_signal_status_t;
 
@@ -144,7 +141,7 @@ typedef struct
 
 typedef struct
 {
-    gvfg_signal_status_t input_signal; /* FPGA-reported signal metadata plus legacy buffer fields. */
+    gvfg_signal_status_t input_signal; /* FPGA-reported signal metadata. */
     gvfg_delivered_frame_info_t delivered_frame; /* Frame buffer delivered by gvfg.dll to the app. */
     double capture_fps;                /* Runtime FPS measured from backend frames seen by the SDK worker. */
     uint64_t delivered_frames;         /* Number of frames delivered to the app callback. */
@@ -406,8 +403,8 @@ GVFG_API gvfg_status_t gvfg_stop(gvfg_handle handle);
  * - GVFG_EINVAL if handle or out_status is NULL.
  * - GVFG_ENODEV if no valid signal information is available.
  *
- * The FPGA metadata describes the hardware signal. The pixel_format and
- * bit_depth fields describe the buffer format delivered by the customer API.
+ * The FPGA metadata describes the hardware signal. Use
+ * gvfg_runtime_info_t::delivered_frame for the callback buffer format.
  */
 GVFG_API gvfg_status_t gvfg_get_signal_status(gvfg_handle handle, gvfg_signal_status_t *out_status);
 
