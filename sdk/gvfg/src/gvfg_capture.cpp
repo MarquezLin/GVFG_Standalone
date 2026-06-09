@@ -163,6 +163,58 @@ namespace
         return (mask & (1u << bit)) != 0;
     }
 
+    int to_gvfg_pixel_format(gdriver_pixel_format_t fmt)
+    {
+        switch (fmt)
+        {
+        case GDRIVER_PIXFMT_YUY2:
+            return GVFG_PIXFMT_YUY2;
+        case GDRIVER_PIXFMT_UYVY:
+            return GVFG_PIXFMT_UYVY;
+        case GDRIVER_PIXFMT_RGB24:
+            return GVFG_PIXFMT_RGB24;
+        case GDRIVER_PIXFMT_BGRX32:
+            return GVFG_PIXFMT_BGRX32;
+        case GDRIVER_PIXFMT_NV12:
+            return GVFG_PIXFMT_NV12;
+        case GDRIVER_PIXFMT_P010:
+            return GVFG_PIXFMT_P010;
+        case GDRIVER_PIXFMT_Y210:
+            return GVFG_PIXFMT_Y210;
+        case GDRIVER_PIXFMT_YUV444:
+            return GVFG_PIXFMT_YUV444;
+        default:
+            return GVFG_PIXFMT_UNKNOWN;
+        }
+    }
+
+    const char *gvfg_pixel_format_name(int fmt)
+    {
+        switch (fmt)
+        {
+        case GVFG_PIXFMT_YUY2:
+            return "YUY2";
+        case GVFG_PIXFMT_UYVY:
+            return "UYVY";
+        case GVFG_PIXFMT_RGB24:
+            return "RGB24";
+        case GVFG_PIXFMT_BGRX32:
+            return "BGRX32";
+        case GVFG_PIXFMT_NV12:
+            return "NV12";
+        case GVFG_PIXFMT_P010:
+            return "P010";
+        case GVFG_PIXFMT_Y210:
+            return "Y210";
+        case GVFG_PIXFMT_YUV444:
+            return "YUV444";
+        case GVFG_PIXFMT_BGRA8:
+            return "BGRA8";
+        default:
+            return "UNKNOWN";
+        }
+    }
+
     const char *fpga_video_format_name(uint32_t value)
     {
         switch (value & 0x3u)
@@ -223,20 +275,6 @@ namespace
         copy_cstr(dst, dstSize, bits);
     }
 
-    int clamp_u8(int v)
-    {
-        return (std::max)(0, (std::min)(255, v));
-    }
-
-    void yuv_to_rgb(int y, int u, int v, uint8_t &r, uint8_t &g, uint8_t &b)
-    {
-        const int c = y - 16;
-        const int d = u - 128;
-        const int e = v - 128;
-        r = static_cast<uint8_t>(clamp_u8((298 * c + 409 * e + 128) >> 8));
-        g = static_cast<uint8_t>(clamp_u8((298 * c - 100 * d - 208 * e + 128) >> 8));
-        b = static_cast<uint8_t>(clamp_u8((298 * c + 516 * d + 128) >> 8));
-    }
 }
 
 struct gvfg_handle_t
@@ -388,13 +426,26 @@ struct gvfg_handle_t
         getSignalStatus(out.input_signal);
         const uint64_t frames = deliveredFrames.load(std::memory_order_relaxed);
         const bool deliveredValid = running.load(std::memory_order_relaxed) && frames > 0;
-        out.delivered_frame.valid = deliveredValid ? 1 : 0;
+        out.preview_output.enabled = previewHwnd ? 1 : 0;
+        out.preview_output.active = (pipeline && previewHwnd) ? 1 : 0;
+        if (out.preview_output.active)
+        {
+            out.preview_output.width = pipeline->preview_w_;
+            out.preview_output.height = pipeline->preview_h_;
+            out.preview_output.bit_depth = pipeline->preview_swapchain_10bit() ? 10 : 8;
+            copy_cstr(out.preview_output.pixel_format, sizeof(out.preview_output.pixel_format),
+                      pipeline->preview_swapchain_10bit() ? "RGB10A2" : "BGRA8");
+        }
+
+        out.callback_frame.valid = deliveredValid ? 1 : 0;
         if (deliveredValid)
         {
-            out.delivered_frame.width = static_cast<int>(deliveredWidth.load(std::memory_order_relaxed));
-            out.delivered_frame.height = static_cast<int>(deliveredHeight.load(std::memory_order_relaxed));
-            out.delivered_frame.bit_depth = 8;
-            copy_cstr(out.delivered_frame.pixel_format, sizeof(out.delivered_frame.pixel_format), "BGRA8");
+            out.callback_frame.width = static_cast<int>(deliveredWidth.load(std::memory_order_relaxed));
+            out.callback_frame.height = static_cast<int>(deliveredHeight.load(std::memory_order_relaxed));
+            out.callback_frame.bit_depth = static_cast<int>(deliveredBitDepth.load(std::memory_order_relaxed));
+            copy_cstr(out.callback_frame.pixel_format,
+                      sizeof(out.callback_frame.pixel_format),
+                      gvfg_pixel_format_name(deliveredPixelFormat.load(std::memory_order_relaxed)));
         }
         out.capture_fps = runtimeFps.load(std::memory_order_relaxed);
         out.delivered_frames = frames;
@@ -666,11 +717,8 @@ struct gvfg_handle_t
             }
 
             updateRuntimeFps(frame.timestamp_ns ? frame.timestamp_ns : now_ns());
-            const bool rendered = renderGpuFrame(frame);
-            if (rendered)
-                emitReadbackFrame(frame);
-            else
-                emitCpuFallbackFrame(frame);
+            renderGpuFrame(frame);
+            emitNativeFrame(frame);
             backend->release_frame(frame);
         }
     }
@@ -757,100 +805,34 @@ struct gvfg_handle_t
         return ok;
     }
 
-    void emitReadbackFrame(const xdma_frame_t &frame)
+    void emitNativeFrame(const xdma_frame_t &frame)
     {
-        if (!onFrame || !pipeline || !ctx)
-            return;
-        if (!shouldEmitFrameCallback(frame.frame_id))
-            return;
-
-        const int w = static_cast<int>(frame.width);
-        const int h = static_cast<int>(frame.height);
-        if (!pipeline->blit_fp16_to_rgba8(w, h))
-            return;
-
-        gvfg_render_frame_t readback{};
-        if (pipeline->readback_to_frame(w, h, frame.timestamp_ns ? frame.timestamp_ns : now_ns(), frame.frame_id, &readback))
-        {
-            gvfg_frame_t out{};
-            out.data = readback.data[0];
-            out.stride = readback.stride[0];
-            out.width = readback.width;
-            out.height = readback.height;
-            out.pts_ns = readback.pts_ns;
-            out.frame_id = readback.frame_id;
-            onFrame(&out, callbackUser);
-            noteDeliveredFrame(out.width, out.height);
-            ctx->Unmap(pipeline->rt_stage_.Get(), 0);
-        }
-    }
-
-    void emitCpuFallbackFrame(const xdma_frame_t &frame)
-    {
-        if (frame.pixel_format != GDRIVER_PIXFMT_YUY2)
-        {
-            if (!fallbackLogged)
-            {
-                emitError(GVFG_ENOTSUP, "GVFG preview currently supports YUV422/YUV420 GPU paths only; RGB/YUV444 input is not rendered");
-                fallbackLogged = true;
-            }
-            return;
-        }
         if (!onFrame || !frame.data)
             return;
         if (!shouldEmitFrameCallback(frame.frame_id))
             return;
 
-        const int w = static_cast<int>(frame.width);
-        const int h = static_cast<int>(frame.height);
-        const int srcStride = frame.plane_stride_bytes[0] ? static_cast<int>(frame.plane_stride_bytes[0]) : w * 2;
-        if (w <= 0 || h <= 0 || srcStride < w * 2)
+        if (frame.width == 0 || frame.height == 0 || frame.plane_count == 0)
             return;
 
-        if (!fallbackLogged)
-        {
-            emitError(GVFG_ENOTSUP, "GPU preview/readback unavailable; using CPU YUY2 preview fallback");
-            fallbackLogged = true;
-        }
-
-        fallbackBgra.resize(static_cast<size_t>(w) * static_cast<size_t>(h) * 4u);
-        const auto *srcBase = static_cast<const uint8_t *>(frame.data);
-        for (int y = 0; y < h; ++y)
-        {
-            const uint8_t *src = srcBase + static_cast<size_t>(y) * static_cast<size_t>(srcStride);
-            uint8_t *dst = fallbackBgra.data() + static_cast<size_t>(y) * static_cast<size_t>(w) * 4u;
-            for (int x = 0; x + 1 < w; x += 2)
-            {
-                const int y0 = src[x * 2 + 0];
-                const int u = src[x * 2 + 1];
-                const int y1 = src[x * 2 + 2];
-                const int v = src[x * 2 + 3];
-
-                uint8_t r0 = 0, g0 = 0, b0 = 0;
-                uint8_t r1 = 0, g1 = 0, b1 = 0;
-                yuv_to_rgb(y0, u, v, r0, g0, b0);
-                yuv_to_rgb(y1, u, v, r1, g1, b1);
-
-                dst[x * 4 + 0] = b0;
-                dst[x * 4 + 1] = g0;
-                dst[x * 4 + 2] = r0;
-                dst[x * 4 + 3] = 255;
-                dst[(x + 1) * 4 + 0] = b1;
-                dst[(x + 1) * 4 + 1] = g1;
-                dst[(x + 1) * 4 + 2] = r1;
-                dst[(x + 1) * 4 + 3] = 255;
-            }
-        }
-
         gvfg_frame_t out{};
-        out.data = fallbackBgra.data();
-        out.stride = w * 4;
-        out.width = w;
-        out.height = h;
+        out.data = frame.data;
+        out.data_size = static_cast<uint64_t>(frame.data_size_bytes);
+        out.stride = static_cast<int>(frame.plane_stride_bytes[0]);
+        out.width = static_cast<int>(frame.width);
+        out.height = static_cast<int>(frame.height);
+        out.pixel_format = to_gvfg_pixel_format(frame.pixel_format);
+        out.bit_depth = static_cast<int>(frame.bit_depth);
+        out.plane_count = static_cast<int>((std::min)(frame.plane_count, static_cast<uint32_t>(GVFG_MAX_PLANES)));
+        for (int i = 0; i < out.plane_count; ++i)
+        {
+            out.plane_offset_bytes[i] = frame.plane_offset_bytes[i];
+            out.plane_stride_bytes[i] = frame.plane_stride_bytes[i];
+        }
         out.pts_ns = frame.timestamp_ns ? frame.timestamp_ns : now_ns();
         out.frame_id = frame.frame_id;
         onFrame(&out, callbackUser);
-        noteDeliveredFrame(out.width, out.height);
+        noteDeliveredFrame(out.width, out.height, out.bit_depth, out.pixel_format);
     }
 
     bool shouldEmitFrameCallback(uint64_t frameId) const
@@ -888,13 +870,17 @@ struct gvfg_handle_t
         deliveredFrames.store(0, std::memory_order_relaxed);
         deliveredWidth.store(0, std::memory_order_relaxed);
         deliveredHeight.store(0, std::memory_order_relaxed);
+        deliveredBitDepth.store(0, std::memory_order_relaxed);
+        deliveredPixelFormat.store(GVFG_PIXFMT_UNKNOWN, std::memory_order_relaxed);
         runtimeFps.store(0.0, std::memory_order_relaxed);
     }
 
-    void noteDeliveredFrame(int frameWidth, int frameHeight)
+    void noteDeliveredFrame(int frameWidth, int frameHeight, int bitDepth, int pixelFormat)
     {
         deliveredWidth.store(frameWidth > 0 ? static_cast<uint32_t>(frameWidth) : 0, std::memory_order_relaxed);
         deliveredHeight.store(frameHeight > 0 ? static_cast<uint32_t>(frameHeight) : 0, std::memory_order_relaxed);
+        deliveredBitDepth.store(bitDepth > 0 ? static_cast<uint32_t>(bitDepth) : 0, std::memory_order_relaxed);
+        deliveredPixelFormat.store(pixelFormat, std::memory_order_relaxed);
         deliveredFrames.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -922,6 +908,8 @@ struct gvfg_handle_t
     std::atomic<uint64_t> deliveredFrames{0};
     std::atomic<uint32_t> deliveredWidth{0};
     std::atomic<uint32_t> deliveredHeight{0};
+    std::atomic<uint32_t> deliveredBitDepth{0};
+    std::atomic<int> deliveredPixelFormat{GVFG_PIXFMT_UNKNOWN};
     std::atomic<double> runtimeFps{0.0};
 
     gvfg_on_frame_cb onFrame = nullptr;
@@ -931,8 +919,6 @@ struct gvfg_handle_t
     gvfg_on_event_cb onEvent = nullptr;
     void *eventCallbackUser = nullptr;
     uint32_t eventMask = GVFG_EVENT_MASK_DEFAULT;
-    bool fallbackLogged = false;
-    std::vector<uint8_t> fallbackBgra;
 
     std::atomic<bool> running{false};
     std::thread captureThread;

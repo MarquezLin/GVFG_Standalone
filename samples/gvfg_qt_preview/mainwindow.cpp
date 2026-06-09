@@ -334,7 +334,8 @@ void MainWindow::updateSignalStatus(bool writeLog)
 
     const auto &signal = info.input_signal;
     const auto &fpga = signal.fpga;
-    const auto &delivered = info.delivered_frame;
+    const auto &preview = info.preview_output;
+    const auto &callback = info.callback_frame;
     const bool frameRateValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_FRAME_RATE);
     const bool videoFormatValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_VIDEO_FORMAT);
     const bool bitDepthValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_BIT_DEPTH);
@@ -360,19 +361,27 @@ void MainWindow::updateSignalStatus(bool writeLog)
                               .arg(fpgaFieldText(statusValid, QString::number(signal.sdi_ddr_ok)))
                               .arg(fpgaFieldText(statusValid, QString::number(signal.hdmi_locked)))
                               .arg(fpgaFieldText(statusValid, QString::number(signal.hdmi_ddr_ok)));
-    const QString line3 = delivered.valid
-                              ? QStringLiteral("Delivered frame | frame=%1x%2 format=%3 bitdepth=%4")
-                                    .arg(delivered.width)
-                                    .arg(delivered.height)
-                                    .arg(QString::fromUtf8(delivered.pixel_format))
-                                    .arg(delivered.bit_depth)
-                              : QStringLiteral("Delivered frame | --");
-    const QString line4 = QStringLiteral("App runtime | capture=%1 fps delivered=%2")
+    const QString line3 = preview.active
+                              ? QStringLiteral("Preview output | frame=%1x%2 format=%3 bitdepth=%4")
+                                    .arg(preview.width)
+                                    .arg(preview.height)
+                                    .arg(QString::fromUtf8(preview.pixel_format))
+                                    .arg(preview.bit_depth)
+                              : (preview.enabled ? QStringLiteral("Preview output | configured, inactive")
+                                                 : QStringLiteral("Preview output | disabled"));
+    const QString line4 = callback.valid
+                              ? QStringLiteral("Callback frame | frame=%1x%2 format=%3 bitdepth=%4")
+                                    .arg(callback.width)
+                                    .arg(callback.height)
+                                    .arg(QString::fromUtf8(callback.pixel_format))
+                                    .arg(callback.bit_depth)
+                              : QStringLiteral("Callback frame | --");
+    const QString line5 = QStringLiteral("App runtime | capture=%1 fps delivered=%2")
                               .arg(info.capture_fps > 0.0 ? QString::number(info.capture_fps, 'f', 2)
                                                           : QStringLiteral("--"))
                               .arg(static_cast<qulonglong>(info.delivered_frames));
 
-    const QString statusText = line0 + QLatin1Char('\n') + line2 + QLatin1Char('\n') + line3 + QLatin1Char('\n') + line4;
+    const QString statusText = line0 + QLatin1Char('\n') + line2 + QLatin1Char('\n') + line3 + QLatin1Char('\n') + line4 + QLatin1Char('\n') + line5;
     if (lastSignalStatusText_ != statusText)
     {
         ui_->statusLabel->setText(statusText);

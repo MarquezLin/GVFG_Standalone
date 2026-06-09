@@ -341,12 +341,14 @@ typedef struct
 
 Use `gvfg_signal_status_t` fields for display-ready signal data.
 Use `gvfg_signal_status_t::fpga` for FPGA raw register values and read-valid flags.
-For delivered frame format, prefer `gvfg_runtime_info_t::delivered_frame`.
+For callback frame format, prefer `gvfg_runtime_info_t::callback_frame`.
+For SDK-managed preview output format, use `gvfg_runtime_info_t::preview_output`.
 
 For example, if FPGA reports `video_format=YUV422` and `bit_depth=10`, the
-hardware signal should be treated as YUV422 10-bit. The current GVFG callback
-buffer is a rendered BGRA8 frame, reported through
-`gvfg_runtime_info_t::delivered_frame`.
+hardware signal should be treated as YUV422 10-bit. The GVFG callback buffer is
+delivered in the native backend format, reported through
+`gvfg_runtime_info_t::callback_frame`. The preview swapchain is reported
+separately through `gvfg_runtime_info_t::preview_output`.
 
 FPGA frame-rate code table:
 
@@ -378,12 +380,23 @@ typedef struct
     int bit_depth;
     char pixel_format[32];
     int valid;
-} gvfg_delivered_frame_info_t;
+} gvfg_callback_frame_info_t;
+
+typedef struct
+{
+    int enabled;
+    int active;
+    int width;
+    int height;
+    int bit_depth;
+    char pixel_format[32];
+} gvfg_preview_output_info_t;
 
 typedef struct
 {
     gvfg_signal_status_t input_signal;
-    gvfg_delivered_frame_info_t delivered_frame;
+    gvfg_preview_output_info_t preview_output;
+    gvfg_callback_frame_info_t callback_frame;
     double capture_fps;
     uint64_t delivered_frames;
 } gvfg_runtime_info_t;
@@ -392,14 +405,16 @@ typedef struct
 | 欄位 | 意義 |
 | --- | --- |
 | `input_signal` | 目前 input signal 狀態 |
-| `delivered_frame` | Frame buffer delivered by gvfg.dll to the app callback: valid, width, height, pixel format, bit depth |
+| `preview_output` | SDK-managed preview output: enabled, active, width, height, pixel format, bit depth |
+| `callback_frame` | Frame buffer delivered by gvfg.dll to the app callback: valid, width, height, pixel format, bit depth |
 | `capture_fps` | SDK capture thread 從 backend frame 測到的 FPS |
 | `delivered_frames` | SDK 已送到 app callback 的 frame 數 |
 
 Source ownership:
 
 - FPGA reported signal: use `input_signal.fpga.*`.
-- Delivered callback buffer: use `delivered_frame.*`. `valid=0` means no callback frame is currently available/reported.
+- Preview output: use `preview_output.*`. `active=0` means no preview swapchain is currently active.
+- Delivered callback buffer: use `callback_frame.*`. `valid=0` means no callback frame is currently available/reported.
 - App/SDK runtime counters: use `capture_fps` and `delivered_frames`.
 
 這個 struct 適合顯示在：
@@ -455,9 +470,15 @@ frame callback 的 payload。
 typedef struct
 {
     const void *data;
+    uint64_t data_size;
     int stride;
     int width;
     int height;
+    int pixel_format;
+    int bit_depth;
+    int plane_count;
+    uint32_t plane_offset_bytes[GVFG_MAX_PLANES];
+    uint32_t plane_stride_bytes[GVFG_MAX_PLANES];
     uint64_t pts_ns;
     uint64_t frame_id;
 } gvfg_frame_t;
@@ -465,10 +486,16 @@ typedef struct
 
 | 欄位 | 意義 |
 | --- | --- |
-| `data` | pixel data pointer |
+| `data` | native pixel data pointer |
+| `data_size` | total bytes available from `data` |
 | `stride` | 每一列 bytes |
 | `width` | frame 寬度 |
 | `height` | frame 高度 |
+| `pixel_format` | `gvfg_pixel_format_t` value |
+| `bit_depth` | native frame bit depth |
+| `plane_count` | number of valid planes |
+| `plane_offset_bytes` | byte offset for each plane from `data` |
+| `plane_stride_bytes` | row stride for each plane |
 | `pts_ns` | timestamp，單位 ns |
 | `frame_id` | frame counter |
 
@@ -477,7 +504,7 @@ typedef struct
 - `data` 只在 callback 當下有效。
 - callback return 後不能再使用這個 pointer。
 - 如果客戶要存圖、做 snapshot、或丟給其他 thread，要自己 copy 一份。
-- 目前 callback 輸出是 8-bit BGRA-compatible 格式，在 Windows/Qt 可用 `QImage::Format_ARGB32` 接。
+- callback buffer uses the native backend format. Use `pixel_format`, `bit_depth`, and plane fields to interpret `data`.
 - callback 由 SDK worker thread 呼叫，不是在 UI thread。
 
 UI 程式要注意：
@@ -1274,6 +1301,7 @@ wait_frame: deliver
 ## Current XDMA Notes
 
 - The current XDMA path exposes decoded FPGA signal metadata through `sig.fpga`.
-- The delivered customer callback buffer is reported by `gvfg_runtime_info_t::delivered_frame`.
-- `sig.bit_depth=10` does not by itself mean the delivered callback buffer is `Y210`; the current callback path reports BGRA8.
+- The SDK-managed preview swapchain is reported by `gvfg_runtime_info_t::preview_output`.
+- The delivered customer callback buffer is reported by `gvfg_runtime_info_t::callback_frame`.
+- The callback buffer is delivered in the native backend format, such as `YUY2`, `Y210`, `NV12`, or `P010`.
 - `sig.frame_rate_bits=0001` is not in the supported table, so the UI/API reports it as `--`.

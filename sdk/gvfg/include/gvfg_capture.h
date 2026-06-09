@@ -59,7 +59,8 @@ extern "C" {
 
 enum
 {
-    GVFG_MAX_DEVICES = 16
+    GVFG_MAX_DEVICES = 16,
+    GVFG_MAX_PLANES = 4
 };
 
 typedef enum
@@ -79,6 +80,20 @@ typedef enum
     GVFG_PREVIEW_BITDEPTH_10BIT = 10, /* Prefer a 10-bit preview swapchain when available. */
     GVFG_PREVIEW_BITDEPTH_8BIT = 8    /* Force an 8-bit preview swapchain. */
 } gvfg_preview_bitdepth_t;
+
+typedef enum
+{
+    GVFG_PIXFMT_UNKNOWN = 0,
+    GVFG_PIXFMT_YUY2 = 1,
+    GVFG_PIXFMT_UYVY = 2,
+    GVFG_PIXFMT_RGB24 = 3,
+    GVFG_PIXFMT_BGRX32 = 4,
+    GVFG_PIXFMT_NV12 = 5,
+    GVFG_PIXFMT_P010 = 6,
+    GVFG_PIXFMT_Y210 = 7,
+    GVFG_PIXFMT_YUV444 = 8,
+    GVFG_PIXFMT_BGRA8 = 100
+} gvfg_pixel_format_t;
 
 typedef struct
 {
@@ -135,15 +150,26 @@ typedef struct
 {
     int width;              /* Width of frames delivered to the customer callback. */
     int height;             /* Height of frames delivered to the customer callback. */
-    int bit_depth;          /* Bit depth of the delivered callback buffer. */
-    char pixel_format[32];  /* Delivered callback buffer format, for example BGRA8. */
+    int bit_depth;          /* Bits per color channel of the callback buffer. */
+    char pixel_format[32];  /* Native callback buffer format, for example YUY2, Y210, NV12, or P010. */
     int valid;              /* Non-zero while capture is running after at least one callback frame. */
-} gvfg_delivered_frame_info_t;
+} gvfg_callback_frame_info_t;
+
+typedef struct
+{
+    int enabled;             /* Non-zero when SDK-managed preview was requested. */
+    int active;              /* Non-zero when the preview pipeline is active. */
+    int width;               /* Preview render width. */
+    int height;              /* Preview render height. */
+    int bit_depth;           /* Preview output bit depth, usually 8 or 10. */
+    char pixel_format[32];   /* Preview output format, for example BGRA8 or RGB10A2. */
+} gvfg_preview_output_info_t;
 
 typedef struct
 {
     gvfg_signal_status_t input_signal; /* FPGA-reported signal metadata. */
-    gvfg_delivered_frame_info_t delivered_frame; /* Frame buffer delivered by gvfg.dll to the app. */
+    gvfg_preview_output_info_t preview_output;   /* SDK-managed preview output, separate from callbacks. */
+    gvfg_callback_frame_info_t callback_frame;   /* Frame buffer delivered by gvfg.dll to the app callback. */
     double capture_fps;                /* Runtime FPS measured from backend frames seen by the SDK worker. */
     uint64_t delivered_frames;         /* Number of frames delivered to the app callback. */
 } gvfg_runtime_info_t;
@@ -162,12 +188,18 @@ typedef struct
 
 typedef struct
 {
-    const void *data;   /* Frame pixels. Valid only during the frame callback. */
-    int stride;         /* Bytes per row for data. */
-    int width;          /* Frame width in pixels. */
-    int height;         /* Frame height in pixels. */
-    uint64_t pts_ns;    /* Presentation timestamp in nanoseconds. */
-    uint64_t frame_id;  /* Monotonic frame identifier from the backend. */
+    const void *data;       /* Native frame buffer. Valid only during the frame callback. */
+    uint64_t data_size;     /* Total bytes available from data. */
+    int stride;             /* Bytes per row for plane 0. */
+    int width;              /* Frame width in pixels. */
+    int height;             /* Frame height in pixels. */
+    int pixel_format;       /* gvfg_pixel_format_t value. */
+    int bit_depth;          /* Bits per color channel of the native frame. */
+    int plane_count;        /* Number of valid planes. */
+    uint32_t plane_offset_bytes[GVFG_MAX_PLANES];
+    uint32_t plane_stride_bytes[GVFG_MAX_PLANES];
+    uint64_t pts_ns;        /* Presentation timestamp in nanoseconds. */
+    uint64_t frame_id;      /* Monotonic frame identifier from the backend. */
 } gvfg_frame_t;
 
 typedef enum
@@ -405,7 +437,7 @@ GVFG_API gvfg_status_t gvfg_stop(gvfg_handle handle);
  * - GVFG_ENODEV if no valid signal information is available.
  *
  * The FPGA metadata describes the hardware signal. Use
- * gvfg_runtime_info_t::delivered_frame for the callback buffer format.
+ * gvfg_runtime_info_t::callback_frame for the callback buffer format.
  */
 GVFG_API gvfg_status_t gvfg_get_signal_status(gvfg_handle handle, gvfg_signal_status_t *out_status);
 
