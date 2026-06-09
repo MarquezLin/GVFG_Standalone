@@ -1,7 +1,7 @@
 #include "gvfg_capture.h"
 
-#include "gcapture.h"
-#include "pipeline/shared_scene_pipeline.h"
+#include "gvfg_render_types.h"
+#include "shared_scene_pipeline.h"
 #include "xdma_capture_session.h"
 
 #include <algorithm>
@@ -21,6 +21,7 @@
 #include <wrl/client.h>
 
 using Microsoft::WRL::ComPtr;
+using namespace gvfg::internal;
 
 namespace
 {
@@ -364,7 +365,7 @@ struct gvfg_handle_t
         previewDesc = desc;
         previewHwnd = desc.enable_preview ? desc.hwnd : nullptr;
         if (pipeline)
-            pipeline->configurePreview(toGcapPreviewDesc());
+            pipeline->configurePreview(toRenderPreviewDesc());
         if (previewHwnd && width > 0 && height > 0)
             createRenderPipeline();
         return GVFG_OK;
@@ -598,23 +599,23 @@ struct gvfg_handle_t
         return GVFG_OK;
     }
 
-    gcap_preview_desc_t toGcapPreviewDesc() const
+    gvfg_render_preview_desc_t toRenderPreviewDesc() const
     {
-        gcap_preview_desc_t desc{};
+        gvfg_render_preview_desc_t desc{};
         desc.hwnd = previewHwnd;
         desc.enable_preview = previewHwnd ? 1 : 0;
         desc.use_fp16_pipeline = 1;
         switch (previewDesc.swapchain_bitdepth)
         {
         case GVFG_PREVIEW_BITDEPTH_8BIT:
-            desc.swapchain_10bit = GCAP_PREVIEW_BITDEPTH_8BIT;
+            desc.swapchain_10bit = GVFG_RENDER_PREVIEW_BITDEPTH_8BIT;
             break;
         case GVFG_PREVIEW_BITDEPTH_10BIT:
-            desc.swapchain_10bit = GCAP_PREVIEW_BITDEPTH_10BIT;
+            desc.swapchain_10bit = GVFG_RENDER_PREVIEW_BITDEPTH_10BIT;
             break;
         case GVFG_PREVIEW_BITDEPTH_AUTO:
         default:
-            desc.swapchain_10bit = GCAP_PREVIEW_BITDEPTH_AUTO;
+            desc.swapchain_10bit = GVFG_RENDER_PREVIEW_BITDEPTH_AUTO;
             break;
         }
         return desc;
@@ -674,7 +675,7 @@ struct gvfg_handle_t
         if (!pipeline->initialize(d3d.Get(), ctx.Get(), d2dCtx.Get(), dwrite.Get(), d2dWhite.Get(), d2dBlack.Get()))
             return false;
 
-        pipeline->configurePreview(toGcapPreviewDesc());
+        pipeline->configurePreview(toRenderPreviewDesc());
         pipeline->set_source_bit_depth(static_cast<int>(bitDepth ? bitDepth : 8));
         return pipeline->ensure_rt_and_pipeline(static_cast<int>(width), static_cast<int>(height)) &&
                pipeline->ensure_preview_swapchain(static_cast<int>(width), static_cast<int>(height));
@@ -743,7 +744,7 @@ struct gvfg_handle_t
         pipeline->set_source_bit_depth(static_cast<int>(frame.bit_depth ? frame.bit_depth : fallbackBitDepth));
 
         const auto *base = static_cast<const uint8_t *>(frame.data);
-        gcap_pixfmt_t renderFmt = GCAP_FMT_YUY2;
+        gvfg_render_pixfmt_t renderFmt = GVFG_RENDER_FMT_YUY2;
         bool uploaded = false;
 
         switch (frame.pixel_format)
@@ -753,7 +754,7 @@ struct gvfg_handle_t
             const int stride = frame.plane_stride_bytes[0] ? static_cast<int>(frame.plane_stride_bytes[0]) : w * 2;
             if (stride < w * 2)
                 return false;
-            renderFmt = GCAP_FMT_YUY2;
+            renderFmt = GVFG_RENDER_FMT_YUY2;
             uploaded = pipeline->upload_yuy2_frame(base + frame.plane_offset_bytes[0], stride, w, h);
             break;
         }
@@ -762,7 +763,7 @@ struct gvfg_handle_t
             const int stride = frame.plane_stride_bytes[0] ? static_cast<int>(frame.plane_stride_bytes[0]) : w * 4;
             if (stride < w * 4)
                 return false;
-            renderFmt = GCAP_FMT_Y210;
+            renderFmt = GVFG_RENDER_FMT_Y210;
             uploaded = pipeline->upload_y210_frame(base + frame.plane_offset_bytes[0], stride, w, h);
             break;
         }
@@ -772,7 +773,7 @@ struct gvfg_handle_t
                 return false;
             const int strideY = frame.plane_stride_bytes[0] ? static_cast<int>(frame.plane_stride_bytes[0]) : w;
             const int strideUV = frame.plane_stride_bytes[1] ? static_cast<int>(frame.plane_stride_bytes[1]) : strideY;
-            renderFmt = GCAP_FMT_NV12;
+            renderFmt = GVFG_RENDER_FMT_NV12;
             uploaded = pipeline->upload_nv12_frame(base + frame.plane_offset_bytes[0], strideY,
                                                    base + frame.plane_offset_bytes[1], strideUV, w, h);
             break;
@@ -783,7 +784,7 @@ struct gvfg_handle_t
                 return false;
             const int strideY = frame.plane_stride_bytes[0] ? static_cast<int>(frame.plane_stride_bytes[0]) : w * 2;
             const int strideUV = frame.plane_stride_bytes[1] ? static_cast<int>(frame.plane_stride_bytes[1]) : strideY;
-            renderFmt = GCAP_FMT_P010;
+            renderFmt = GVFG_RENDER_FMT_P010;
             uploaded = pipeline->upload_p010_frame(base + frame.plane_offset_bytes[0], strideY,
                                                    base + frame.plane_offset_bytes[1], strideUV, w, h);
             break;
@@ -817,7 +818,7 @@ struct gvfg_handle_t
         if (!pipeline->blit_fp16_to_rgba8(w, h))
             return;
 
-        gcap_frame_t readback{};
+        gvfg_render_frame_t readback{};
         if (pipeline->readback_to_frame(w, h, frame.timestamp_ns ? frame.timestamp_ns : now_ns(), frame.frame_id, &readback))
         {
             gvfg_frame_t out{};
@@ -1143,3 +1144,6 @@ extern "C"
         }
     }
 }
+
+
+

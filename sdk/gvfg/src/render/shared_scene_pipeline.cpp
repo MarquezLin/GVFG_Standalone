@@ -1,10 +1,12 @@
 #include <dxgi1_2.h>
-#include "../core/logging.h"
+#include "../internal/gvfg_logging.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include "shared_scene_pipeline.h"
+
+using namespace gvfg::internal;
 
 #include <d3dcompiler.h>
 #include <windows.h>
@@ -26,7 +28,7 @@ static void SSP_DBG(const char *stage, HRESULT hr)
     char buf[256] = {};
     std::snprintf(buf, sizeof(buf), "[SharedScene] %s : hr=0x%lx\n",
                   stage ? stage : "(null)", (unsigned long)hr);
-    gcap_log_debug(buf);
+    gvfg_log_debug(buf);
 }
 
 using Microsoft::WRL::ComPtr;
@@ -68,8 +70,8 @@ static void ssp_log_text(const char *msg)
 {
     if (!msg)
         return;
-    gcap_log_debug(msg);
-    gcap_log_debug("\n");
+    gvfg_log_debug(msg);
+    gvfg_log_debug("\n");
 }
 
 static ComPtr<ID3D11ShaderResourceView> createSRV_NV12(ID3D11Device *dev, ID3D11Texture2D *tex, bool uv)
@@ -296,8 +298,8 @@ float4 main(float4 pos:SV_Position, float2 uv:TEXCOORD0) : SV_Target
 }
 )";
 
-// YUY2（4:2:2 packed）：
-// 我們把每兩個像素打包成一個 RGBA8_UINT texel：
+// YUY2??:2:2 packed???
+// ?????????????????????RGBA8_UINT texel??
 //   R=Y0, G=U, B=Y1, A=V
 // texture width = ceil(w/2)
 static const char *g_ps_yuy2 = R"(
@@ -406,10 +408,10 @@ float4 main(float4 pos:SV_Position, float2 uv:TEXCOORD0) : SV_Target
 }
 )";
 
-// NV12 → RGBA 的 Compute Shader 版本
+// NV12 ??RGBA ??Compute Shader ???
 
-// Y210（4:2:2 packed, 10-bit in 16-bit container）：
-// 每個 texel 打包 2 個像素：R=Y0, G=U, B=Y1, A=V
+// Y210??:2:2 packed, 10-bit in 16-bit container???
+// ????texel ??? 2 ??????R=Y0, G=U, B=Y1, A=V
 // texture width = ceil(w/2), format = R16G16B16A16_UINT
 static const char *g_ps_y210 = R"(
 Texture2D<uint4> texP : register(t0);
@@ -714,14 +716,14 @@ void SharedScenePipeline::shutdown()
     d2d_ctx_ = nullptr;
 }
 
-bool SharedScenePipeline::configurePreview(const gcap_preview_desc_t &desc)
+bool SharedScenePipeline::configurePreview(const gvfg_render_preview_desc_t &desc)
 {
     int requestedMode = desc.swapchain_10bit;
-    if (requestedMode != GCAP_PREVIEW_BITDEPTH_8BIT &&
-        requestedMode != GCAP_PREVIEW_BITDEPTH_10BIT &&
-        requestedMode != GCAP_PREVIEW_BITDEPTH_AUTO)
+    if (requestedMode != GVFG_RENDER_PREVIEW_BITDEPTH_8BIT &&
+        requestedMode != GVFG_RENDER_PREVIEW_BITDEPTH_10BIT &&
+        requestedMode != GVFG_RENDER_PREVIEW_BITDEPTH_AUTO)
     {
-        requestedMode = GCAP_PREVIEW_BITDEPTH_AUTO;
+        requestedMode = GVFG_RENDER_PREVIEW_BITDEPTH_AUTO;
     }
 
     const bool modeChanged = (preview_swapchain_mode_ != requestedMode);
@@ -744,11 +746,11 @@ void SharedScenePipeline::set_source_bit_depth(int bits)
     if (bits != 8 && bits != 10 && bits != 12 && bits != 16)
         bits = 0;
 
-    const int oldEffectiveMode = (preview_swapchain_mode_ == GCAP_PREVIEW_BITDEPTH_AUTO)
-                                     ? ((preview_source_bit_depth_ >= 10) ? GCAP_PREVIEW_BITDEPTH_10BIT : GCAP_PREVIEW_BITDEPTH_8BIT)
+    const int oldEffectiveMode = (preview_swapchain_mode_ == GVFG_RENDER_PREVIEW_BITDEPTH_AUTO)
+                                     ? ((preview_source_bit_depth_ >= 10) ? GVFG_RENDER_PREVIEW_BITDEPTH_10BIT : GVFG_RENDER_PREVIEW_BITDEPTH_8BIT)
                                      : preview_swapchain_mode_;
-    const int newEffectiveMode = (preview_swapchain_mode_ == GCAP_PREVIEW_BITDEPTH_AUTO)
-                                     ? ((bits >= 10) ? GCAP_PREVIEW_BITDEPTH_10BIT : GCAP_PREVIEW_BITDEPTH_8BIT)
+    const int newEffectiveMode = (preview_swapchain_mode_ == GVFG_RENDER_PREVIEW_BITDEPTH_AUTO)
+                                     ? ((bits >= 10) ? GVFG_RENDER_PREVIEW_BITDEPTH_10BIT : GVFG_RENDER_PREVIEW_BITDEPTH_8BIT)
                                      : preview_swapchain_mode_;
 
     preview_source_bit_depth_ = bits;
@@ -930,7 +932,7 @@ bool SharedScenePipeline::ensure_rt_and_pipeline(int w, int h)
     if (FAILED(d3d_->CreateShaderResourceView(rt_fp16_.Get(), nullptr, &srv_fp16_)))
         return false;
 
-    // rt 尺寸/格式若重建，compute path 的 UAV 也要跟著重建
+    // rt ???/?????????compute path ??UAV ?????????
     rt_uav_.Reset();
 
     // 2) Composited FP16 scene target (base FP16 + overlay)
@@ -1539,14 +1541,14 @@ bool SharedScenePipeline::upload_v210_frame(const uint8_t *data, int src_stride,
     return true;
 }
 
-bool SharedScenePipeline::render_uploaded_yuv_to_fp16(gcap_pixfmt_t fmt, int frame_w, int frame_h)
+bool SharedScenePipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, int frame_w, int frame_h)
 {
     if (!ctx_ || !vs_ || !il_ || !vb_ || !rtv_fp16_ || !rt_fp16_ || frame_w <= 0 || frame_h <= 0)
         return false;
 
     ID3D11PixelShader *ps = nullptr;
     ComPtr<ID3D11ShaderResourceView> srv0, srv1;
-    if (fmt == GCAP_FMT_NV12)
+    if (fmt == GVFG_RENDER_FMT_NV12)
     {
         if (!upload_nv12_)
             return false;
@@ -1556,7 +1558,7 @@ bool SharedScenePipeline::render_uploaded_yuv_to_fp16(gcap_pixfmt_t fmt, int fra
         if (!srv0 || !srv1 || !ps)
             return false;
     }
-    else if (fmt == GCAP_FMT_P010)
+    else if (fmt == GVFG_RENDER_FMT_P010)
     {
         if (!upload_nv12_)
             return false;
@@ -1566,7 +1568,7 @@ bool SharedScenePipeline::render_uploaded_yuv_to_fp16(gcap_pixfmt_t fmt, int fra
         if (!srv0 || !srv1 || !ps)
             return false;
     }
-    else if (fmt == GCAP_FMT_YUY2)
+    else if (fmt == GVFG_RENDER_FMT_YUY2)
     {
         if (!upload_yuy2_packed_)
             return false;
@@ -1580,7 +1582,7 @@ bool SharedScenePipeline::render_uploaded_yuv_to_fp16(gcap_pixfmt_t fmt, int fra
         if (!ps)
             return false;
     }
-    else if (fmt == GCAP_FMT_Y210)
+    else if (fmt == GVFG_RENDER_FMT_Y210)
     {
         if (!upload_y210_packed_)
             return false;
@@ -1659,7 +1661,7 @@ bool SharedScenePipeline::render_uploaded_yuv_to_fp16(gcap_pixfmt_t fmt, int fra
     const float clear[4] = {0, 0, 0, 1};
     ctx_->ClearRenderTargetView(rtv_fp16_.Get(), clear);
 
-    if (fmt == GCAP_FMT_NV12 || fmt == GCAP_FMT_P010)
+    if (fmt == GVFG_RENDER_FMT_NV12 || fmt == GVFG_RENDER_FMT_P010)
     {
         ID3D11ShaderResourceView *srvs[2] = {srv0.Get(), srv1.Get()};
         ctx_->PSSetShaderResources(0, 2, srvs);
@@ -1676,7 +1678,7 @@ bool SharedScenePipeline::render_uploaded_yuv_to_fp16(gcap_pixfmt_t fmt, int fra
     ctx_->PSSetSamplers(0, 1, &ss);
     ctx_->Draw(6, 0);
 
-    if (fmt == GCAP_FMT_NV12 || fmt == GCAP_FMT_P010)
+    if (fmt == GVFG_RENDER_FMT_NV12 || fmt == GVFG_RENDER_FMT_P010)
     {
         ID3D11ShaderResourceView *nulls[2] = {nullptr, nullptr};
         ctx_->PSSetShaderResources(0, 2, nulls);
@@ -1728,7 +1730,7 @@ namespace
         if (path.empty() || !format || !*format || !payload || payloadBytes == 0)
             return false;
 
-        char header[GCAP_GIGABYTE_RAW_HEADER_SIZE] = {};
+        char header[GVFG_RENDER_GIGABYTE_RAW_HEADER_SIZE] = {};
         std::snprintf(header, sizeof(header),
                       "GIGABYTE_RAW\n"
                       "header_size=%d\n"
@@ -1736,7 +1738,7 @@ namespace
                       "Height=%d\n"
                       "Format=%s\n"
                       "SourceBitDepth=%d\n",
-                      GCAP_GIGABYTE_RAW_HEADER_SIZE,
+                      GVFG_RENDER_GIGABYTE_RAW_HEADER_SIZE,
                       w,
                       h,
                       format,
@@ -2075,7 +2077,7 @@ bool SharedScenePipeline::copy_fp16_to_scene()
 }
 
 bool SharedScenePipeline::readback_to_frame(int frame_w, int frame_h, uint64_t pts_ns, uint64_t frame_id,
-                                            gcap_frame_t *out)
+                                            gvfg_render_frame_t *out)
 {
     if (!out || !ctx_ || !rt_stage_ || !rt_rgba_)
         return false;
@@ -2091,7 +2093,7 @@ bool SharedScenePipeline::readback_to_frame(int frame_w, int frame_h, uint64_t p
     out->plane_count = 1;
     out->width = frame_w;
     out->height = frame_h;
-    out->format = GCAP_FMT_ARGB;
+    out->format = GVFG_RENDER_FMT_ARGB;
     out->pts_ns = pts_ns;
     out->frame_id = frame_id;
     return true;
@@ -2158,11 +2160,11 @@ bool SharedScenePipeline::export_scene_rgb10(const wchar_t *base_path, int raw_f
     }
     ctx_->Unmap(rt_scene_stage_fp16_.Get(), 0);
 
-    const bool exportNativeRaw = (raw_flags & GCAP_EXPORT_RAW_NATIVE) != 0;
-    const bool exportRgb10Raw = (raw_flags & GCAP_EXPORT_RAW_RGB10_U16) != 0;
-    const bool exportRgba16Raw = (raw_flags & GCAP_EXPORT_RAW_RGBA16) != 0;
-    const bool exportRgba8Raw = (raw_flags & GCAP_EXPORT_RAW_RGBA8) != 0;
-    const bool exportFp16Raw = sourceIs10Bit && (raw_flags & GCAP_EXPORT_RAW_ALL) == GCAP_EXPORT_RAW_ALL;
+    const bool exportNativeRaw = (raw_flags & GVFG_RENDER_EXPORT_RAW_NATIVE) != 0;
+    const bool exportRgb10Raw = (raw_flags & GVFG_RENDER_EXPORT_RAW_RGB10_U16) != 0;
+    const bool exportRgba16Raw = (raw_flags & GVFG_RENDER_EXPORT_RAW_RGBA16) != 0;
+    const bool exportRgba8Raw = (raw_flags & GVFG_RENDER_EXPORT_RAW_RGBA8) != 0;
+    const bool exportFp16Raw = sourceIs10Bit && (raw_flags & GVFG_RENDER_EXPORT_RAW_ALL) == GVFG_RENDER_EXPORT_RAW_ALL;
     const std::wstring base(base_path);
     bool ok = true;
     if (raw_flags != 0)
@@ -2262,10 +2264,10 @@ bool SharedScenePipeline::ensure_preview_swapchain(int w, int h)
         !factory)
         return false;
 
-    const int effectiveMode = (preview_swapchain_mode_ == GCAP_PREVIEW_BITDEPTH_AUTO)
-                                  ? ((preview_source_bit_depth_ >= 10) ? GCAP_PREVIEW_BITDEPTH_10BIT : GCAP_PREVIEW_BITDEPTH_8BIT)
+    const int effectiveMode = (preview_swapchain_mode_ == GVFG_RENDER_PREVIEW_BITDEPTH_AUTO)
+                                  ? ((preview_source_bit_depth_ >= 10) ? GVFG_RENDER_PREVIEW_BITDEPTH_10BIT : GVFG_RENDER_PREVIEW_BITDEPTH_8BIT)
                                   : preview_swapchain_mode_;
-    const DXGI_FORMAT desiredFormat = (effectiveMode == GCAP_PREVIEW_BITDEPTH_8BIT)
+    const DXGI_FORMAT desiredFormat = (effectiveMode == GVFG_RENDER_PREVIEW_BITDEPTH_8BIT)
                                           ? DXGI_FORMAT_B8G8R8A8_UNORM
                                           : DXGI_FORMAT_R10G10B10A2_UNORM;
 
@@ -2517,3 +2519,4 @@ DXGI_FORMAT SharedScenePipeline::linear_fp16_texture_format() const
     rt_fp16_->GetDesc(&d);
     return d.Format;
 }
+

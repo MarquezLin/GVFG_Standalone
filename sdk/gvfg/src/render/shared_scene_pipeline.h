@@ -1,12 +1,15 @@
 #pragma once
 
-#include "gcapture.h"
+#include "../internal/gvfg_render_types.h"
 
 #include <d3d11_1.h>
 #include <d2d1_1.h>
 #include <dwrite.h>
 #include <dxgi1_2.h>
 #include <wrl.h>
+
+namespace gvfg::internal
+{
 
 class SharedScenePipeline
 {
@@ -22,7 +25,7 @@ public:
                     ID2D1SolidColorBrush *black = nullptr);
     void shutdown();
 
-    bool configurePreview(const gcap_preview_desc_t &desc);
+    bool configurePreview(const gvfg_render_preview_desc_t &desc);
     void set_source_bit_depth(int bits);
     int source_bit_depth() const { return preview_source_bit_depth_; }
     void release_preview_swapchain();
@@ -51,10 +54,10 @@ public:
     bool upload_yuy2_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h);
     bool upload_y210_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h);
     bool upload_v210_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h);
-    bool render_uploaded_yuv_to_fp16(gcap_pixfmt_t fmt, int frame_w, int frame_h);
+    bool render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, int frame_w, int frame_h);
     bool copy_fp16_to_scene();
     bool readback_to_frame(int frame_w, int frame_h, uint64_t pts_ns, uint64_t frame_id,
-                           gcap_frame_t *out);
+                           gvfg_render_frame_t *out);
     bool export_scene_rgb10(const wchar_t *base_path, int raw_flags, bool export_tiff, bool export_stats, bool export_gigabyte_raw);
 
     ID3D11Device *d3d_ = nullptr;
@@ -107,7 +110,7 @@ public:
     void *preview_hwnd_ = nullptr;
     bool preview_enabled_ = false;
     bool preview_use_fp16_ = false;
-    int preview_swapchain_mode_ = GCAP_PREVIEW_BITDEPTH_10BIT;
+    int preview_swapchain_mode_ = GVFG_RENDER_PREVIEW_BITDEPTH_10BIT;
     int preview_source_bit_depth_ = 0;
     bool preview_swapchain_10bit_ = false;
     DXGI_FORMAT preview_swapchain_format_ = DXGI_FORMAT_UNKNOWN;
@@ -127,3 +130,7 @@ public:
     Microsoft::WRL::ComPtr<ID3D11Texture2D> preview_backbuf_;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> preview_rtv_;
 };
+
+
+}
+

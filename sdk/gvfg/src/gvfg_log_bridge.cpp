@@ -1,4 +1,4 @@
-#include "gcapture.h"
+#include "gvfg_logging.h"
 
 #include <cstdarg>
 #include <cstdio>
@@ -9,9 +9,9 @@
 #include <windows.h>
 #endif
 
-namespace gcap
+namespace gvfg::internal
 {
-    void log_message(gcap_log_level_t, const char *message_utf8)
+    void log_message(gvfg_log_level_t, const char *message_utf8)
     {
 #ifdef _WIN32
         const char *msg = message_utf8 ? message_utf8 : "";
@@ -24,7 +24,7 @@ namespace gcap
 #endif
     }
 
-    void log_message_w(gcap_log_level_t level, const wchar_t *message_wide)
+    void log_message_w(gvfg_log_level_t level, const wchar_t *message_wide)
     {
 #ifdef _WIN32
         if (!message_wide)
@@ -44,7 +44,7 @@ namespace gcap
 #endif
     }
 
-    void log_printf(gcap_log_level_t level, const char *fmt, ...)
+    void log_printf(gvfg_log_level_t level, const char *fmt, ...)
     {
         if (!fmt)
         {
@@ -60,3 +60,4 @@ namespace gcap
         log_message(level, buf);
     }
 }
+

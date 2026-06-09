@@ -13,8 +13,8 @@ add_library(gvfg SHARED
     src/backend/xdma/xdma_capture_session.h
     src/backend/xdma/xdma_public.h
     src/gvfg_capture.cpp
-    src/gcapture_log_bridge.cpp
-    ${CMAKE_SOURCE_DIR}/sdk/gcapture/src/pipeline/shared_scene_pipeline.cpp
+    src/gvfg_log_bridge.cpp
+    src/render/shared_scene_pipeline.cpp
 )
 
 set_target_properties(gvfg PROPERTIES
@@ -29,9 +29,8 @@ target_include_directories(gvfg
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/xdma
         ${CMAKE_SOURCE_DIR}/sdk/gdriver_shared/include
-        ${CMAKE_SOURCE_DIR}/sdk/gcapture/include
-        ${CMAKE_SOURCE_DIR}/sdk/gcapture/src
-        ${CMAKE_SOURCE_DIR}/sdk/gcapture/src/pipeline
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/internal
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/render
 )
 
 target_compile_definitions(gvfg PRIVATE
@@ -52,3 +51,5 @@ target_link_libraries(gvfg PRIVATE
 if (MSVC)
   target_compile_options(gvfg PRIVATE /utf-8 /EHsc)
 endif()
+
+
