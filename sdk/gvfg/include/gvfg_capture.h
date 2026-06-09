@@ -93,41 +93,42 @@ typedef struct
     int swapchain_bitdepth;  /* gvfg_preview_bitdepth_t value. */
 } gvfg_preview_desc_t;
 
+typedef enum
+{
+    GVFG_FPGA_SIGNAL_VALID_VIDEO_FORMAT = 1u << 0, /* FPGA 0x0c read succeeded. */
+    GVFG_FPGA_SIGNAL_VALID_FRAME_RATE = 1u << 1,   /* FPGA 0x18 read succeeded. */
+    GVFG_FPGA_SIGNAL_VALID_BIT_DEPTH = 1u << 2,    /* FPGA 0x1c read succeeded. */
+    GVFG_FPGA_SIGNAL_VALID_STATUS = 1u << 3        /* FPGA 0x180 read succeeded. */
+} gvfg_fpga_signal_valid_mask_t;
+
 typedef struct
 {
-    uint32_t valid_mask;            /* FPGA register read-valid mask: bit0=0x0c, bit1=0x18, bit2=0x1c, bit3=0x180. */
+    uint32_t valid_mask;            /* Combination of gvfg_fpga_signal_valid_mask_t flags. */
     int width_valid;                /* Non-zero when FPGA 0x10 read succeeded. */
     int height_valid;               /* Non-zero when FPGA 0x14 read succeeded. */
     uint32_t width_raw;             /* Raw FPGA 0x10 width register. */
     uint32_t height_raw;            /* Raw FPGA 0x14 height register. */
     uint32_t video_format_raw;      /* Raw FPGA 0x0c value. */
-    int video_format_valid;
-    int video_format_code;       /* 0=yuv422, 1=rgb, 2=yuv444, 3=yuv420 */
-    char video_format[16];
-
     uint32_t frame_rate_raw;        /* Raw FPGA 0x18 value. */
-    int frame_rate_valid;
-    int frame_rate_code;         /* FPGA frame-rate code from 0x18 low nibble. */
-    char frame_rate_bits[5];     /* 4-bit binary text, for example "0110". */
-    char frame_rate_name[16];    /* None, 23.98, 24, 47.95, ..., or "--" for unsupported codes. */
-
     uint32_t bit_depth_raw;         /* Raw FPGA 0x1c value. */
-    int bit_depth_valid;
-    int bit_depth;               /* 8 or 10 when valid. */
-
     uint32_t status_raw;            /* Raw FPGA 0x180 value. */
-    int status_valid;
-    int sdi_locked;              /* FPGA 0x180 bit0 */
-    int sdi_ddr_ok;              /* FPGA 0x180 bit1 */
-    int hdmi_locked;             /* FPGA 0x180 bit2 */
-    int hdmi_ddr_ok;             /* FPGA 0x180 bit3 */
 } gvfg_fpga_signal_status_t;
 
 typedef struct
 {
     int width;                       /* Signal width in pixels, from FPGA when available. */
     int height;                      /* Signal height in pixels, from FPGA when available. */
-    gvfg_fpga_signal_status_t fpga;  /* Raw/decoded FPGA signal metadata. */
+    int video_format_code;           /* 0=yuv422, 1=rgb, 2=yuv444, 3=yuv420. */
+    char video_format[16];           /* Decoded FPGA signal format name. */
+    int frame_rate_code;             /* FPGA frame-rate code from 0x18 low nibble. */
+    char frame_rate_bits[5];         /* 4-bit binary text, for example "0110". */
+    char frame_rate_name[16];        /* None, 23.98, 24, 47.95, ..., or "--" for unsupported codes. */
+    int bit_depth;                   /* FPGA signal bit depth: 8 or 10 when valid. */
+    int sdi_locked;                  /* FPGA 0x180 bit0. */
+    int sdi_ddr_ok;                  /* FPGA 0x180 bit1. */
+    int hdmi_locked;                 /* FPGA 0x180 bit2. */
+    int hdmi_ddr_ok;                 /* FPGA 0x180 bit3. */
+    gvfg_fpga_signal_status_t fpga;  /* Raw FPGA register values and read-valid mask. */
 } gvfg_signal_status_t;
 
 typedef struct

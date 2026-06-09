@@ -269,6 +269,16 @@ typedef struct
 {
     int width;
     int height;
+    int video_format_code;
+    char video_format[16];
+    int frame_rate_code;
+    char frame_rate_bits[5];
+    char frame_rate_name[16];
+    int bit_depth;
+    int sdi_locked;
+    int sdi_ddr_ok;
+    int hdmi_locked;
+    int hdmi_ddr_ok;
     gvfg_fpga_signal_status_t fpga;
 } gvfg_signal_status_t;
 ```
@@ -277,7 +287,11 @@ typedef struct
 | --- | --- |
 | `width` | input 寬度 |
 | `height` | input 高度 |
-| `fpga` | FPGA raw/decoded signal metadata |
+| `video_format` | decoded FPGA signal format name |
+| `frame_rate_name` | decoded FPGA frame-rate name |
+| `bit_depth` | decoded FPGA signal bit depth |
+| `sdi_locked` / `hdmi_locked` | decoded signal lock status |
+| `fpga` | FPGA raw register values and read-valid mask |
 
 
 ### Customer buffer vs FPGA signal
@@ -286,45 +300,47 @@ The customer API separates the delivered buffer format from the FPGA signal
 register values.
 
 ```c
+typedef enum
+{
+    GVFG_FPGA_SIGNAL_VALID_VIDEO_FORMAT = 1u << 0, /* FPGA 0x0c read succeeded. */
+    GVFG_FPGA_SIGNAL_VALID_FRAME_RATE = 1u << 1,   /* FPGA 0x18 read succeeded. */
+    GVFG_FPGA_SIGNAL_VALID_BIT_DEPTH = 1u << 2,    /* FPGA 0x1c read succeeded. */
+    GVFG_FPGA_SIGNAL_VALID_STATUS = 1u << 3        /* FPGA 0x180 read succeeded. */
+} gvfg_fpga_signal_valid_mask_t;
+
 typedef struct
 {
-    uint32_t valid_mask;            /* FPGA register read-valid mask: bit0=0x0c, bit1=0x18, bit2=0x1c, bit3=0x180. */
+    uint32_t valid_mask;            /* Combination of gvfg_fpga_signal_valid_mask_t flags. */
     int width_valid;                /* Non-zero when FPGA 0x10 read succeeded. */
     int height_valid;               /* Non-zero when FPGA 0x14 read succeeded. */
     uint32_t width_raw;             /* Raw FPGA 0x10 width register. */
     uint32_t height_raw;            /* Raw FPGA 0x14 height register. */
     uint32_t video_format_raw;      /* Raw FPGA 0x0c value. */
-    int video_format_valid;
-    int video_format_code;       /* 0=yuv422, 1=rgb, 2=yuv444, 3=yuv420 */
-    char video_format[16];
-
     uint32_t frame_rate_raw;        /* Raw FPGA 0x18 value. */
-    int frame_rate_valid;
-    int frame_rate_code;         /* FPGA 0x18 low nibble. */
-    char frame_rate_bits[5];     /* 4-bit binary text, for example "0110". */
-    char frame_rate_name[16];    /* None, 23.98, 24, 47.95, ..., or "--" for unsupported codes. */
-
     uint32_t bit_depth_raw;         /* Raw FPGA 0x1c value. */
-    int bit_depth_valid;
-    int bit_depth;               /* FPGA signal bit depth: 8 or 10 when valid. */
-
     uint32_t status_raw;            /* Raw FPGA 0x180 value. */
-    int status_valid;
-    int sdi_locked;              /* FPGA 0x180 bit0 */
-    int sdi_ddr_ok;              /* FPGA 0x180 bit1 */
-    int hdmi_locked;             /* FPGA 0x180 bit2 */
-    int hdmi_ddr_ok;             /* FPGA 0x180 bit3 */
 } gvfg_fpga_signal_status_t;
 
 typedef struct
 {
     int width;                       /* Signal width in pixels, from FPGA when available. */
     int height;                      /* Signal height in pixels, from FPGA when available. */
-    gvfg_fpga_signal_status_t fpga;  /* Raw/decoded FPGA signal metadata. */
+    int video_format_code;           /* 0=yuv422, 1=rgb, 2=yuv444, 3=yuv420. */
+    char video_format[16];           /* Decoded FPGA signal format name. */
+    int frame_rate_code;             /* FPGA frame-rate code from 0x18 low nibble. */
+    char frame_rate_bits[5];         /* 4-bit binary text, for example "0110". */
+    char frame_rate_name[16];        /* None, 23.98, 24, 47.95, ..., or "--" for unsupported codes. */
+    int bit_depth;                   /* FPGA signal bit depth: 8 or 10 when valid. */
+    int sdi_locked;                  /* FPGA 0x180 bit0. */
+    int sdi_ddr_ok;                  /* FPGA 0x180 bit1. */
+    int hdmi_locked;                 /* FPGA 0x180 bit2. */
+    int hdmi_ddr_ok;                 /* FPGA 0x180 bit3. */
+    gvfg_fpga_signal_status_t fpga;  /* Raw FPGA register values and read-valid mask. */
 } gvfg_signal_status_t;
 ```
 
-Use `gvfg_signal_status_t::fpga` for FPGA-reported raw/decoded signal data.
+Use `gvfg_signal_status_t` fields for display-ready signal data.
+Use `gvfg_signal_status_t::fpga` for FPGA raw register values and read-valid flags.
 For delivered frame format, prefer `gvfg_runtime_info_t::delivered_frame`.
 
 For example, if FPGA reports `video_format=YUV422` and `bit_depth=10`, the
@@ -915,17 +931,17 @@ if (st == GVFG_OK) {
            sig.fpga.bit_depth_raw,
            sig.fpga.status_raw);
 
-    if (sig.fpga.video_format_valid) {
+    if (sig.fpga.valid_mask & GVFG_FPGA_SIGNAL_VALID_VIDEO_FORMAT) {
         printf("FPGA format=%d (%s) bitdepth=%d\n",
-               sig.fpga.video_format_code,
-               sig.fpga.video_format,
-               sig.fpga.bit_depth);
+               sig.video_format_code,
+               sig.video_format,
+               sig.bit_depth);
     }
 
-    if (sig.fpga.frame_rate_valid) {
+    if (sig.fpga.valid_mask & GVFG_FPGA_SIGNAL_VALID_FRAME_RATE) {
         printf("FPGA fps code=%s (%s)\n",
-               sig.fpga.frame_rate_bits,
-               sig.fpga.frame_rate_name);
+               sig.frame_rate_bits,
+               sig.frame_rate_name);
     }
 }
 ```
@@ -1259,5 +1275,5 @@ wait_frame: deliver
 
 - The current XDMA path exposes decoded FPGA signal metadata through `sig.fpga`.
 - The delivered customer callback buffer is reported by `gvfg_runtime_info_t::delivered_frame`.
-- `sig.fpga.bit_depth=10` does not by itself mean the delivered callback buffer is `Y210`; the current callback path reports BGRA8.
-- `sig.fpga.frame_rate_bits=0001` is not in the supported table, so the UI/API reports it as `--`.
+- `sig.bit_depth=10` does not by itself mean the delivered callback buffer is `Y210`; the current callback path reports BGRA8.
+- `sig.frame_rate_bits=0001` is not in the supported table, so the UI/API reports it as `--`.
