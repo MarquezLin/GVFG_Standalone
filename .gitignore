@@ -1,0 +1,15 @@
+build*/
+out/
+.vs/
+.vscode/
+.qtcreator/
+CMakeUserPresets.json
+*.user
+*.suo
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
