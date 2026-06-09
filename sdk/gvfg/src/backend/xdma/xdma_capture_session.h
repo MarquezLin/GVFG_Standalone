@@ -31,14 +31,11 @@ namespace gvfg::internal
         XdmaCaptureSession &operator=(const XdmaCaptureSession &) = delete;
         ~XdmaCaptureSession();
 
-        xdma_status_t open_default();
         xdma_status_t open_device_index(size_t deviceIndex);
         xdma_status_t close();
 
         xdma_status_t set_input(gdriver_input_t input);
-        xdma_status_t get_device_info(xdma_device_info_t &out) const;
         xdma_status_t get_signal_status(xdma_signal_status_t &out) const;
-        xdma_status_t get_stream_stats(xdma_stream_stats_t &out) const;
 
         xdma_status_t set_event_callback(xdma_event_callback_t callback, void *user, uint32_t eventMask);
         xdma_status_t configure_stream(const xdma_stream_desc_t &desc);

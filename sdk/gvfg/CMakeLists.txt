@@ -44,8 +44,8 @@ endif()
 
 target_link_libraries(gvfg PRIVATE
     setupapi
-    ole32 user32 windowscodecs
-    dxgi d3d11 d2d1 dwrite D3DCompiler
+    user32
+    dxgi d3d11 D3DCompiler
 )
 
 if (MSVC)

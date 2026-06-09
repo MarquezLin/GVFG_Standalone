@@ -256,18 +256,6 @@ namespace
         return oss.str();
     }
 
-    static void copy_string(const std::string &src, char *dst, size_t dstSize)
-    {
-        if (!dst || dstSize == 0)
-            return;
-        dst[0] = '\0';
-        if (src.empty())
-            return;
-        const size_t n = (std::min)(src.size(), dstSize - 1);
-        std::memcpy(dst, src.data(), n);
-        dst[n] = '\0';
-    }
-
     static void reset_stats(xdma_stream_stats_t &stats, gdriver_stream_state_t state)
     {
         std::memset(&stats, 0, sizeof(stats));
@@ -368,15 +356,6 @@ namespace gvfg::internal
     XdmaCaptureSession::~XdmaCaptureSession()
     {
         close();
-    }
-
-    xdma_status_t XdmaCaptureSession::open_default()
-    {
-        const auto devices = enumerate_xdma_devices();
-        XDMA_LOG("open_default: device_count=%zu", devices.size());
-        if (devices.empty())
-            return fail(XDMA_ENODEV, "enumerate_xdma_devices", ERROR_NOT_FOUND);
-        return open_device(devices.front());
     }
 
     xdma_status_t XdmaCaptureSession::open_device_index(size_t deviceIndex)
@@ -507,23 +486,6 @@ namespace gvfg::internal
         return XDMA_OK;
     }
 
-    xdma_status_t XdmaCaptureSession::get_device_info(xdma_device_info_t &out) const
-    {
-        if (!opened_)
-            return XDMA_ESTATE;
-        std::memset(&out, 0, sizeof(out));
-        copy_string(wide_to_utf8(friendly_name_), out.friendly_name, sizeof(out.friendly_name));
-        copy_string("XDMA", out.driver_version, sizeof(out.driver_version));
-        out.supported_inputs_mask = (1u << GDRIVER_INPUT_SDI) | (1u << GDRIVER_INPUT_HDMI);
-        out.supported_pixel_formats_mask = (1u << GDRIVER_PIXFMT_YUY2) |
-                                           (1u << GDRIVER_PIXFMT_Y210) |
-                                           (1u << GDRIVER_PIXFMT_RGB24) |
-                                           (1u << GDRIVER_PIXFMT_NV12) |
-                                           (1u << GDRIVER_PIXFMT_P010) |
-                                           (1u << GDRIVER_PIXFMT_YUV444);
-        return XDMA_OK;
-    }
-
     xdma_status_t XdmaCaptureSession::get_signal_status(xdma_signal_status_t &out) const
     {
         if (!opened_)
@@ -588,14 +550,6 @@ namespace gvfg::internal
         out.fpga_frame_rate_raw = rawFrameRate;
         out.fpga_bit_depth_raw = rawBitDepth;
         out.fpga_status_raw = rawStatus;
-        return XDMA_OK;
-    }
-
-    xdma_status_t XdmaCaptureSession::get_stream_stats(xdma_stream_stats_t &out) const
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        out = stats_;
-        out.state = running_ ? GDRIVER_STREAM_RUNNING : (configured_ ? GDRIVER_STREAM_CONFIGURED : GDRIVER_STREAM_STOPPED);
         return XDMA_OK;
     }
 

@@ -1,4 +1,3 @@
-#include <dxgi1_2.h>
 #include "../internal/gvfg_logging.h"
 
 #ifndef NOMINMAX
@@ -11,25 +10,7 @@ using namespace gvfg::internal;
 #include <d3dcompiler.h>
 #include <windows.h>
 #include <cstdio>
-#include <chrono>
 #include <cstring>
-#include <vector>
-#include <fstream>
-#include <algorithm>
-#include <cmath>
-#include <sstream>
-#include <filesystem>
-#include <wincodec.h>
-#include <DirectXMath.h>
-#include <DirectXPackedVector.h>
-
-static void SSP_DBG(const char *stage, HRESULT hr)
-{
-    char buf[256] = {};
-    std::snprintf(buf, sizeof(buf), "[SharedScene] %s : hr=0x%lx\n",
-                  stage ? stage : "(null)", (unsigned long)hr);
-    gvfg_log_debug(buf);
-}
 
 using Microsoft::WRL::ComPtr;
 
@@ -38,11 +19,6 @@ static inline uint16_t normalize_y210_word_for_upload(uint16_t v)
     // Y210 stores each 10-bit component left-aligned in a 16-bit WORD.
     // Bits [15:6] are valid, bits [5:0] are padding.
     return static_cast<uint16_t>((v >> 6) & 0x03FFu);
-}
-
-static inline uint16_t v210_component_for_upload(uint32_t word, int shift)
-{
-    return static_cast<uint16_t>((word >> shift) & 0x03FFu);
 }
 
 static const char *ss_dxgi_format_name(DXGI_FORMAT fmt)
@@ -621,27 +597,6 @@ float4 main(PSIn i) : SV_Target
 }
 )";
 
-static const char *g_ps_composite_overlay_fp16 = R"(
-Texture2D<float4> texBase    : register(t0);
-Texture2D<float4> texOverlay : register(t1);
-SamplerState samL : register(s0);
-
-struct PSIn
-{
-    float4 pos : SV_Position;
-    float2 uv  : TEXCOORD0;
-};
-
-float4 main(PSIn i) : SV_Target
-{
-    float4 base = texBase.Sample(samL, i.uv);
-    float4 ov   = texOverlay.Sample(samL, i.uv);
-    float a = saturate(ov.a);
-    float3 rgb = ov.rgb + base.rgb * (1.0 - a);
-    return float4(rgb, 1.0);
-}
-)";
-
 static const char *g_ps_rgba8_to_preview = R"(
 Texture2D<float4> tex0 : register(t0);
 SamplerState samL : register(s0);
@@ -661,59 +616,11 @@ float4 main(PSIn i) : SV_Target
 )";
 
 bool SharedScenePipeline::initialize(ID3D11Device *d3d,
-                                     ID3D11DeviceContext *ctx,
-                                     ID2D1DeviceContext *d2d_ctx,
-                                     IDWriteFactory *dwrite,
-                                     ID2D1SolidColorBrush *white,
-                                     ID2D1SolidColorBrush *black)
+                                     ID3D11DeviceContext *ctx)
 {
     d3d_ = d3d;
     ctx_ = ctx;
-    d2d_ctx_ = d2d_ctx;
-    dwrite_ = dwrite;
-    d2d_white_ = white;
-    d2d_black_ = black;
-    return d3d_ && ctx_ && d2d_ctx_;
-}
-
-void SharedScenePipeline::shutdown()
-{
-    release_preview_swapchain();
-    d2d_bitmap_rt_.Reset();
-    d2d_white_.Reset();
-    d2d_black_.Reset();
-    dwrite_.Reset();
-    overlay_srv_.Reset();
-    overlay_rtv_.Reset();
-    overlay_rgba_.Reset();
-    srv_scene_fp16_.Reset();
-    rtv_scene_fp16_.Reset();
-    rt_scene_fp16_.Reset();
-    srv_fp16_.Reset();
-    rtv_fp16_.Reset();
-    rt_fp16_.Reset();
-    srv_rgba_.Reset();
-    rtv_rgba_.Reset();
-    rt_rgba_.Reset();
-    rt_stage_.Reset();
-    rt_scene_stage_fp16_.Reset();
-    samp_.Reset();
-    vb_.Reset();
-    il_.Reset();
-    vs_.Reset();
-    ps_nv12_.Reset();
-    ps_p010_.Reset();
-    ps_yuy2_.Reset();
-    ps_y210_.Reset();
-    ps_fp16_to_rgba8_.Reset();
-    ps_fp16_to_preview_.Reset();
-    ps_rgba8_to_preview_.Reset();
-    ps_composite_overlay_fp16_.Reset();
-    cs_params_.Reset();
-    rt_uav_.Reset();
-    d3d_ = nullptr;
-    ctx_ = nullptr;
-    d2d_ctx_ = nullptr;
+    return d3d_ && ctx_;
 }
 
 bool SharedScenePipeline::configurePreview(const gvfg_render_preview_desc_t &desc)
@@ -761,7 +668,7 @@ void SharedScenePipeline::set_source_bit_depth(int bits)
 bool SharedScenePipeline::create_shaders_and_states()
 {
     // Compile shaders
-    ComPtr<ID3DBlob> vsb, psb1, psb2, psb3, psb4, psb5, psb6, psb7, err;
+    ComPtr<ID3DBlob> vsb, psb1, psb2, psb3, psb4, psb5, psb6, err;
     if (FAILED(D3DCompile(g_vs_src, strlen(g_vs_src), nullptr, nullptr, nullptr,
                           "main", "vs_5_0", 0, 0, &vsb, &err)))
         return false;
@@ -820,16 +727,6 @@ bool SharedScenePipeline::create_shaders_and_states()
                                        nullptr,
                                        &ps_rgba8_to_preview_)))
         return false;
-    if (FAILED(D3DCompile(g_ps_composite_overlay_fp16, strlen(g_ps_composite_overlay_fp16),
-                          nullptr, nullptr, nullptr,
-                          "main", "ps_5_0", 0, 0, &psb7, &err)))
-        return false;
-    if (FAILED(d3d_->CreatePixelShader(psb7->GetBufferPointer(),
-                                       psb7->GetBufferSize(),
-                                       nullptr,
-                                       &ps_composite_overlay_fp16_)))
-        return false;
-
     // Fullscreen quad (two triangles)
     struct V
     {
@@ -869,32 +766,13 @@ bool SharedScenePipeline::create_shaders_and_states()
 
 bool SharedScenePipeline::ensure_rt_and_pipeline(int w, int h)
 {
-    const auto t0 = std::chrono::steady_clock::now();
-    lastEnsureRtRebuilt_ = false;
-    lastEnsureRtReason_ = "reuse";
-
     const bool hasAllTargets = rt_fp16_ && rtv_fp16_ && srv_fp16_ &&
                                rt_scene_fp16_ && rtv_scene_fp16_ && srv_scene_fp16_ &&
                                rt_rgba_ && rtv_rgba_ && srv_rgba_ &&
-                               overlay_rgba_ && overlay_rtv_ && overlay_srv_ &&
-                               rt_stage_ && rt_scene_stage_fp16_ && d2d_bitmap_rt_;
+                               rt_stage_;
 
     if (hasAllTargets && rt_w_ == w && rt_h_ == h)
-    {
-        const auto t1 = std::chrono::steady_clock::now();
-        lastEnsureRtNs_ = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
-        totalEnsureRtNs_ += lastEnsureRtNs_;
-        ++ensureRtCalls_;
         return true;
-    }
-
-    lastEnsureRtRebuilt_ = true;
-    if (!hasAllTargets)
-        lastEnsureRtReason_ = "missing-targets";
-    else if (rt_w_ != w || rt_h_ != h)
-        lastEnsureRtReason_ = "size-change";
-    else
-        lastEnsureRtReason_ = "unknown";
 
     rt_fp16_.Reset();
     rtv_fp16_.Reset();
@@ -905,12 +783,7 @@ bool SharedScenePipeline::ensure_rt_and_pipeline(int w, int h)
     rt_rgba_.Reset();
     rtv_rgba_.Reset();
     srv_rgba_.Reset();
-    overlay_rgba_.Reset();
-    overlay_rtv_.Reset();
-    overlay_srv_.Reset();
     rt_stage_.Reset();
-    rt_scene_stage_fp16_.Reset();
-    d2d_bitmap_rt_.Reset();
 
     // 1) High precision intermediate target
     D3D11_TEXTURE2D_DESC td{};
@@ -935,7 +808,7 @@ bool SharedScenePipeline::ensure_rt_and_pipeline(int w, int h)
     // rt ???/?????????compute path ??UAV ?????????
     rt_uav_.Reset();
 
-    // 2) Composited FP16 scene target (base FP16 + overlay)
+    // 2) Scene FP16 target used by preview and readback paths
     td.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
     td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
     if (FAILED(d3d_->CreateTexture2D(&td, nullptr, &rt_scene_fp16_)))
@@ -955,44 +828,12 @@ bool SharedScenePipeline::ensure_rt_and_pipeline(int w, int h)
     if (FAILED(d3d_->CreateShaderResourceView(rt_rgba_.Get(), nullptr, &srv_rgba_)))
         return false;
 
-    // 4) Overlay texture for D2D/DWrite (premultiplied BGRA8)
-    if (FAILED(d3d_->CreateTexture2D(&td, nullptr, &overlay_rgba_)))
-        return false;
-    if (FAILED(d3d_->CreateRenderTargetView(overlay_rgba_.Get(), nullptr, &overlay_rtv_)))
-        return false;
-    if (FAILED(d3d_->CreateShaderResourceView(overlay_rgba_.Get(), nullptr, &overlay_srv_)))
-        return false;
-
-    // 5) staging for readback
+    // 4) staging for readback
     td.BindFlags = 0;
     td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     td.Usage = D3D11_USAGE_STAGING;
     if (FAILED(d3d_->CreateTexture2D(&td, nullptr, &rt_stage_)))
         return false;
-
-    td.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    if (FAILED(d3d_->CreateTexture2D(&td, nullptr, &rt_scene_stage_fp16_)))
-        return false;
-
-    // 6) D2D target now stays on dedicated overlay texture, not the final preview/readback surface
-    ComPtr<IDXGISurface> surf;
-    if (FAILED(overlay_rgba_->QueryInterface(IID_PPV_ARGS(&surf))) || !surf)
-        return false;
-    D2D1_BITMAP_PROPERTIES1 bp = {};
-    bp.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    bp.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
-    bp.dpiX = 96.f;
-    bp.dpiY = 96.f;
-    bp.bitmapOptions = (D2D1_BITMAP_OPTIONS)(D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW);
-    bp.colorContext = nullptr;
-
-    if (FAILED(d2d_ctx_->CreateBitmapFromDxgiSurface(surf.Get(), &bp, &d2d_bitmap_rt_)))
-    {
-        SSP_DBG("D2D CreateBitmapFromDxgiSurface", E_FAIL);
-        return false;
-    }
-
-    d2d_ctx_->SetTarget(d2d_bitmap_rt_.Get());
 
     const bool ok = create_shaders_and_states();
     if (ok)
@@ -1000,141 +841,7 @@ bool SharedScenePipeline::ensure_rt_and_pipeline(int w, int h)
         rt_w_ = w;
         rt_h_ = h;
     }
-    const auto t1 = std::chrono::steady_clock::now();
-    lastEnsureRtNs_ = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
-    totalEnsureRtNs_ += lastEnsureRtNs_;
-    ++ensureRtCalls_;
     return ok;
-}
-
-bool SharedScenePipeline::gpu_overlay_text(const wchar_t *text, int frame_w, int frame_h)
-{
-    if (!text || !*text || !d2d_ctx_ || !dwrite_)
-        return true;
-
-    d2d_ctx_->BeginDraw();
-    d2d_ctx_->SetTransform(D2D1::Matrix3x2F::Identity());
-    d2d_ctx_->Clear(D2D1::ColorF(0, 0, 0, 0));
-
-    ComPtr<IDWriteTextFormat> fmt;
-    HRESULT hr = dwrite_->CreateTextFormat(
-        L"Segoe UI",
-        nullptr,
-        DWRITE_FONT_WEIGHT_SEMI_BOLD,
-        DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL,
-        16.0f,
-        L"en-us",
-        &fmt);
-    if (FAILED(hr))
-    {
-        d2d_ctx_->EndDraw();
-        return false;
-    }
-
-    fmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-    fmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
-
-    float layoutWidth = static_cast<float>(frame_w) - 32.0f;
-    if (layoutWidth < 100.0f)
-        layoutWidth = 100.0f;
-    float layoutHeight = 100.0f;
-
-    ComPtr<IDWriteTextLayout> layout;
-    hr = dwrite_->CreateTextLayout(
-        text,
-        (UINT32)wcslen(text),
-        fmt.Get(),
-        layoutWidth,
-        layoutHeight,
-        &layout);
-    if (FAILED(hr))
-    {
-        d2d_ctx_->EndDraw();
-        return false;
-    }
-
-    DWRITE_TEXT_METRICS metrics{};
-    hr = layout->GetMetrics(&metrics);
-    if (FAILED(hr))
-    {
-        d2d_ctx_->EndDraw();
-        return false;
-    }
-
-    float textWidth = metrics.width;
-    float textHeight = metrics.height;
-    const float padX = 12.0f;
-    const float padY = 6.0f;
-
-    D2D1_RECT_F bg = D2D1::RectF(
-        8.0f,
-        8.0f,
-        8.0f + textWidth + padX * 2.0f,
-        8.0f + textHeight + padY * 2.0f);
-
-    if (d2d_black_)
-        d2d_ctx_->FillRectangle(bg, d2d_black_.Get());
-
-    D2D1_RECT_F rc = D2D1::RectF(
-        bg.left + padX,
-        bg.top + padY,
-        bg.right - padX,
-        bg.bottom - padY);
-
-    if (d2d_white_)
-        d2d_ctx_->DrawText(
-            text,
-            (UINT32)wcslen(text),
-            fmt.Get(),
-            rc,
-            d2d_white_.Get());
-
-    hr = d2d_ctx_->EndDraw();
-    return SUCCEEDED(hr);
-}
-
-bool SharedScenePipeline::composite_overlay_to_scene_fp16(int frame_w, int frame_h)
-{
-    if (!rtv_scene_fp16_ || !srv_fp16_ || !overlay_srv_ || !vs_ || !ps_composite_overlay_fp16_ || !ctx_)
-        return false;
-
-    UINT stride = sizeof(float) * 4, offset = 0;
-    ID3D11Buffer *pVB = vb_.Get();
-    ctx_->IASetVertexBuffers(0, 1, &pVB, &stride, &offset);
-    ctx_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    ctx_->IASetInputLayout(il_.Get());
-
-    ID3D11RenderTargetView *rtv = rtv_scene_fp16_.Get();
-    ctx_->OMSetRenderTargets(1, &rtv, nullptr);
-
-    D3D11_VIEWPORT vp{};
-    vp.TopLeftX = 0.0f;
-    vp.TopLeftY = 0.0f;
-    vp.Width = static_cast<FLOAT>(frame_w);
-    vp.Height = static_cast<FLOAT>(frame_h);
-    vp.MinDepth = 0.0f;
-    vp.MaxDepth = 1.0f;
-    ctx_->RSSetViewports(1, &vp);
-
-    const float clear[4] = {0, 0, 0, 1};
-    ctx_->ClearRenderTargetView(rtv_scene_fp16_.Get(), clear);
-
-    ctx_->VSSetShader(vs_.Get(), nullptr, 0);
-    ctx_->PSSetShader(ps_composite_overlay_fp16_.Get(), nullptr, 0);
-
-    ID3D11ShaderResourceView *srvs[2] = {srv_fp16_.Get(), overlay_srv_.Get()};
-    ctx_->PSSetShaderResources(0, 2, srvs);
-
-    ID3D11SamplerState *ss = samp_.Get();
-    ctx_->PSSetSamplers(0, 1, &ss);
-
-    ctx_->Draw(6, 0);
-
-    ID3D11ShaderResourceView *nullSrv[2] = {nullptr, nullptr};
-    ctx_->PSSetShaderResources(0, 2, nullSrv);
-
-    return true;
 }
 
 bool SharedScenePipeline::blit_fp16_to_rgba8(int frame_w, int frame_h)
@@ -1177,62 +884,6 @@ bool SharedScenePipeline::blit_fp16_to_rgba8(int frame_w, int frame_h)
     ID3D11ShaderResourceView *nullSrv[1] = {nullptr};
     ctx_->PSSetShaderResources(0, 1, nullSrv);
 
-    return true;
-}
-
-bool SharedScenePipeline::upload_argb_frame(const void *data, int frame_w, int frame_h, int src_stride)
-{
-    if (!data || !ctx_ || !rt_rgba_ || frame_w <= 0 || frame_h <= 0 || src_stride <= 0)
-        return false;
-
-    D3D11_BOX box{};
-    box.left = 0;
-    box.top = 0;
-    box.front = 0;
-    box.right = (UINT)frame_w;
-    box.bottom = (UINT)frame_h;
-    box.back = 1;
-
-    ctx_->UpdateSubresource(rt_rgba_.Get(), 0, &box, data, (UINT)src_stride, 0);
-    return true;
-}
-
-bool SharedScenePipeline::render_uploaded_argb_to_fp16(int frame_w, int frame_h)
-{
-    if (!ctx_ || !vs_ || !il_ || !vb_ || !rtv_fp16_ || !srv_rgba_ || !ps_rgba8_to_preview_ || frame_w <= 0 || frame_h <= 0)
-        return false;
-
-    UINT stride = sizeof(float) * 4, offset = 0;
-    ID3D11Buffer *pVB = vb_.Get();
-    ctx_->IASetVertexBuffers(0, 1, &pVB, &stride, &offset);
-    ctx_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    ctx_->IASetInputLayout(il_.Get());
-
-    ctx_->VSSetShader(vs_.Get(), nullptr, 0);
-    ctx_->PSSetShader(ps_rgba8_to_preview_.Get(), nullptr, 0);
-
-    D3D11_VIEWPORT vp{};
-    vp.TopLeftX = 0.0f;
-    vp.TopLeftY = 0.0f;
-    vp.Width = static_cast<FLOAT>(frame_w);
-    vp.Height = static_cast<FLOAT>(frame_h);
-    vp.MinDepth = 0.0f;
-    vp.MaxDepth = 1.0f;
-    ctx_->RSSetViewports(1, &vp);
-
-    ID3D11RenderTargetView *rtv = rtv_fp16_.Get();
-    ctx_->OMSetRenderTargets(1, &rtv, nullptr);
-    const float clear[4] = {0, 0, 0, 1};
-    ctx_->ClearRenderTargetView(rtv_fp16_.Get(), clear);
-
-    ID3D11ShaderResourceView *srv = srv_rgba_.Get();
-    ctx_->PSSetShaderResources(0, 1, &srv);
-    ID3D11SamplerState *ss = samp_.Get();
-    ctx_->PSSetSamplers(0, 1, &ss);
-    ctx_->Draw(6, 0);
-
-    ID3D11ShaderResourceView *nullSrv = nullptr;
-    ctx_->PSSetShaderResources(0, 1, &nullSrv);
     return true;
 }
 
@@ -1448,99 +1099,6 @@ bool SharedScenePipeline::upload_y210_frame(const uint8_t *data, int src_stride,
     return true;
 }
 
-bool SharedScenePipeline::upload_v210_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h)
-{
-    if (!ctx_ || !d3d_ || !data || frame_w <= 0 || frame_h <= 0)
-        return false;
-
-    const int packedStride = ((frame_w + 5) / 6) * 16;
-    const int effectiveStride = (src_stride > 0) ? src_stride : packedStride;
-    if (effectiveStride < packedStride)
-        return false;
-
-    const int w2 = (frame_w + 1) / 2;
-    if (upload_y210_packed_)
-    {
-        D3D11_TEXTURE2D_DESC desc{};
-        upload_y210_packed_->GetDesc(&desc);
-        if ((int)desc.Width != w2 || (int)desc.Height != frame_h || desc.Format != DXGI_FORMAT_R16G16B16A16_UINT)
-            upload_y210_packed_.Reset();
-    }
-
-    if (!upload_y210_packed_)
-    {
-        D3D11_TEXTURE2D_DESC td{};
-        td.Width = (UINT)w2;
-        td.Height = (UINT)frame_h;
-        td.MipLevels = 1;
-        td.ArraySize = 1;
-        td.SampleDesc.Count = 1;
-        td.Format = DXGI_FORMAT_R16G16B16A16_UINT;
-        td.Usage = D3D11_USAGE_DYNAMIC;
-        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        td.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        if (FAILED(d3d_->CreateTexture2D(&td, nullptr, &upload_y210_packed_)))
-            return false;
-    }
-
-    D3D11_MAPPED_SUBRESOURCE m{};
-    if (FAILED(ctx_->Map(upload_y210_packed_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &m)))
-        return false;
-
-    for (int row = 0; row < frame_h; ++row)
-    {
-        const uint8_t *srcRow = data + (size_t)row * (size_t)effectiveStride;
-        uint8_t *dstRow = static_cast<uint8_t *>(m.pData) + (size_t)row * (size_t)m.RowPitch;
-        uint16_t *dst16 = reinterpret_cast<uint16_t *>(dstRow);
-
-        for (int x = 0; x < frame_w; x += 6)
-        {
-            uint32_t words[4] = {};
-            std::memcpy(words, srcRow + (size_t)(x / 6) * 16u, sizeof(words));
-
-            const uint16_t u0 = v210_component_for_upload(words[0], 0);
-            const uint16_t y0 = v210_component_for_upload(words[0], 10);
-            const uint16_t v0 = v210_component_for_upload(words[0], 20);
-            const uint16_t y1 = v210_component_for_upload(words[1], 0);
-            const uint16_t u2 = v210_component_for_upload(words[1], 10);
-            const uint16_t y2 = v210_component_for_upload(words[1], 20);
-            const uint16_t v2 = v210_component_for_upload(words[2], 0);
-            const uint16_t y3 = v210_component_for_upload(words[2], 10);
-            const uint16_t u4 = v210_component_for_upload(words[2], 20);
-            const uint16_t y4 = v210_component_for_upload(words[3], 0);
-            const uint16_t v4 = v210_component_for_upload(words[3], 10);
-            const uint16_t y5 = v210_component_for_upload(words[3], 20);
-
-            uint16_t *d0 = dst16 + (size_t)(x / 2) * 4u;
-            d0[0] = y0;
-            d0[1] = u0;
-            d0[2] = (x + 1 < frame_w) ? y1 : y0;
-            d0[3] = v0;
-
-            if (x + 2 < frame_w)
-            {
-                uint16_t *d1 = dst16 + (size_t)((x + 2) / 2) * 4u;
-                d1[0] = y2;
-                d1[1] = u2;
-                d1[2] = (x + 3 < frame_w) ? y3 : y2;
-                d1[3] = v2;
-            }
-
-            if (x + 4 < frame_w)
-            {
-                uint16_t *d2 = dst16 + (size_t)((x + 4) / 2) * 4u;
-                d2[0] = y4;
-                d2[1] = u4;
-                d2[2] = (x + 5 < frame_w) ? y5 : y4;
-                d2[3] = v4;
-            }
-        }
-    }
-
-    ctx_->Unmap(upload_y210_packed_.Get(), 0);
-    return true;
-}
-
 bool SharedScenePipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, int frame_w, int frame_h)
 {
     if (!ctx_ || !vs_ || !il_ || !vb_ || !rtv_fp16_ || !rt_fp16_ || frame_w <= 0 || frame_h <= 0)
@@ -1692,382 +1250,6 @@ bool SharedScenePipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, 
     return true;
 }
 
-namespace
-{
-
-    static inline uint16_t ssp_float_to_10bit(float v)
-    {
-        if (v < 0.0f)
-            v = 0.0f;
-        if (v > 1.0f)
-            v = 1.0f;
-        return static_cast<uint16_t>(std::lround(v * 1023.0f));
-    }
-
-    static inline uint16_t ssp_expand_10_to_16(uint16_t v10)
-    {
-        v10 = static_cast<uint16_t>(std::min<uint16_t>(v10, 1023u));
-        return static_cast<uint16_t>((v10 << 6) | (v10 >> 4));
-    }
-
-    static inline uint8_t ssp_float_to_8bit(float v)
-    {
-        if (v < 0.0f)
-            v = 0.0f;
-        if (v > 1.0f)
-            v = 1.0f;
-        return static_cast<uint8_t>(std::lround(v * 255.0f));
-    }
-
-    static bool ssp_write_gigabyte_raw_file(const std::wstring &path,
-                                            int w,
-                                            int h,
-                                            const char *format,
-                                            int sourceBitDepth,
-                                            const void *payload,
-                                            size_t payloadBytes)
-    {
-        if (path.empty() || !format || !*format || !payload || payloadBytes == 0)
-            return false;
-
-        char header[GVFG_RENDER_GIGABYTE_RAW_HEADER_SIZE] = {};
-        std::snprintf(header, sizeof(header),
-                      "GIGABYTE_RAW\n"
-                      "header_size=%d\n"
-                      "Width=%d\n"
-                      "Height=%d\n"
-                      "Format=%s\n"
-                      "SourceBitDepth=%d\n",
-                      GVFG_RENDER_GIGABYTE_RAW_HEADER_SIZE,
-                      w,
-                      h,
-                      format,
-                      sourceBitDepth);
-
-        std::ofstream ofs(std::filesystem::path(path), std::ios::binary);
-        if (!ofs)
-            return false;
-        ofs.write(header, static_cast<std::streamsize>(sizeof(header)));
-        ofs.write(reinterpret_cast<const char *>(payload), static_cast<std::streamsize>(payloadBytes));
-        return ofs.good();
-    }
-
-    static bool ssp_write_fp16_gigabyte_raw(const std::wstring &path, int w, int h, int sourceBitDepth, const std::vector<uint16_t> &rgba16f)
-    {
-        if (w <= 0 || h <= 0 || rgba16f.size() < static_cast<size_t>(w) * static_cast<size_t>(h) * 4u)
-            return false;
-        const size_t payloadBytes = rgba16f.size() * sizeof(uint16_t);
-        return ssp_write_gigabyte_raw_file(path, w, h, "RGBA16F", sourceBitDepth, rgba16f.data(), payloadBytes);
-    }
-
-    static bool ssp_write_rgb10_gigabyte_raw(const std::wstring &path, int w, int h, int sourceBitDepth, const std::vector<uint16_t> &rgb10)
-    {
-        if (w <= 0 || h <= 0 || rgb10.size() < static_cast<size_t>(w) * static_cast<size_t>(h) * 3u)
-            return false;
-        const size_t payloadBytes = rgb10.size() * sizeof(uint16_t);
-        return ssp_write_gigabyte_raw_file(path, w, h, "RGB10_U16", sourceBitDepth, rgb10.data(), payloadBytes);
-    }
-
-    static bool ssp_write_bgra8_gigabyte_raw(const std::wstring &path, int w, int h, int sourceBitDepth, const std::vector<uint8_t> &bgra8)
-    {
-        if (w <= 0 || h <= 0 || bgra8.size() < static_cast<size_t>(w) * static_cast<size_t>(h) * 4u)
-            return false;
-        return ssp_write_gigabyte_raw_file(path, w, h, "BGRA8", sourceBitDepth, bgra8.data(), bgra8.size());
-    }
-
-    static bool ssp_write_abgr2101010_gigabyte_raw(const std::wstring &path, int w, int h, int sourceBitDepth, const std::vector<uint32_t> &abgr2101010)
-    {
-        if (w <= 0 || h <= 0 || abgr2101010.size() < static_cast<size_t>(w) * static_cast<size_t>(h))
-            return false;
-        const size_t payloadBytes = abgr2101010.size() * sizeof(uint32_t);
-        return ssp_write_gigabyte_raw_file(path, w, h, "ABGR2101010", sourceBitDepth, abgr2101010.data(), payloadBytes);
-    }
-
-    static bool ssp_write_rgba16_expanded_gigabyte_raw(const std::wstring &path, int w, int h, int sourceBitDepth, const std::vector<uint16_t> &rgb10)
-    {
-        if (w <= 0 || h <= 0 || rgb10.size() < static_cast<size_t>(w) * static_cast<size_t>(h) * 3u)
-            return false;
-
-        std::vector<uint16_t> rgba;
-        const size_t pixelCount = static_cast<size_t>(w) * static_cast<size_t>(h);
-        rgba.resize(pixelCount * 4u);
-        for (size_t i = 0; i < pixelCount; ++i)
-        {
-            rgba[i * 4u + 0u] = ssp_expand_10_to_16(rgb10[i * 3u + 0u]);
-            rgba[i * 4u + 1u] = ssp_expand_10_to_16(rgb10[i * 3u + 1u]);
-            rgba[i * 4u + 2u] = ssp_expand_10_to_16(rgb10[i * 3u + 2u]);
-            rgba[i * 4u + 3u] = 0xFFFFu;
-        }
-
-        const size_t payloadBytes = rgba.size() * sizeof(uint16_t);
-        return ssp_write_gigabyte_raw_file(path, w, h, "RGBA16", sourceBitDepth, rgba.data(), payloadBytes);
-    }
-
-    static bool ssp_write_fp16_raw(const std::wstring &path, int w, int h, const std::vector<uint16_t> &rgba16f)
-    {
-        if (w <= 0 || h <= 0 || rgba16f.size() < static_cast<size_t>(w) * static_cast<size_t>(h) * 4u)
-            return false;
-
-        // No header. Payload: R16F G16F B16F A16F, little-endian.
-        std::ofstream ofs(std::filesystem::path(path), std::ios::binary);
-        if (!ofs)
-            return false;
-        ofs.write(reinterpret_cast<const char *>(rgba16f.data()), static_cast<std::streamsize>(rgba16f.size() * sizeof(uint16_t)));
-        return ofs.good();
-    }
-
-    static bool ssp_write_rgb10_raw_value(const std::wstring &path, int w, int h, const std::vector<uint16_t> &rgb10)
-    {
-        if (w <= 0 || h <= 0 || rgb10.size() < static_cast<size_t>(w) * static_cast<size_t>(h) * 3u)
-            return false;
-
-        // No header. Payload: R16 G16 B16, little-endian, valid value 0..1023.
-        std::ofstream ofs(std::filesystem::path(path), std::ios::binary);
-        if (!ofs)
-            return false;
-        ofs.write(reinterpret_cast<const char *>(rgb10.data()), static_cast<std::streamsize>(rgb10.size() * sizeof(uint16_t)));
-        return ofs.good();
-    }
-
-    static bool ssp_write_bgra8_raw_value(const std::wstring &path, int w, int h, const std::vector<uint8_t> &bgra8)
-    {
-        if (w <= 0 || h <= 0 || bgra8.size() < static_cast<size_t>(w) * static_cast<size_t>(h) * 4u)
-            return false;
-
-        // No header. Payload: B8 G8 R8 A8, 4 bytes per pixel.
-        // This matches DXGI_FORMAT_B8G8R8A8_UNORM preview backbuffer layout.
-        std::ofstream ofs(std::filesystem::path(path), std::ios::binary);
-        if (!ofs)
-            return false;
-        ofs.write(reinterpret_cast<const char *>(bgra8.data()), static_cast<std::streamsize>(bgra8.size()));
-        return ofs.good();
-    }
-
-    static bool ssp_write_rgba8_raw_value(const std::wstring &path, int w, int h, const std::vector<uint8_t> &bgra8)
-    {
-        if (w <= 0 || h <= 0 || bgra8.size() < static_cast<size_t>(w) * static_cast<size_t>(h) * 4u)
-            return false;
-
-        std::vector<uint8_t> rgba8;
-        const size_t pixelCount = static_cast<size_t>(w) * static_cast<size_t>(h);
-        rgba8.resize(pixelCount * 4u);
-        for (size_t i = 0; i < pixelCount; ++i)
-        {
-            rgba8[i * 4u + 0u] = bgra8[i * 4u + 2u];
-            rgba8[i * 4u + 1u] = bgra8[i * 4u + 1u];
-            rgba8[i * 4u + 2u] = bgra8[i * 4u + 0u];
-            rgba8[i * 4u + 3u] = bgra8[i * 4u + 3u];
-        }
-
-        std::ofstream ofs(std::filesystem::path(path), std::ios::binary);
-        if (!ofs)
-            return false;
-        ofs.write(reinterpret_cast<const char *>(rgba8.data()), static_cast<std::streamsize>(rgba8.size()));
-        return ofs.good();
-    }
-
-    static bool ssp_write_abgr2101010_raw_value(const std::wstring &path, int w, int h, const std::vector<uint32_t> &abgr2101010)
-    {
-        if (w <= 0 || h <= 0 || abgr2101010.size() < static_cast<size_t>(w) * static_cast<size_t>(h))
-            return false;
-
-        // No header. Payload: 4 bytes per pixel, little-endian packed 10-bit RGB.
-        // This matches the preview backbuffer DXGI_FORMAT_R10G10B10A2_UNORM bit layout:
-        //   bits  0.. 9 = R, bits 10..19 = G, bits 20..29 = B, bits 30..31 = A.
-        // PixelViewer names the same low-to-high layout as ABGR_2101010 because
-        // reading the 32-bit word from high bits to low bits is A2 B10 G10 R10.
-        std::ofstream ofs(std::filesystem::path(path), std::ios::binary);
-        if (!ofs)
-            return false;
-        ofs.write(reinterpret_cast<const char *>(abgr2101010.data()), static_cast<std::streamsize>(abgr2101010.size() * sizeof(uint32_t)));
-        return ofs.good();
-    }
-
-    static bool ssp_write_rgba16_expanded_raw(const std::wstring &path, int w, int h, const std::vector<uint16_t> &rgb10)
-    {
-        if (w <= 0 || h <= 0 || rgb10.size() < static_cast<size_t>(w) * static_cast<size_t>(h) * 3u)
-            return false;
-
-        // No header. Payload: R16 G16 B16 A16, little-endian.
-        // RGB is expanded from 10-bit 0..1023 to 16-bit 0..65535 for RAW viewers.
-        std::vector<uint16_t> rgba;
-        const size_t pixelCount = static_cast<size_t>(w) * static_cast<size_t>(h);
-        rgba.resize(pixelCount * 4u);
-        for (size_t i = 0; i < pixelCount; ++i)
-        {
-            rgba[i * 4u + 0u] = ssp_expand_10_to_16(rgb10[i * 3u + 0u]);
-            rgba[i * 4u + 1u] = ssp_expand_10_to_16(rgb10[i * 3u + 1u]);
-            rgba[i * 4u + 2u] = ssp_expand_10_to_16(rgb10[i * 3u + 2u]);
-            rgba[i * 4u + 3u] = 0xFFFFu;
-        }
-
-        std::ofstream ofs(std::filesystem::path(path), std::ios::binary);
-        if (!ofs)
-            return false;
-        ofs.write(reinterpret_cast<const char *>(rgba.data()), static_cast<std::streamsize>(rgba.size() * sizeof(uint16_t)));
-        return ofs.good();
-    }
-
-    static bool ssp_write_rgb10_stats(const std::wstring &path, int w, int h, int sourceBitDepth, const std::vector<uint16_t> &rgb10)
-    {
-        if (rgb10.empty())
-            return false;
-        uint16_t minV[3] = {1023, 1023, 1023};
-        uint16_t maxV[3] = {0, 0, 0};
-        bool anyGt255 = false;
-        bool bins[3][1024] = {};
-        for (size_t i = 0; i + 2 < rgb10.size(); i += 3)
-        {
-            for (int c = 0; c < 3; ++c)
-            {
-                uint16_t v = rgb10[i + c];
-                minV[c] = (std::min)(minV[c], v);
-                maxV[c] = (std::max)(maxV[c], v);
-                if (v > 255)
-                    anyGt255 = true;
-                bins[c][v] = true;
-            }
-        }
-        int unique[3] = {0, 0, 0};
-        for (int c = 0; c < 3; ++c)
-            for (bool hit : bins[c])
-                if (hit)
-                    ++unique[c];
-        std::ofstream ofs{std::filesystem::path(path)};
-        if (!ofs)
-            return false;
-        ofs << "Width=" << w << "\n";
-        ofs << "Height=" << h << "\n";
-        ofs << "SourceBitDepth=" << sourceBitDepth << "\n";
-        ofs << "Files=_abgr2101010.raw, _gigabyte_abgr2101010.raw, _rgb10.raw, .tiff, .png, .stats.txt\n";
-        ofs << "NativeRAW=_abgr2101010.raw, DXGI R10G10B10A2 layout, little-endian uint32 per pixel\n";
-        ofs << "GigabyteRAW=_gigabyte_abgr2101010.raw, 128-byte ASCII GIGABYTE_RAW header + same native payload\n";
-        ofs << "HexRGB10=_rgb10.raw, little-endian uint16 R G B values per pixel, valid range 0..1023, no header\n";
-        ofs << "R min=" << minV[0] << " max=" << maxV[0] << " unique=" << unique[0] << "\n";
-        ofs << "G min=" << minV[1] << " max=" << maxV[1] << " unique=" << unique[1] << "\n";
-        ofs << "B min=" << minV[2] << " max=" << maxV[2] << " unique=" << unique[2] << "\n";
-        ofs << "Any value > 255=" << (anyGt255 ? "YES" : "NO") << "\n";
-        ofs << "MatchesPreviewSwapchain=DXGI_FORMAT_R10G10B10A2_UNORM via _abgr2101010.raw\n";
-        ofs << "ABGR2101010 raw is for PixelViewer: choose ABGR_2101010 + Little-Endian\n";
-        ofs << "DXGI bit layout=bits 0-9 R, 10-19 G, 20-29 B, 30-31 A; alpha fixed to 3\n";
-        return ofs.good();
-    }
-
-    static bool ssp_write_bgra8_stats(const std::wstring &path, int w, int h, int sourceBitDepth, const std::vector<uint8_t> &bgra8)
-    {
-        if (bgra8.empty())
-            return false;
-        uint8_t minV[3] = {255, 255, 255};
-        uint8_t maxV[3] = {0, 0, 0};
-        bool bins[3][256] = {};
-        for (size_t i = 0; i + 3 < bgra8.size(); i += 4)
-        {
-            const uint8_t r = bgra8[i + 2u];
-            const uint8_t g = bgra8[i + 1u];
-            const uint8_t b = bgra8[i + 0u];
-            const uint8_t v[3] = {r, g, b};
-            for (int c = 0; c < 3; ++c)
-            {
-                minV[c] = (std::min)(minV[c], v[c]);
-                maxV[c] = (std::max)(maxV[c], v[c]);
-                bins[c][v[c]] = true;
-            }
-        }
-        int unique[3] = {0, 0, 0};
-        for (int c = 0; c < 3; ++c)
-            for (bool hit : bins[c])
-                if (hit)
-                    ++unique[c];
-        std::ofstream ofs{std::filesystem::path(path)};
-        if (!ofs)
-            return false;
-        ofs << "Width=" << w << "\n";
-        ofs << "Height=" << h << "\n";
-        ofs << "SourceBitDepth=" << sourceBitDepth << "\n";
-        ofs << "Files=_bgra8.raw, _gigabyte_bgra8.raw, _rgba8.raw, .tiff, .png, .stats.txt\n";
-        ofs << "NativeRAW=_bgra8.raw, B8 G8 R8 A8 byte order, 4 bytes per pixel, no header\n";
-        ofs << "GigabyteRAW=_gigabyte_bgra8.raw, 128-byte ASCII GIGABYTE_RAW header + same native payload\n";
-        ofs << "HexRGBA=_rgba8.raw, R8 G8 B8 A8 byte order, 4 bytes per pixel, no header\n";
-        ofs << "MatchesPreviewSwapchain=DXGI_FORMAT_B8G8R8A8_UNORM\n";
-        ofs << "R min=" << static_cast<int>(minV[0]) << " max=" << static_cast<int>(maxV[0]) << " unique=" << unique[0] << "\n";
-        ofs << "G min=" << static_cast<int>(minV[1]) << " max=" << static_cast<int>(maxV[1]) << " unique=" << unique[1] << "\n";
-        ofs << "B min=" << static_cast<int>(minV[2]) << " max=" << static_cast<int>(maxV[2]) << " unique=" << unique[2] << "\n";
-        ofs << "Any value > 255=NO\n";
-        return ofs.good();
-    }
-
-    static bool ssp_write_rgb16_tiff(const std::wstring &path, int w, int h, const std::vector<uint16_t> &rgb10)
-    {
-        HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        const bool needUninit = SUCCEEDED(hr);
-        IWICImagingFactory *factory = nullptr;
-        IWICBitmapEncoder *encoder = nullptr;
-        IWICStream *stream = nullptr;
-        IWICBitmapFrameEncode *frame = nullptr;
-        IPropertyBag2 *bag = nullptr;
-        bool ok = false;
-        do
-        {
-            hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
-            if (FAILED(hr) || !factory)
-                break;
-            hr = factory->CreateStream(&stream);
-            if (FAILED(hr) || !stream)
-                break;
-            hr = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
-            if (FAILED(hr))
-                break;
-            hr = factory->CreateEncoder(GUID_ContainerFormatTiff, nullptr, &encoder);
-            if (FAILED(hr) || !encoder)
-                break;
-            hr = encoder->Initialize(stream, WICBitmapEncoderNoCache);
-            if (FAILED(hr))
-                break;
-            hr = encoder->CreateNewFrame(&frame, &bag);
-            if (FAILED(hr) || !frame)
-                break;
-            hr = frame->Initialize(bag);
-            if (FAILED(hr))
-                break;
-            hr = frame->SetSize(static_cast<UINT>(w), static_cast<UINT>(h));
-            if (FAILED(hr))
-                break;
-            WICPixelFormatGUID pf = GUID_WICPixelFormat48bppRGB;
-            hr = frame->SetPixelFormat(&pf);
-            if (FAILED(hr) || !IsEqualGUID(pf, GUID_WICPixelFormat48bppRGB))
-                break;
-            std::vector<uint16_t> rgb16(rgb10.size());
-            for (size_t i = 0; i < rgb10.size(); ++i)
-                rgb16[i] = static_cast<uint16_t>((static_cast<uint32_t>(rgb10[i]) * 65535u + 511u) / 1023u);
-            const UINT stride = static_cast<UINT>(w * 3 * sizeof(uint16_t));
-            const UINT imageSize = static_cast<UINT>(rgb16.size() * sizeof(uint16_t));
-            hr = frame->WritePixels(static_cast<UINT>(h), stride, imageSize, reinterpret_cast<BYTE *>(rgb16.data()));
-            if (FAILED(hr))
-                break;
-            hr = frame->Commit();
-            if (FAILED(hr))
-                break;
-            hr = encoder->Commit();
-            if (FAILED(hr))
-                break;
-            ok = true;
-        } while (false);
-        if (bag)
-            bag->Release();
-        if (frame)
-            frame->Release();
-        if (encoder)
-            encoder->Release();
-        if (stream)
-            stream->Release();
-        if (factory)
-            factory->Release();
-        if (needUninit)
-            CoUninitialize();
-        return ok;
-    }
-}
-
 bool SharedScenePipeline::copy_fp16_to_scene()
 {
     if (!ctx_ || !rt_fp16_ || !rt_scene_fp16_)
@@ -2097,125 +1279,6 @@ bool SharedScenePipeline::readback_to_frame(int frame_w, int frame_h, uint64_t p
     out->pts_ns = pts_ns;
     out->frame_id = frame_id;
     return true;
-}
-
-bool SharedScenePipeline::export_scene_rgb10(const wchar_t *base_path, int raw_flags, bool export_tiff, bool export_stats, bool export_gigabyte_raw)
-{
-    if (!base_path || !*base_path || !ctx_ || !rt_scene_stage_fp16_ || !rt_scene_fp16_ || rt_w_ <= 0 || rt_h_ <= 0)
-        return false;
-
-    ctx_->CopyResource(rt_scene_stage_fp16_.Get(), rt_scene_fp16_.Get());
-    D3D11_MAPPED_SUBRESOURCE m{};
-    if (FAILED(ctx_->Map(rt_scene_stage_fp16_.Get(), 0, D3D11_MAP_READ, 0, &m)))
-        return false;
-
-    const size_t pixelCount = static_cast<size_t>(rt_w_) * static_cast<size_t>(rt_h_);
-    std::vector<uint16_t> rgba16f;
-    std::vector<uint16_t> rgb10;
-    std::vector<uint8_t> bgra8;
-    std::vector<uint32_t> abgr2101010;
-    const bool sourceIs10Bit = (preview_source_bit_depth_ >= 10);
-    rgba16f.resize(pixelCount * 4u);
-    rgb10.resize(pixelCount * 3u);
-    bgra8.resize(pixelCount * 4u);
-    abgr2101010.resize(pixelCount);
-    for (int y = 0; y < rt_h_; ++y)
-    {
-        const uint8_t *srcRow = static_cast<const uint8_t *>(m.pData) + static_cast<size_t>(y) * static_cast<size_t>(m.RowPitch);
-        const uint16_t *src = reinterpret_cast<const uint16_t *>(srcRow);
-        for (int x = 0; x < rt_w_; ++x)
-        {
-            const size_t pixelIndex = static_cast<size_t>(y) * static_cast<size_t>(rt_w_) + static_cast<size_t>(x);
-            const size_t si = static_cast<size_t>(x) * 4u;
-            const size_t fpi = pixelIndex * 4u;
-            const size_t di = pixelIndex * 3u;
-            const size_t bi = pixelIndex * 4u;
-
-            rgba16f[fpi + 0u] = src[si + 0u];
-            rgba16f[fpi + 1u] = src[si + 1u];
-            rgba16f[fpi + 2u] = src[si + 2u];
-            rgba16f[fpi + 3u] = src[si + 3u];
-
-            const float r = DirectX::PackedVector::XMConvertHalfToFloat(src[si + 0u]);
-            const float g = DirectX::PackedVector::XMConvertHalfToFloat(src[si + 1u]);
-            const float b = DirectX::PackedVector::XMConvertHalfToFloat(src[si + 2u]);
-            const uint16_t r10 = ssp_float_to_10bit(r);
-            const uint16_t g10 = ssp_float_to_10bit(g);
-            const uint16_t b10 = ssp_float_to_10bit(b);
-            rgb10[di + 0u] = r10;
-            rgb10[di + 1u] = g10;
-            rgb10[di + 2u] = b10;
-
-            bgra8[bi + 0u] = ssp_float_to_8bit(b);
-            bgra8[bi + 1u] = ssp_float_to_8bit(g);
-            bgra8[bi + 2u] = ssp_float_to_8bit(r);
-            bgra8[bi + 3u] = 255u;
-
-            abgr2101010[pixelIndex] =
-                ((static_cast<uint32_t>(r10) & 0x3FFu) << 0u) |
-                ((static_cast<uint32_t>(g10) & 0x3FFu) << 10u) |
-                ((static_cast<uint32_t>(b10) & 0x3FFu) << 20u) |
-                (3u << 30u);
-        }
-    }
-    ctx_->Unmap(rt_scene_stage_fp16_.Get(), 0);
-
-    const bool exportNativeRaw = (raw_flags & GVFG_RENDER_EXPORT_RAW_NATIVE) != 0;
-    const bool exportRgb10Raw = (raw_flags & GVFG_RENDER_EXPORT_RAW_RGB10_U16) != 0;
-    const bool exportRgba16Raw = (raw_flags & GVFG_RENDER_EXPORT_RAW_RGBA16) != 0;
-    const bool exportRgba8Raw = (raw_flags & GVFG_RENDER_EXPORT_RAW_RGBA8) != 0;
-    const bool exportFp16Raw = sourceIs10Bit && (raw_flags & GVFG_RENDER_EXPORT_RAW_ALL) == GVFG_RENDER_EXPORT_RAW_ALL;
-    const std::wstring base(base_path);
-    bool ok = true;
-    if (raw_flags != 0)
-    {
-        if (sourceIs10Bit)
-        {
-            if (exportFp16Raw)
-                ok = ssp_write_fp16_raw(base + L"_fp16_rgba16f.raw", rt_w_, rt_h_, rgba16f) && ok;
-            if (exportRgb10Raw)
-                ok = ssp_write_rgb10_raw_value(base + L"_rgb10.raw", rt_w_, rt_h_, rgb10) && ok;
-            if (exportNativeRaw)
-                ok = ssp_write_abgr2101010_raw_value(base + L"_abgr2101010.raw", rt_w_, rt_h_, abgr2101010) && ok;
-            if (exportRgba16Raw)
-                ok = ssp_write_rgba16_expanded_raw(base + L"_rgba16_expanded.raw", rt_w_, rt_h_, rgb10) && ok;
-        }
-        else
-        {
-            if (exportNativeRaw)
-                ok = ssp_write_bgra8_raw_value(base + L"_bgra8.raw", rt_w_, rt_h_, bgra8) && ok;
-            if (exportRgba8Raw)
-                ok = ssp_write_rgba8_raw_value(base + L"_rgba8.raw", rt_w_, rt_h_, bgra8) && ok;
-        }
-    }
-    if (export_gigabyte_raw)
-    {
-        const int sourceBitDepth = preview_source_bit_depth_ > 0 ? preview_source_bit_depth_ : (sourceIs10Bit ? 10 : 8);
-        if (sourceIs10Bit)
-        {
-            ok = ssp_write_abgr2101010_gigabyte_raw(base + L"_gigabyte_abgr2101010.raw", rt_w_, rt_h_, sourceBitDepth, abgr2101010) && ok;
-        }
-        else
-        {
-            ok = ssp_write_bgra8_gigabyte_raw(base + L"_gigabyte_bgra8.raw", rt_w_, rt_h_, sourceBitDepth, bgra8) && ok;
-        }
-    }
-    if (export_tiff)
-        ok = ssp_write_rgb16_tiff(base + L".tiff", rt_w_, rt_h_, rgb10) && ok;
-    if (export_stats)
-    {
-        const int sourceBitDepth = preview_source_bit_depth_ > 0 ? preview_source_bit_depth_ : (sourceIs10Bit ? 10 : 8);
-        ok = sourceIs10Bit
-                 ? (ssp_write_rgb10_stats(base + L".stats.txt", rt_w_, rt_h_, sourceBitDepth, rgb10) && ok)
-                 : (ssp_write_bgra8_stats(base + L".stats.txt", rt_w_, rt_h_, sourceBitDepth, bgra8) && ok);
-    }
-
-    char msg[512] = {};
-    std::snprintf(msg, sizeof(msg),
-                  "[SharedScene] export_scene_rgb10 base=%ls size=%dx%d sourceBitDepth=%d exportAs=%s rawFlags=0x%x gigabyteRaw=%d tiff=%d stats=%d ok=%d",
-                  base_path, rt_w_, rt_h_, preview_source_bit_depth_, sourceIs10Bit ? "abgr2101010" : "bgra8", raw_flags, export_gigabyte_raw ? 1 : 0, export_tiff ? 1 : 0, export_stats ? 1 : 0, ok ? 1 : 0);
-    ssp_log_text(msg);
-    return ok;
 }
 
 void SharedScenePipeline::release_preview_swapchain()

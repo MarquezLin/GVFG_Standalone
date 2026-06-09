@@ -15,7 +15,6 @@
 #include <thread>
 #include <vector>
 
-#include <d2d1.h>
 #include <d3d11_4.h>
 #include <dxgi.h>
 #include <wrl/client.h>
@@ -656,23 +655,9 @@ struct gvfg_handle_t
             if (SUCCEEDED(d3d.As(&mt)) && mt)
                 mt->SetMultithreadProtected(TRUE);
 
-            if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED, d2dFactory.ReleaseAndGetAddressOf())) || !d2dFactory)
-                return false;
-
-            ComPtr<IDXGIDevice> dxgiDev;
-            if (FAILED(d3d.As(&dxgiDev)) || !dxgiDev)
-                return false;
-            if (FAILED(d2dFactory->CreateDevice(dxgiDev.Get(), &d2dDevice)) || !d2dDevice)
-                return false;
-            if (FAILED(d2dDevice->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &d2dCtx)) || !d2dCtx)
-                return false;
-            if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), &dwrite)) || !dwrite)
-                return false;
-            d2dCtx->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &d2dWhite);
-            d2dCtx->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0, 0.55f), &d2dBlack);
         }
 
-        if (!pipeline->initialize(d3d.Get(), ctx.Get(), d2dCtx.Get(), dwrite.Get(), d2dWhite.Get(), d2dBlack.Get()))
+        if (!pipeline->initialize(d3d.Get(), ctx.Get()))
             return false;
 
         pipeline->configurePreview(toRenderPreviewDesc());
@@ -688,12 +673,6 @@ struct gvfg_handle_t
             pipeline->release_preview_swapchain();
             pipeline.reset();
         }
-        d2dBlack.Reset();
-        d2dWhite.Reset();
-        dwrite.Reset();
-        d2dCtx.Reset();
-        d2dDevice.Reset();
-        d2dFactory.Reset();
         ctx.Reset();
         d3d.Reset();
     }
@@ -988,12 +967,6 @@ struct gvfg_handle_t
 
     ComPtr<ID3D11Device> d3d;
     ComPtr<ID3D11DeviceContext> ctx;
-    ComPtr<ID2D1Factory1> d2dFactory;
-    ComPtr<ID2D1Device> d2dDevice;
-    ComPtr<ID2D1DeviceContext> d2dCtx;
-    ComPtr<IDWriteFactory> dwrite;
-    ComPtr<ID2D1SolidColorBrush> d2dWhite;
-    ComPtr<ID2D1SolidColorBrush> d2dBlack;
     std::unique_ptr<SharedScenePipeline> pipeline;
 };
 

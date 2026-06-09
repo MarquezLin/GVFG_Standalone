@@ -16,16 +16,6 @@ typedef enum xdma_status_t
     XDMA_EABI
 } xdma_status_t;
 
-typedef struct xdma_device_info_t
-{
-    char friendly_name[GDRIVER_MAX_FRIENDLY_NAME];
-    char serial_number[GDRIVER_MAX_SERIAL_NUMBER];
-    char firmware_version[GDRIVER_MAX_FIRMWARE_VERSION];
-    char driver_version[GDRIVER_MAX_DRIVER_VERSION];
-    uint32_t supported_inputs_mask;
-    uint32_t supported_pixel_formats_mask;
-} xdma_device_info_t;
-
 typedef struct xdma_stream_desc_t
 {
     gdriver_input_t input;
