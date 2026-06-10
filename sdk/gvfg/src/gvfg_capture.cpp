@@ -607,8 +607,7 @@ struct gvfg_handle_t
         desc.width = width;
         desc.height = height;
         desc.pixel_format = pixelFormat;
-        desc.buffer_count = 1;
-        desc.memory_kind = XDMA_MEMORY_DRIVER_COPY;
+        desc.buffer_count = 3;
 
         const xdma_status_t st = backend->configure_stream(desc);
         if (st != XDMA_OK)
@@ -714,7 +713,7 @@ struct gvfg_handle_t
                 break;
             }
 
-            updateRuntimeFps(frame.timestamp_ns ? frame.timestamp_ns : now_ns());
+            updateRuntimeFps(now_ns());
             renderGpuFrame(frame);
             emitNativeFrame(frame);
             backend->release_frame(frame);
@@ -748,44 +747,19 @@ struct gvfg_handle_t
         {
         case XDMA_PIXFMT_YUY2:
         {
-            const int stride = frame.plane_stride_bytes[0] ? static_cast<int>(frame.plane_stride_bytes[0]) : w * 2;
-            if (stride < w * 2)
-                return false;
             renderFmt = GVFG_RENDER_FMT_YUY2;
-            uploaded = pipeline->upload_yuy2_frame(base + frame.plane_offset_bytes[0], stride, w, h);
+            uploaded = pipeline->upload_yuy2_frame(base, w * 2, w, h);
             break;
         }
         case XDMA_PIXFMT_Y210:
         {
-            const int stride = frame.plane_stride_bytes[0] ? static_cast<int>(frame.plane_stride_bytes[0]) : w * 4;
-            if (stride < w * 4)
-                return false;
             renderFmt = GVFG_RENDER_FMT_Y210;
-            uploaded = pipeline->upload_y210_frame(base + frame.plane_offset_bytes[0], stride, w, h);
+            uploaded = pipeline->upload_y210_frame(base, w * 4, w, h);
             break;
         }
         case XDMA_PIXFMT_NV12:
-        {
-            if (frame.plane_count < 2)
-                return false;
-            const int strideY = frame.plane_stride_bytes[0] ? static_cast<int>(frame.plane_stride_bytes[0]) : w;
-            const int strideUV = frame.plane_stride_bytes[1] ? static_cast<int>(frame.plane_stride_bytes[1]) : strideY;
-            renderFmt = GVFG_RENDER_FMT_NV12;
-            uploaded = pipeline->upload_nv12_frame(base + frame.plane_offset_bytes[0], strideY,
-                                                   base + frame.plane_offset_bytes[1], strideUV, w, h);
-            break;
-        }
         case XDMA_PIXFMT_P010:
-        {
-            if (frame.plane_count < 2)
-                return false;
-            const int strideY = frame.plane_stride_bytes[0] ? static_cast<int>(frame.plane_stride_bytes[0]) : w * 2;
-            const int strideUV = frame.plane_stride_bytes[1] ? static_cast<int>(frame.plane_stride_bytes[1]) : strideY;
-            renderFmt = GVFG_RENDER_FMT_P010;
-            uploaded = pipeline->upload_p010_frame(base + frame.plane_offset_bytes[0], strideY,
-                                                   base + frame.plane_offset_bytes[1], strideUV, w, h);
-            break;
-        }
+            return false;
         default:
             return false;
         }
@@ -810,24 +784,16 @@ struct gvfg_handle_t
         if (!shouldEmitFrameCallback(frame.frame_id))
             return;
 
-        if (frame.width == 0 || frame.height == 0 || frame.plane_count == 0)
+        if (frame.width == 0 || frame.height == 0)
             return;
 
         gvfg_frame_t out{};
         out.data = frame.data;
         out.data_size = static_cast<uint64_t>(frame.data_size_bytes);
-        out.stride = static_cast<int>(frame.plane_stride_bytes[0]);
         out.width = static_cast<int>(frame.width);
         out.height = static_cast<int>(frame.height);
         out.pixel_format = to_gvfg_pixel_format(frame.pixel_format);
         out.bit_depth = static_cast<int>(frame.bit_depth);
-        out.plane_count = static_cast<int>((std::min)(frame.plane_count, static_cast<uint32_t>(GVFG_MAX_PLANES)));
-        for (int i = 0; i < out.plane_count; ++i)
-        {
-            out.plane_offset_bytes[i] = frame.plane_offset_bytes[i];
-            out.plane_stride_bytes[i] = frame.plane_stride_bytes[i];
-        }
-        out.pts_ns = frame.timestamp_ns ? frame.timestamp_ns : now_ns();
         out.frame_id = frame.frame_id;
         onFrame(&out, callbackUser);
         noteDeliveredFrame(out.width, out.height, out.bit_depth, out.pixel_format);

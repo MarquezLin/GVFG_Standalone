@@ -190,15 +190,10 @@ typedef struct
 {
     const void *data;       /* Native frame buffer. Valid only during the frame callback. */
     uint64_t data_size;     /* Total bytes available from data. */
-    int stride;             /* Bytes per row for plane 0. */
     int width;              /* Frame width in pixels. */
     int height;             /* Frame height in pixels. */
     int pixel_format;       /* gvfg_pixel_format_t value. */
     int bit_depth;          /* Bits per color channel of the native frame. */
-    int plane_count;        /* Number of valid planes. */
-    uint32_t plane_offset_bytes[GVFG_MAX_PLANES];
-    uint32_t plane_stride_bytes[GVFG_MAX_PLANES];
-    uint64_t pts_ns;        /* Presentation timestamp in nanoseconds. */
     uint64_t frame_id;      /* Monotonic frame identifier from the backend. */
 } gvfg_frame_t;
 

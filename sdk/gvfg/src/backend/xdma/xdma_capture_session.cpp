@@ -30,6 +30,8 @@ namespace
     constexpr int kPlugInScanFrames = 5;
     constexpr uint32_t kDefaultWidth = 1920;
     constexpr uint32_t kDefaultHeight = 1080;
+    constexpr uint32_t kDefaultRingBufferCount = 3;
+    constexpr uint32_t kMaxRingBufferCount = 16;
     constexpr DWORD kMaxBytesPerTransfer = 0x800000;
 
     // FPGA user BAR register offsets.  These match the old CaptureDemo
@@ -152,31 +154,6 @@ namespace
         case XDMA_PIXFMT_UYVY:
         default:
             return pixels * 2u;
-        }
-    }
-
-    static uint32_t plane_count_for_pixfmt(xdma_pixel_format_t fmt)
-    {
-        return (fmt == XDMA_PIXFMT_NV12 || fmt == XDMA_PIXFMT_P010) ? 2u : 1u;
-    }
-
-    static uint32_t plane_stride_for_pixfmt(uint32_t width, xdma_pixel_format_t fmt, uint32_t bitDepth)
-    {
-        switch (fmt)
-        {
-        case XDMA_PIXFMT_NV12:
-            return width;
-        case XDMA_PIXFMT_P010:
-            return width * 2u;
-        case XDMA_PIXFMT_RGB24:
-        case XDMA_PIXFMT_YUV444:
-            return bitDepth > 8u ? width * 6u : width * 3u;
-        case XDMA_PIXFMT_Y210:
-            return width * 4u;
-        case XDMA_PIXFMT_YUY2:
-        case XDMA_PIXFMT_UYVY:
-        default:
-            return width * 2u;
         }
     }
 
@@ -348,8 +325,7 @@ namespace gvfg::internal
         stream_desc_.height = kDefaultHeight;
         stream_desc_.pixel_format = XDMA_PIXFMT_YUY2;
         stream_bit_depth_ = 8;
-        stream_desc_.buffer_count = 1;
-        stream_desc_.memory_kind = XDMA_MEMORY_DRIVER_COPY;
+        stream_desc_.buffer_count = kDefaultRingBufferCount;
         reset_stats(stats_, XDMA_STREAM_STOPPED);
     }
 
@@ -577,13 +553,12 @@ namespace gvfg::internal
             desc.pixel_format != XDMA_PIXFMT_UNKNOWN)
             return fail(XDMA_ENOTSUP, "configure_stream(pixel_format)", ERROR_NOT_SUPPORTED);
 
-        XDMA_LOG("configure: request input=%u %ux%u fmt=%u buffers=%u mem=%u flags=0x%x",
+        XDMA_LOG("configure: request input=%u %ux%u fmt=%u buffers=%u flags=0x%x",
                  static_cast<unsigned>(desc.input),
                  desc.width,
                  desc.height,
                  static_cast<unsigned>(desc.pixel_format),
                  desc.buffer_count,
-                 static_cast<unsigned>(desc.memory_kind),
                  desc.flags);
 
         // Normalize the requested stream.  The render path may support fewer
@@ -593,28 +568,29 @@ namespace gvfg::internal
         stream_desc_.width = desc.width ? desc.width : kDefaultWidth;
         stream_desc_.height = desc.height ? desc.height : kDefaultHeight;
         stream_desc_.pixel_format = desc.pixel_format == XDMA_PIXFMT_UNKNOWN ? XDMA_PIXFMT_YUY2 : desc.pixel_format;
-        uint32_t rawBitDepth = 0;
         stream_bit_depth_ = bit_depth_for_pixfmt(stream_desc_.pixel_format);
-        stream_desc_.buffer_count = desc.buffer_count ? desc.buffer_count : 1;
-        stream_desc_.memory_kind = XDMA_MEMORY_DRIVER_COPY;
+        stream_desc_.buffer_count = (std::max)(2u, (std::min)(desc.buffer_count ? desc.buffer_count : kDefaultRingBufferCount,
+                                                              kMaxRingBufferCount));
         configured_ = true;
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
             reset_stats(stats_, XDMA_STREAM_CONFIGURED);
-            latest_frame_.clear();
-            delivery_frame_.clear();
+            frame_ring_.clear();
+            next_write_slot_ = 0;
+            active_delivery_slot_ = static_cast<size_t>(-1);
             latest_sequence_ = 0;
             delivered_sequence_ = 0;
             wait_timeout_count_ = 0;
         }
 
-        XDMA_LOG("configure: effective input=%u path=%u %ux%u fmt=%u frame_bytes=%zu",
+        XDMA_LOG("configure: effective input=%u path=%u %ux%u fmt=%u ring_buffers=%u frame_bytes=%zu",
                  static_cast<unsigned>(stream_desc_.input),
                  active_input_path(),
                  stream_desc_.width,
                  stream_desc_.height,
                  static_cast<unsigned>(stream_desc_.pixel_format),
+                 stream_desc_.buffer_count,
                  frame_size_bytes());
         return XDMA_OK;
     }
@@ -678,9 +654,11 @@ namespace gvfg::internal
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            dma_buffer_.assign(bytes, 0);
-            latest_frame_.clear();
-            delivery_frame_.clear();
+            frame_ring_.assign(stream_desc_.buffer_count, FrameSlot{});
+            for (FrameSlot &slot : frame_ring_)
+                slot.data.assign(bytes, 0);
+            next_write_slot_ = 0;
+            active_delivery_slot_ = static_cast<size_t>(-1);
             pending_events_ = 0;
             latest_sequence_ = 0;
             delivered_sequence_ = 0;
@@ -822,7 +800,12 @@ namespace gvfg::internal
 
         const auto hasFrame = [this]()
         {
-            return latest_sequence_ > delivered_sequence_ || stream_error_ || !running_;
+            for (const FrameSlot &slot : frame_ring_)
+            {
+                if (slot.ready && slot.sequence > delivered_sequence_)
+                    return true;
+            }
+            return stream_error_ || !running_;
         };
 
         if (timeoutMs == 0)
@@ -843,55 +826,53 @@ namespace gvfg::internal
             return XDMA_ETIMEOUT;
         }
 
-        if (!running_ && latest_sequence_ <= delivered_sequence_)
+        size_t readySlot = frame_ring_.size();
+        uint64_t readySequence = delivered_sequence_;
+        for (size_t i = 0; i < frame_ring_.size(); ++i)
+        {
+            const FrameSlot &slot = frame_ring_[i];
+            if (slot.ready && slot.sequence > readySequence)
+            {
+                readySlot = i;
+                readySequence = slot.sequence;
+            }
+        }
+
+        if (!running_ && readySlot == frame_ring_.size())
         {
             XDMA_LOG("wait_frame: stopped without pending frame");
             return XDMA_ESTATE;
         }
-        if (stream_error_ && latest_sequence_ <= delivered_sequence_)
+        if (stream_error_ && readySlot == frame_ring_.size())
         {
             XDMA_LOG("wait_frame: stream error latest=%llu delivered=%llu",
                      static_cast<unsigned long long>(latest_sequence_),
                      static_cast<unsigned long long>(delivered_sequence_));
             return XDMA_EIO;
         }
-        if (latest_sequence_ <= delivered_sequence_)
+        if (readySlot == frame_ring_.size())
             return XDMA_ETIMEOUT;
 
-        // Return a stable pointer to delivery_frame_. The pointer is valid
-        // until the next wait_frame() on this same session or close().
-        delivery_frame_ = latest_frame_;
-        delivered_sequence_ = latest_sequence_;
+        FrameSlot &slot = frame_ring_[readySlot];
+        slot.ready = false;
+        slot.in_use = true;
+        active_delivery_slot_ = readySlot;
+        delivered_sequence_ = slot.sequence;
         ++stats_.frames_delivered;
 
-        out.data = delivery_frame_.data();
-        out.data_size_bytes = delivery_frame_.size();
+        out.data = slot.data.data();
+        out.data_size_bytes = slot.bytes;
         out.frame_id = delivered_sequence_;
-        out.timestamp_ns = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count());
         out.width = stream_desc_.width;
         out.height = stream_desc_.height;
         out.pixel_format = stream_desc_.pixel_format;
         out.bit_depth = stream_bit_depth_;
-        out.plane_count = plane_count_for_pixfmt(stream_desc_.pixel_format);
-        out.plane_offset_bytes[0] = 0;
-        out.plane_stride_bytes[0] = plane_stride_for_pixfmt(stream_desc_.width, stream_desc_.pixel_format, stream_bit_depth_);
-        if (out.plane_count > 1)
-        {
-            out.plane_offset_bytes[1] = out.plane_stride_bytes[0] * stream_desc_.height;
-            out.plane_stride_bytes[1] = out.plane_stride_bytes[0];
-        }
-        out.driver_buffer_index = 0;
-        out.flags = 0;
         if (should_log_counter(out.frame_id))
-            XDMA_LOG("wait_frame: deliver id=%llu bytes=%zu %ux%u stride=%u captured=%llu delivered=%llu",
+            XDMA_LOG("wait_frame: deliver id=%llu bytes=%zu %ux%u captured=%llu delivered=%llu",
                      static_cast<unsigned long long>(out.frame_id),
                      out.data_size_bytes,
                      out.width,
                      out.height,
-                     out.plane_stride_bytes[0],
                      static_cast<unsigned long long>(stats_.frames_captured),
                      static_cast<unsigned long long>(stats_.frames_delivered));
         return XDMA_OK;
@@ -899,6 +880,13 @@ namespace gvfg::internal
 
     xdma_status_t XdmaCaptureSession::release_frame(const xdma_frame_t &)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (active_delivery_slot_ < frame_ring_.size())
+        {
+            frame_ring_[active_delivery_slot_].in_use = false;
+            active_delivery_slot_ = static_cast<size_t>(-1);
+        }
+        data_cv_.notify_all();
         return XDMA_OK;
     }
 
@@ -1065,32 +1053,75 @@ namespace gvfg::internal
                 continue;
 
             const DWORD bytes = static_cast<DWORD>(frame_size_bytes());
-            if (dma_buffer_.size() < bytes)
+            size_t slotIndex = frame_ring_.size();
+            uint8_t *slotData = nullptr;
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (dma_buffer_.size() < bytes)
-                    dma_buffer_.resize(bytes);
+                std::unique_lock<std::mutex> lock(mutex_);
+                data_cv_.wait(lock, [this]()
+                              {
+                                  if (!running_ || data_worker_stop_)
+                                      return true;
+                                  for (const FrameSlot &slot : frame_ring_)
+                                  {
+                                      if (!slot.in_use)
+                                          return true;
+                                  }
+                                  return false;
+                              });
+                if (!running_ || data_worker_stop_)
+                    break;
+
+                for (size_t attempt = 0; attempt < frame_ring_.size(); ++attempt)
+                {
+                    const size_t candidate = (next_write_slot_ + attempt) % frame_ring_.size();
+                    if (!frame_ring_[candidate].in_use)
+                    {
+                        slotIndex = candidate;
+                        break;
+                    }
+                }
+                if (slotIndex == frame_ring_.size())
+                    continue;
+
+                FrameSlot &slot = frame_ring_[slotIndex];
+                if (slot.ready && slot.sequence > delivered_sequence_)
+                    ++stats_.frames_dropped;
+                slot.ready = false;
+                slot.in_use = true;
+                if (slot.data.size() < bytes)
+                    slot.data.resize(bytes);
+                slotData = slot.data.data();
+                next_write_slot_ = (slotIndex + 1) % frame_ring_.size();
             }
-            const int ret = read_device(c2h_device_[active_input_path()], 0, bytes, dma_buffer_.data());
+            const int ret = read_device(c2h_device_[active_input_path()], 0, bytes, slotData);
 
             if (!running_)
                 break;
             if (!capture_active_)
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (slotIndex < frame_ring_.size())
+                    frame_ring_[slotIndex].in_use = false;
+                data_cv_.notify_all();
                 continue;
+            }
             if (ret < 0 || static_cast<DWORD>(ret) != bytes)
             {
                 fail(XDMA_EIO, "ReadFile(c2h)");
                 std::lock_guard<std::mutex> lock(mutex_);
+                if (slotIndex < frame_ring_.size())
+                    frame_ring_[slotIndex].in_use = false;
                 stream_error_ = true;
                 ++stats_.dma_errors;
+                data_cv_.notify_all();
                 frame_cv_.notify_all();
                 break;
             }
 
-            handle_plug_in_frame_fix(dma_buffer_.data(), static_cast<size_t>(ret));
+            handle_plug_in_frame_fix(slotData, static_cast<size_t>(ret));
 
             std::lock_guard<std::mutex> lock(mutex_);
-            publish_frame(dma_buffer_.data(), static_cast<size_t>(ret));
+            publish_frame(slotIndex, static_cast<size_t>(ret));
         }
         XDMA_LOG("data_thread: exit running=%d", running_ ? 1 : 0);
     }
@@ -1203,9 +1234,17 @@ namespace gvfg::internal
         uint64_t deliveredAfterPause = 0;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            dma_buffer_.clear();
-            latest_frame_.clear();
-            delivery_frame_.clear();
+            for (FrameSlot &slot : frame_ring_)
+            {
+                if (!slot.in_use)
+                {
+                    slot.bytes = 0;
+                    slot.sequence = 0;
+                    slot.ready = false;
+                }
+            }
+            next_write_slot_ = 0;
+            active_delivery_slot_ = static_cast<size_t>(-1);
             latest_sequence_ = delivered_sequence_;
             latestAfterPause = latest_sequence_;
             deliveredAfterPause = delivered_sequence_;
@@ -1263,7 +1302,26 @@ namespace gvfg::internal
         {
             std::lock_guard<std::mutex> lock(mutex_);
             const size_t bytes = frame_size_bytes();
-            dma_buffer_.assign(bytes, 0);
+            bool anyInUse = false;
+            for (FrameSlot &slot : frame_ring_)
+                anyInUse = anyInUse || slot.in_use;
+            if (!anyInUse && frame_ring_.size() != stream_desc_.buffer_count)
+                frame_ring_.assign(stream_desc_.buffer_count, FrameSlot{});
+            if (frame_ring_.empty())
+                frame_ring_.assign(stream_desc_.buffer_count, FrameSlot{});
+            for (FrameSlot &slot : frame_ring_)
+            {
+                if (!slot.in_use)
+                {
+                    slot.data.assign(bytes, 0);
+                    slot.bytes = 0;
+                    slot.sequence = 0;
+                    slot.ready = false;
+                }
+            }
+            next_write_slot_ = 0;
+            if (active_delivery_slot_ >= frame_ring_.size())
+                active_delivery_slot_ = static_cast<size_t>(-1);
             allocatedBytes = bytes;
             pending_events_ = 0;
             stream_error_ = false;
@@ -1381,20 +1439,30 @@ namespace gvfg::internal
                           statusAfterLow);
     }
 
-    void XdmaCaptureSession::publish_frame(const uint8_t *data, size_t bytes)
+    void XdmaCaptureSession::publish_frame(size_t slotIndex, size_t bytes)
     {
-        // Keep only the newest frame.  This makes wait_frame() simple and avoids
-        // unbounded queue growth if the consumer is slower than the device.
-        latest_frame_.assign(data, data + bytes);
+        if (slotIndex >= frame_ring_.size())
+            return;
+
+        // Keep only ring-backed frames. Older ready slots may be overwritten by
+        // the data thread if the consumer is slower than the device.
+        FrameSlot &slot = frame_ring_[slotIndex];
+        slot.bytes = bytes;
+        slot.sequence = latest_sequence_ + 1;
+        slot.ready = true;
+        slot.in_use = false;
         ++latest_sequence_;
         ++stats_.frames_captured;
         stats_.state = XDMA_STREAM_RUNNING;
         if (should_log_counter(latest_sequence_))
-            XDMA_LOG("publish_frame: id=%llu bytes=%zu captured=%llu",
+            XDMA_LOG("publish_frame: id=%llu slot=%zu bytes=%zu captured=%llu dropped=%llu",
                      static_cast<unsigned long long>(latest_sequence_),
+                     slotIndex,
                      bytes,
-                     static_cast<unsigned long long>(stats_.frames_captured));
+                     static_cast<unsigned long long>(stats_.frames_captured),
+                     static_cast<unsigned long long>(stats_.frames_dropped));
         frame_cv_.notify_one();
+        data_cv_.notify_all();
     }
 
     int XdmaCaptureSession::read_device(HANDLE device, long address, DWORD size, uint8_t *buffer) const

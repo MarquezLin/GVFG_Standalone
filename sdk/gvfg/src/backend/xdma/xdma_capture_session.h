@@ -62,7 +62,7 @@ namespace gvfg::internal
         void data_thread_proc();
         bool start_data_worker();
         void stop_data_worker();
-        void publish_frame(const uint8_t *data, size_t bytes);
+        void publish_frame(size_t slotIndex, size_t bytes);
         void pause_capture_for_plug_out();
         void resume_capture_after_plug_in();
         void handle_plug_in_frame_fix(const uint8_t *data, size_t bytes);
@@ -81,6 +81,15 @@ namespace gvfg::internal
         uint32_t active_event_mask() const;
         long capture_enable_reg() const;
         size_t frame_size_bytes() const;
+
+        struct FrameSlot
+        {
+            std::vector<uint8_t> data;  // Frame byte storage for this ring slot.
+            size_t bytes = 0;           // Number of valid bytes read into data.
+            uint64_t sequence = 0;      // Monotonic frame sequence assigned on publish.
+            bool ready = false;         // True after the data thread publishes a frame.
+            bool in_use = false;        // True while writing or while the caller holds the slot.
+        };
 
         std::wstring base_path_;
         std::wstring friendly_name_;
@@ -112,9 +121,9 @@ namespace gvfg::internal
         void *event_callback_user_ = nullptr;
         uint32_t event_mask_filter_ = XDMA_EVENT_MASK_DEFAULT;
         uint32_t pending_events_ = 0;
-        std::vector<uint8_t> dma_buffer_;
-        std::vector<uint8_t> latest_frame_;
-        std::vector<uint8_t> delivery_frame_;
+        std::vector<FrameSlot> frame_ring_;
+        size_t next_write_slot_ = 0;
+        size_t active_delivery_slot_ = static_cast<size_t>(-1);
         uint64_t latest_sequence_ = 0;
         uint64_t delivered_sequence_ = 0;
         uint64_t wait_timeout_count_ = 0;

@@ -36,13 +36,6 @@ typedef enum xdma_pixel_format_t
     XDMA_PIXFMT_YUV444 = 8
 } xdma_pixel_format_t;
 
-typedef enum xdma_memory_kind_t
-{
-    XDMA_MEMORY_DRIVER_COPY = 0,
-    XDMA_MEMORY_SHARED_SECTION = 1,
-    XDMA_MEMORY_DMA_RING = 2
-} xdma_memory_kind_t;
-
 typedef enum xdma_stream_state_t
 {
     XDMA_STREAM_STOPPED = 0,
@@ -57,7 +50,6 @@ typedef struct xdma_stream_desc_t
     uint32_t height;
     xdma_pixel_format_t pixel_format;
     uint32_t buffer_count;
-    xdma_memory_kind_t memory_kind;
     uint32_t flags;
 } xdma_stream_desc_t;
 
@@ -85,16 +77,10 @@ typedef struct xdma_frame_t
     const void *data; /* Valid until the next XdmaCaptureSession::wait_frame() or close(). */
     size_t data_size_bytes;
     uint64_t frame_id;
-    uint64_t timestamp_ns;
     uint32_t width;
     uint32_t height;
     xdma_pixel_format_t pixel_format;
     uint32_t bit_depth;
-    uint32_t plane_count;
-    uint32_t plane_offset_bytes[XDMA_MAX_PLANES];
-    uint32_t plane_stride_bytes[XDMA_MAX_PLANES];
-    uint32_t driver_buffer_index;
-    uint32_t flags;
 } xdma_frame_t;
 
 typedef struct xdma_stream_stats_t
