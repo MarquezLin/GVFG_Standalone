@@ -13,6 +13,9 @@ the GVFG source directly.
 - `samples/gvfg_qt_preview`: customer-facing Qt preview sample.
 - `docs`: API and integration notes.
 
+Start with `docs/GVFG_PROJECT_MAP.md` for the project layer map, API
+lifecycle, and frame/event data-flow overview.
+
 ## Build
 
 Open this folder's `CMakeLists.txt` in Qt Creator with a Windows MSVC Qt kit, or

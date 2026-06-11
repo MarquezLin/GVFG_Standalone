@@ -1,0 +1,96 @@
+<mxfile host="Electron">
+  <diagram id="gvfg-architecture-overview" name="Architecture Overview">
+    <mxGraphModel dx="1230" dy="1558" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1280" pageHeight="820" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="e2" edge="1" parent="1" source="customerApp" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="publicHeader" value="include / link">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;fontSize=24;fontStyle=1;align=left;verticalAlign=middle;" value="GVFG Standalone SDK - Code Scope Overview" vertex="1">
+          <mxGeometry height="38" width="720" x="40" y="-38" as="geometry" />
+        </mxCell>
+        <mxCell id="appLayer" parent="1" style="swimlane;html=1;startSize=34;horizontal=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;align=left;" value="1. Top App / Sample" vertex="1">
+          <mxGeometry height="120" width="1180" x="40" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="apiLayer" parent="1" style="swimlane;html=1;startSize=34;horizontal=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;align=left;" value="2. Public API / gvfg.dll" vertex="1">
+          <mxGeometry height="230" width="1180" x="50" y="230" as="geometry" />
+        </mxCell>
+        <mxCell id="render" parent="apiLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#82b366;fontSize=14;" value="sdk/gvfg/src/render/shared_scene_pipeline.cpp&lt;br&gt;SDK-managed D3D preview" vertex="1">
+          <mxGeometry height="58" width="310" x="850" y="151" as="geometry" />
+        </mxCell>
+        <mxCell id="publicHeader" parent="apiLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#82b366;fontSize=14;" value="sdk/gvfg/include/gvfg_capture.h&lt;br&gt;customer-facing C API" vertex="1">
+          <mxGeometry height="58" width="280" x="450" y="50" as="geometry" />
+        </mxCell>
+        <mxCell id="backendLayer" parent="1" style="swimlane;html=1;startSize=34;horizontal=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;align=left;" value="3. SDK Internal Backend / Data Flow" vertex="1">
+          <mxGeometry height="275" width="1180" x="50" y="515" as="geometry">
+            <mxRectangle height="34" width="240" x="50" y="515" as="alternateBounds" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="backendTypes" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="xdma_backend_types.h&lt;br&gt;internal frame/event/status types" vertex="1">
+          <mxGeometry height="58" width="285" x="30" y="95" as="geometry" />
+        </mxCell>
+        <mxCell id="workers" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="event worker + data worker&lt;br&gt;publish frames and events" vertex="1">
+          <mxGeometry height="52" width="280" x="510" y="173" as="geometry" />
+        </mxCell>
+        <mxCell id="xdmaSession" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="sdk/gvfg/src/backend/xdma/xdma_capture_session.cpp&lt;br&gt;internal session / workers / frame ring" vertex="1">
+          <mxGeometry height="58" width="340" x="420" y="65" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="backendLayer" source="xdmaSession" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="backendTypes" value="uses">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="backendLayer" source="xdmaSession" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="workers" value="owns">
+          <mxGeometry relative="1" x="-0.004" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="qtSample" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=14;" value="samples/gvfg_qt_preview&lt;br&gt;MainWindow / PreviewWindow" vertex="1">
+          <mxGeometry height="52" width="270" x="275" y="85" as="geometry" />
+        </mxCell>
+        <mxCell id="customerApp" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=14;" value="Customer application" vertex="1">
+          <mxGeometry height="52" width="230" x="715" y="85" as="geometry" />
+        </mxCell>
+        <mxCell id="facade" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#82b366;fontSize=14;" value="sdk/gvfg/src/gvfg_capture.cpp&lt;br&gt;session facade / lifecycle / callbacks" vertex="1">
+          <mxGeometry height="58" width="340" x="470" y="385" as="geometry" />
+        </mxCell>
+        <mxCell id="ring" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="frame_ring_&lt;br&gt;ready / in_use / sequence" vertex="1">
+          <mxGeometry height="58" width="270" x="880" y="610" as="geometry" />
+        </mxCell>
+        <mxCell id="externalBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;fontColor=#333333;fontSize=14;" value="External frame/event source" vertex="1">
+          <mxGeometry height="52" width="280" x="410" y="900" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="qtSample" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="publicHeader" value="include / link">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="publicHeader" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="facade" value="exports">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="facade" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="render" value="preview path">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="facade" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="xdmaSession" value="backend API calls">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="workers" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="ring" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="xdmaSession" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;dashed=1;" target="facade" value="frames / events / status">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="420" y="589" />
+              <mxPoint x="420" y="434" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="externalBoundary" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;dashed=1;" target="xdmaSession" value="input boundary">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="550" y="780" />
+              <mxPoint x="550" y="780" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
