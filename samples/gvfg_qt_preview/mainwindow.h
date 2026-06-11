@@ -60,5 +60,4 @@ private:
     std::atomic<uint64_t> frameCount_{0};
     QTimer *signalStatusTimer_ = nullptr;
     QString lastSignalStatusText_;
-    QString lastFpgaRawStateKey_;
 };

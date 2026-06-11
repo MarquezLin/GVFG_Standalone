@@ -3,9 +3,8 @@
 /*
  * Customer-facing GVFG capture API.
  *
- * Include only this header in customer applications. Do not include internal
- * backend/gdriver headers; those layers are implementation details behind
- * gvfg.dll.
+ * Include only this header in customer applications. Internal XDMA backend
+ * headers are implementation details behind gvfg.dll.
  *
  * Minimal capture flow:
  *
@@ -108,26 +107,15 @@ typedef struct
     int swapchain_bitdepth;  /* gvfg_preview_bitdepth_t value. */
 } gvfg_preview_desc_t;
 
-typedef enum
-{
-    GVFG_FPGA_SIGNAL_VALID_VIDEO_FORMAT = 1u << 0, /* FPGA 0x0c read succeeded. */
-    GVFG_FPGA_SIGNAL_VALID_FRAME_RATE = 1u << 1,   /* FPGA 0x18 read succeeded. */
-    GVFG_FPGA_SIGNAL_VALID_BIT_DEPTH = 1u << 2,    /* FPGA 0x1c read succeeded. */
-    GVFG_FPGA_SIGNAL_VALID_STATUS = 1u << 3        /* FPGA 0x180 read succeeded. */
-} gvfg_fpga_signal_valid_mask_t;
-
 typedef struct
 {
-    uint32_t valid_mask;            /* Combination of gvfg_fpga_signal_valid_mask_t flags. */
-    int width_valid;                /* Non-zero when FPGA 0x10 read succeeded. */
-    int height_valid;               /* Non-zero when FPGA 0x14 read succeeded. */
-    uint32_t width_raw;             /* Raw FPGA 0x10 width register. */
-    uint32_t height_raw;            /* Raw FPGA 0x14 height register. */
-    uint32_t video_format_raw;      /* Raw FPGA 0x0c value. */
-    uint32_t frame_rate_raw;        /* Raw FPGA 0x18 value. */
-    uint32_t bit_depth_raw;         /* Raw FPGA 0x1c value. */
-    uint32_t status_raw;            /* Raw FPGA 0x180 value. */
-} gvfg_fpga_signal_status_t;
+    uint32_t width;         /* Raw FPGA width value. */
+    uint32_t height;        /* Raw FPGA height value. */
+    uint32_t video_format;  /* Raw FPGA video-format value. */
+    uint32_t frame_rate;    /* Raw FPGA frame-rate value. */
+    uint32_t bit_depth;     /* Raw FPGA bit-depth value. */
+    uint32_t status;        /* Raw FPGA lock/status value. */
+} gvfg_fpga_signal_raw_t;
 
 typedef struct
 {
@@ -135,15 +123,15 @@ typedef struct
     int height;                      /* Signal height in pixels, from FPGA when available. */
     int video_format_code;           /* 0=yuv422, 1=rgb, 2=yuv444, 3=yuv420. */
     char video_format[16];           /* Decoded FPGA signal format name. */
-    int frame_rate_code;             /* FPGA frame-rate code from 0x18 low nibble. */
+    int frame_rate_code;             /* FPGA frame-rate code. */
     char frame_rate_bits[5];         /* 4-bit binary text, for example "0110". */
     char frame_rate_name[16];        /* None, 23.98, 24, 47.95, ..., or "--" for unsupported codes. */
     int bit_depth;                   /* FPGA signal bit depth: 8 or 10 when valid. */
-    int sdi_locked;                  /* FPGA 0x180 bit0. */
-    int sdi_ddr_ok;                  /* FPGA 0x180 bit1. */
-    int hdmi_locked;                 /* FPGA 0x180 bit2. */
-    int hdmi_ddr_ok;                 /* FPGA 0x180 bit3. */
-    gvfg_fpga_signal_status_t fpga;  /* Raw FPGA register values and read-valid mask. */
+    int sdi_locked;                  /* Non-zero when SDI reports locked. */
+    int sdi_ddr_ok;                  /* Non-zero when SDI DDR status is OK. */
+    int hdmi_locked;                 /* Non-zero when HDMI reports locked. */
+    int hdmi_ddr_ok;                 /* Non-zero when HDMI DDR status is OK. */
+    gvfg_fpga_signal_raw_t raw;       /* Raw FPGA values for diagnostics; validity is handled by the SDK. */
 } gvfg_signal_status_t;
 
 typedef struct

@@ -393,27 +393,35 @@ struct gvfg_handle_t
         {
             std::lock_guard<std::mutex> lock(stateMutex);
             haveSignalSize = fpgaWidthValid && fpgaHeightValid && fpgaWidthRaw != 0 && fpgaHeightRaw != 0;
+            const bool videoFormatValid = fpga_field_valid(fpgaValidMask, 0);
+            const bool frameRateValid = fpga_field_valid(fpgaValidMask, 1);
+            const bool bitDepthValid = fpga_field_valid(fpgaValidMask, 2);
+            const bool statusValid = fpga_field_valid(fpgaValidMask, 3);
             out.width = haveSignalSize ? static_cast<int>(fpgaWidthRaw) : 0;
             out.height = haveSignalSize ? static_cast<int>(fpgaHeightRaw) : 0;
-            out.video_format_code = static_cast<int>(fpgaVideoFormatRaw & 0x3u);
-            copy_cstr(out.video_format, sizeof(out.video_format), fpga_video_format_name(fpgaVideoFormatRaw));
-            out.frame_rate_code = static_cast<int>(fpgaFrameRateRaw & 0x0fu);
-            copy_binary4(out.frame_rate_bits, sizeof(out.frame_rate_bits), fpgaFrameRateRaw);
-            copy_cstr(out.frame_rate_name, sizeof(out.frame_rate_name), fpga_frame_rate_name(fpgaFrameRateRaw));
-            out.bit_depth = static_cast<int>(fpgaBitDepthRaw);
-            out.sdi_locked = (fpgaStatusRaw & (1u << 0)) ? 1 : 0;
-            out.sdi_ddr_ok = (fpgaStatusRaw & (1u << 1)) ? 1 : 0;
-            out.hdmi_locked = (fpgaStatusRaw & (1u << 2)) ? 1 : 0;
-            out.hdmi_ddr_ok = (fpgaStatusRaw & (1u << 3)) ? 1 : 0;
-            out.fpga.valid_mask = fpgaValidMask;
-            out.fpga.width_valid = fpgaWidthValid ? 1 : 0;
-            out.fpga.height_valid = fpgaHeightValid ? 1 : 0;
-            out.fpga.width_raw = fpgaWidthRaw;
-            out.fpga.height_raw = fpgaHeightRaw;
-            out.fpga.video_format_raw = fpgaVideoFormatRaw;
-            out.fpga.frame_rate_raw = fpgaFrameRateRaw;
-            out.fpga.bit_depth_raw = fpgaBitDepthRaw;
-            out.fpga.status_raw = fpgaStatusRaw;
+            out.video_format_code = videoFormatValid ? static_cast<int>(fpgaVideoFormatRaw & 0x3u) : -1;
+            copy_cstr(out.video_format,
+                      sizeof(out.video_format),
+                      videoFormatValid ? fpga_video_format_name(fpgaVideoFormatRaw) : "--");
+            out.frame_rate_code = frameRateValid ? static_cast<int>(fpgaFrameRateRaw & 0x0fu) : -1;
+            if (frameRateValid)
+                copy_binary4(out.frame_rate_bits, sizeof(out.frame_rate_bits), fpgaFrameRateRaw);
+            else
+                copy_cstr(out.frame_rate_bits, sizeof(out.frame_rate_bits), "--");
+            copy_cstr(out.frame_rate_name,
+                      sizeof(out.frame_rate_name),
+                      frameRateValid ? fpga_frame_rate_name(fpgaFrameRateRaw) : "--");
+            out.bit_depth = bitDepthValid ? static_cast<int>(fpgaBitDepthRaw) : 0;
+            out.sdi_locked = statusValid && (fpgaStatusRaw & (1u << 0)) ? 1 : 0;
+            out.sdi_ddr_ok = statusValid && (fpgaStatusRaw & (1u << 1)) ? 1 : 0;
+            out.hdmi_locked = statusValid && (fpgaStatusRaw & (1u << 2)) ? 1 : 0;
+            out.hdmi_ddr_ok = statusValid && (fpgaStatusRaw & (1u << 3)) ? 1 : 0;
+            out.raw.width = fpgaWidthRaw;
+            out.raw.height = fpgaHeightRaw;
+            out.raw.video_format = fpgaVideoFormatRaw;
+            out.raw.frame_rate = fpgaFrameRateRaw;
+            out.raw.bit_depth = fpgaBitDepthRaw;
+            out.raw.status = fpgaStatusRaw;
         }
         return haveSignalSize ? GVFG_OK : GVFG_ENODEV;
     }

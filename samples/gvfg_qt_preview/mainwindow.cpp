@@ -9,11 +9,6 @@
 
 namespace
 {
-    QString fpgaFieldText(bool valid, const QString &text)
-    {
-        return valid ? text : QStringLiteral("--");
-    }
-
     QString hex32(uint32_t value)
     {
         return QStringLiteral("0x") + QString::number(value, 16).rightJustified(8, QLatin1Char('0')).toUpper();
@@ -36,85 +31,6 @@ namespace
         default:
             return QStringLiteral("UNKNOWN");
         }
-    }
-
-    bool fpgaMaskValid(uint32_t mask, uint32_t flag)
-    {
-        return (mask & flag) != 0;
-    }
-
-    QString fpgaRawLogLine(const gvfg_runtime_info_t &info)
-    {
-        const auto &signal = info.input_signal;
-        const auto &fpga = info.input_signal.fpga;
-        const bool videoFormatValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_VIDEO_FORMAT);
-        const bool frameRateValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_FRAME_RATE);
-        const bool bitDepthValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_BIT_DEPTH);
-        const bool statusValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_STATUS);
-        return QStringLiteral("fpga_raw\n"
-                              "  valid_mask=%1\n"
-                              "  resolution:   width_valid=%2 width_raw=%3 height_valid=%4 height_raw=%5\n"
-                              "  video_format: valid=%6 raw=%7 code=%8 name=%9\n"
-                              "  frame_rate:   valid=%10 raw=%11 code=%12 bits=%13 name=%14\n"
-                              "  bit_depth:    valid=%15 raw=%16 value=%17\n"
-                              "  status:       valid=%18 raw=%19 sdi_lock=%20 sdi_ddr=%21 hdmi_lock=%22 hdmi_ddr=%23")
-            .arg(hex32(fpga.valid_mask))
-            .arg(fpga.width_valid)
-            .arg(fpga.width_raw)
-            .arg(fpga.height_valid)
-            .arg(fpga.height_raw)
-            .arg(videoFormatValid ? 1 : 0)
-            .arg(hex32(fpga.video_format_raw))
-            .arg(signal.video_format_code)
-            .arg(QString::fromLatin1(signal.video_format))
-            .arg(frameRateValid ? 1 : 0)
-            .arg(hex32(fpga.frame_rate_raw))
-            .arg(signal.frame_rate_code)
-            .arg(QString::fromLatin1(signal.frame_rate_bits))
-            .arg(QString::fromLatin1(signal.frame_rate_name))
-            .arg(bitDepthValid ? 1 : 0)
-            .arg(hex32(fpga.bit_depth_raw))
-            .arg(signal.bit_depth)
-            .arg(statusValid ? 1 : 0)
-            .arg(hex32(fpga.status_raw))
-            .arg(signal.sdi_locked)
-            .arg(signal.sdi_ddr_ok)
-            .arg(signal.hdmi_locked)
-            .arg(signal.hdmi_ddr_ok);
-    }
-
-    QString fpgaRawStateKey(const gvfg_runtime_info_t &info)
-    {
-        const auto &signal = info.input_signal;
-        const auto &fpga = info.input_signal.fpga;
-        const bool videoFormatValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_VIDEO_FORMAT);
-        const bool frameRateValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_FRAME_RATE);
-        const bool bitDepthValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_BIT_DEPTH);
-        const bool statusValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_STATUS);
-        return QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9|%10|%11|%12|%13|%14|%15|%16|%17|%18|%19|%20|%21|%22|%23")
-            .arg(fpga.valid_mask)
-            .arg(fpga.width_valid)
-            .arg(fpga.width_raw)
-            .arg(fpga.height_valid)
-            .arg(fpga.height_raw)
-            .arg(videoFormatValid ? 1 : 0)
-            .arg(fpga.video_format_raw)
-            .arg(signal.video_format_code)
-            .arg(QString::fromLatin1(signal.video_format))
-            .arg(frameRateValid ? 1 : 0)
-            .arg(fpga.frame_rate_raw)
-            .arg(signal.frame_rate_code)
-            .arg(QString::fromLatin1(signal.frame_rate_bits))
-            .arg(QString::fromLatin1(signal.frame_rate_name))
-            .arg(bitDepthValid ? 1 : 0)
-            .arg(fpga.bit_depth_raw)
-            .arg(signal.bit_depth)
-            .arg(statusValid ? 1 : 0)
-            .arg(fpga.status_raw)
-            .arg(signal.sdi_locked)
-            .arg(signal.sdi_ddr_ok)
-            .arg(signal.hdmi_locked)
-            .arg(signal.hdmi_ddr_ok);
     }
 }
 
@@ -242,7 +158,6 @@ bool MainWindow::openDevice()
     }
 
     lastSignalStatusText_.clear();
-    lastFpgaRawStateKey_.clear();
     appendLog(QStringLiteral("Opened device index %1").arg(deviceIndex));
     appendLog(QStringLiteral("FPGA signal monitor active"));
     updateSignalStatus(true);
@@ -267,7 +182,6 @@ void MainWindow::closeDevice()
 
     ui_->statusLabel->setText(QStringLiteral("Idle"));
     lastSignalStatusText_.clear();
-    lastFpgaRawStateKey_.clear();
     updateUiState();
 }
 
@@ -370,36 +284,42 @@ void MainWindow::updateSignalStatus(bool writeLog)
         return;
 
     const auto &signal = info.input_signal;
-    const auto &fpga = signal.fpga;
     const auto &preview = info.preview_output;
     const auto &callback = info.callback_frame;
-    const bool frameRateValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_FRAME_RATE);
-    const bool videoFormatValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_VIDEO_FORMAT);
-    const bool bitDepthValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_BIT_DEPTH);
-    const bool statusValid = fpgaMaskValid(fpga.valid_mask, GVFG_FPGA_SIGNAL_VALID_STATUS);
     if (previewWindow_->isVisible())
         updatePreviewSourceSize(info);
 
-    const QString fpgaResolution = (fpga.width_valid && fpga.height_valid)
+    const QString fpgaResolution = (signal.width > 0 && signal.height > 0)
                                        ? QStringLiteral("%1x%2").arg(signal.width).arg(signal.height)
                                        : QStringLiteral("--");
+    const QString frameRateText = signal.frame_rate_code >= 0
+                                      ? QStringLiteral("%1 (%2)")
+                                            .arg(QString::fromLatin1(signal.frame_rate_bits))
+                                            .arg(QString::fromLatin1(signal.frame_rate_name))
+                                      : QStringLiteral("--");
+    const QString formatText = signal.video_format_code >= 0
+                                   ? QStringLiteral("%1 (%2)")
+                                         .arg(signal.video_format_code)
+                                         .arg(QString::fromLatin1(signal.video_format))
+                                   : QStringLiteral("--");
+    const QString bitDepthText = signal.bit_depth > 0 ? QString::number(signal.bit_depth) : QStringLiteral("--");
     const QString line0 = QStringLiteral("FPGA reported | signal=%1 fps=%2 format=%3 bitdepth=%4")
                               .arg(fpgaResolution)
-                              .arg(fpgaFieldText(frameRateValid,
-                                                  QStringLiteral("%1 (%2)")
-                                                      .arg(QString::fromLatin1(signal.frame_rate_bits))
-                                                      .arg(QString::fromLatin1(signal.frame_rate_name))))
-                              .arg(fpgaFieldText(videoFormatValid,
-                                                  QStringLiteral("%1 (%2)")
-                                                      .arg(signal.video_format_code)
-                                                      .arg(QString::fromLatin1(signal.video_format))))
-                              .arg(fpgaFieldText(bitDepthValid,
-                                                 QStringLiteral("%1").arg(signal.bit_depth)));
+                              .arg(frameRateText)
+                              .arg(formatText)
+                              .arg(bitDepthText);
     const QString line2 = QStringLiteral("FPGA status | SDI lock=%1 SDI DDR=%2 HDMI lock=%3 HDMI DDR=%4")
-                              .arg(fpgaFieldText(statusValid, QString::number(signal.sdi_locked)))
-                              .arg(fpgaFieldText(statusValid, QString::number(signal.sdi_ddr_ok)))
-                              .arg(fpgaFieldText(statusValid, QString::number(signal.hdmi_locked)))
-                              .arg(fpgaFieldText(statusValid, QString::number(signal.hdmi_ddr_ok)));
+                              .arg(signal.sdi_locked)
+                              .arg(signal.sdi_ddr_ok)
+                              .arg(signal.hdmi_locked)
+                              .arg(signal.hdmi_ddr_ok);
+    const QString lineRaw = QStringLiteral("FPGA raw | size=%1x%2 fmt=%3 fps=%4 bit=%5 status=%6")
+                                .arg(signal.raw.width)
+                                .arg(signal.raw.height)
+                                .arg(hex32(signal.raw.video_format))
+                                .arg(hex32(signal.raw.frame_rate))
+                                .arg(signal.raw.bit_depth)
+                                .arg(hex32(signal.raw.status));
     const QString line3 = preview.active
                               ? QStringLiteral("Preview output | frame=%1x%2 format=%3 bitdepth=%4")
                                     .arg(preview.width)
@@ -420,19 +340,16 @@ void MainWindow::updateSignalStatus(bool writeLog)
                                                           : QStringLiteral("--"))
                               .arg(static_cast<qulonglong>(info.delivered_frames));
 
-    const QString statusText = line0 + QLatin1Char('\n') + line2 + QLatin1Char('\n') + line3 + QLatin1Char('\n') + line4 + QLatin1Char('\n') + line5;
-    if (lastSignalStatusText_ != statusText)
+    const QString statusText = line0 + QLatin1Char('\n') + line2 + QLatin1Char('\n') + lineRaw + QLatin1Char('\n') + line3 + QLatin1Char('\n') + line4 + QLatin1Char('\n') + line5;
+    const bool changed = lastSignalStatusText_ != statusText;
+    if (changed)
     {
         ui_->statusLabel->setText(statusText);
         lastSignalStatusText_ = statusText;
     }
 
-    const QString stateKey = fpgaRawStateKey(info);
-    if (writeLog && lastFpgaRawStateKey_ != stateKey)
-    {
-        appendLog(fpgaRawLogLine(info));
-        lastFpgaRawStateKey_ = stateKey;
-    }
+    if (writeLog && changed)
+        appendLog(statusText);
 }
 
 void MainWindow::updateUiState()
