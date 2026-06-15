@@ -25,8 +25,8 @@ gvfg_enumerate_devices
 
 ## Threading
 
-The frame API is pull-based. The SDK does not start a customer callback thread
-or preview thread from the public API layer.
+The frame API is pull-based. The SDK does not start a customer frame thread or
+preview thread from the public API layer.
 
 Applications decide where to call `gvfg_read_frame()`:
 
@@ -90,14 +90,14 @@ Device entry returned by `gvfg_enumerate_devices()`.
 Customer-readable input signal status:
 
 - width / height
-- video format code and text
-- frame-rate code and text
+- video format text
+- frame-rate text
 - bit depth
 - SDI / HDMI lock status
-- raw FPGA values for diagnostics
 
-The raw values are exposed only as signal diagnostics. Register access remains
-outside the customer API.
+Raw FPGA values, register-like values, and validity masks are internal debug
+data and are available only through `gvfg_debug.h` in the internal debug
+package.
 
 ### `gvfg_frame_t`
 
@@ -126,7 +126,9 @@ Customer events are driver-neutral:
 - `GVFG_EVENT_PLUG_OUT`
 - `GVFG_EVENT_CAPTURE_PAUSED`
 - `GVFG_EVENT_CAPTURE_RESUMED`
-- `GVFG_EVENT_VIDEO_IRQ` for debug or explicit event monitoring
+
+Frame interrupts, IRQ bit numbers, and IRQ masks are internal details and are
+not exposed through `gvfg_capture.h`.
 
 ## Main APIs
 
@@ -220,38 +222,19 @@ gvfg_status_t gvfg_get_runtime_info(gvfg_handle handle,
 Queries current signal status, last read frame format, FPS, and delivered frame
 count.
 
-### Legacy Callback APIs
-
-```c
-gvfg_status_t gvfg_set_callbacks(gvfg_handle handle,
-                                 gvfg_on_frame_cb on_frame,
-                                 gvfg_on_error_cb on_error,
-                                 void *user);
-
-gvfg_status_t gvfg_set_event_callback(gvfg_handle handle,
-                                      gvfg_on_event_cb on_event,
-                                      void *user,
-                                      uint32_t event_mask);
-```
-
-These remain for source compatibility during transition. New customer code
-should use `gvfg_read_frame()`, `gvfg_release_frame()`, and
-`gvfg_poll_event()`.
-
 ## Preview Boundary
 
-Preview is not part of the customer SDK API.
+Preview is not part of the core capture SDK API.
 
-Internal tools such as `samples/gvfg_qt_preview` may render frames by using
-app-owned code:
+Applications have two choices after `gvfg_read_frame()` returns a frame:
 
 ```text
 gvfg_read_frame
--> app/private preview renderer
--> snapshot or recording if needed
+-> customer-owned display / processing / recording / snapshot
+-> optional gvfg_preview_render_frame from gvfg_preview.dll
 -> gvfg_release_frame
 ```
 
-Customer demo source should only rely on `gvfg_capture.h`. Internal preview
-renderer source or binaries can be packaged separately for internal debug or
-full application builds.
+Customer demo source may include `gvfg_preview.h` and link `gvfg_preview.dll`
+when it needs a simple display path. The preview helper source remains private;
+customer code only sees the helper API and binary.

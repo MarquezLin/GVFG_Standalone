@@ -23,6 +23,7 @@ if (NOT WIN32)
 endif()
 
 add_subdirectory(sdk/gvfg)
+add_subdirectory(helpers/gvfg_preview)
 
 if (BUILD_GVFG_SAMPLES)
   add_subdirectory(samples/gvfg_qt_preview)

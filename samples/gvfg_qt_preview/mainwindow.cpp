@@ -2,6 +2,8 @@
 #include "previewwindow.h"
 #include "ui_mainwindow.h"
 
+#include <gvfg_debug.h>
+
 #include <QCloseEvent>
 #include <QDateTime>
 #include <QMetaObject>
@@ -18,8 +20,6 @@ namespace
     {
         switch (type)
         {
-        case GVFG_EVENT_VIDEO_IRQ:
-            return QStringLiteral("VIDEO_IRQ");
         case GVFG_EVENT_PLUG_IN:
             return QStringLiteral("PLUG_IN");
         case GVFG_EVENT_PLUG_OUT:
@@ -166,7 +166,11 @@ bool MainWindow::openDevice()
 void MainWindow::closeDevice()
 {
     stopCapture();
-    previewRenderer_.shutdown();
+    if (previewHandle_)
+    {
+        gvfg_preview_destroy(previewHandle_);
+        previewHandle_ = nullptr;
+    }
 
     if (signalStatusTimer_)
         signalStatusTimer_->stop();
@@ -235,9 +239,23 @@ void MainWindow::stopCapture()
 
 bool MainWindow::applyPreview()
 {
-    if (!previewRenderer_.configure(previewWindow_->nativePreviewHandle()))
+    if (!previewHandle_)
     {
-        appendLog(QStringLiteral("Preview setup failed: invalid preview window"));
+        const gvfg_preview_status_t st = gvfg_preview_create(&previewHandle_);
+        if (st != GVFG_PREVIEW_OK || !previewHandle_)
+        {
+            appendLog(QStringLiteral("Preview setup failed: %1")
+                          .arg(QString::fromUtf8(gvfg_preview_strerror(st))));
+            previewHandle_ = nullptr;
+            return false;
+        }
+    }
+
+    const gvfg_preview_status_t st = gvfg_preview_attach_window(previewHandle_, previewWindow_->nativePreviewHandle());
+    if (st != GVFG_PREVIEW_OK)
+    {
+        appendLog(QStringLiteral("Preview setup failed: %1")
+                      .arg(QString::fromUtf8(gvfg_preview_strerror(st))));
         return false;
     }
     return true;
@@ -246,7 +264,7 @@ bool MainWindow::applyPreview()
 void MainWindow::updatePreviewSourceSize(const gvfg_runtime_info_t &info)
 {
     const auto &signal = info.input_signal;
-    const auto &readFrame = info.callback_frame;
+    const auto &readFrame = info.last_frame;
 
     if (signal.width > 0 && signal.height > 0)
     {
@@ -278,47 +296,46 @@ void MainWindow::updateSignalStatus(bool writeLog)
         return;
 
     const auto &signal = info.input_signal;
-    const auto &readFrame = info.callback_frame;
+    const auto &readFrame = info.last_frame;
+    gvfg_debug_fpga_signal_raw_t fpgaRaw{};
+    const bool haveRaw = gvfg_debug_get_fpga_signal_raw(handle_, &fpgaRaw) == GVFG_OK;
     if (previewWindow_->isVisible())
         updatePreviewSourceSize(info);
 
     const QString fpgaResolution = (signal.width > 0 && signal.height > 0)
                                        ? QStringLiteral("%1x%2").arg(signal.width).arg(signal.height)
                                        : QStringLiteral("--");
-    const QString frameRateText = signal.frame_rate_code >= 0
-                                      ? QStringLiteral("%1 (%2)")
-                                            .arg(QString::fromLatin1(signal.frame_rate_bits))
-                                            .arg(QString::fromLatin1(signal.frame_rate_name))
-                                      : QStringLiteral("--");
-    const QString formatText = signal.video_format_code >= 0
-                                   ? QStringLiteral("%1 (%2)")
-                                         .arg(signal.video_format_code)
-                                         .arg(QString::fromLatin1(signal.video_format))
-                                   : QStringLiteral("--");
+    const QString frameRateText = QString::fromLatin1(signal.frame_rate_name);
+    const QString formatText = QString::fromLatin1(signal.video_format);
     const QString bitDepthText = signal.bit_depth > 0 ? QString::number(signal.bit_depth) : QStringLiteral("--");
     const QString line0 = QStringLiteral("FPGA reported | signal=%1 fps=%2 format=%3 bitdepth=%4")
                               .arg(fpgaResolution)
                               .arg(frameRateText)
                               .arg(formatText)
                               .arg(bitDepthText);
-    const QString line2 = QStringLiteral("FPGA status | SDI lock=%1 SDI DDR=%2 HDMI lock=%3 HDMI DDR=%4")
+    const QString line2 = QStringLiteral("Signal lock | SDI=%1 HDMI=%2")
                               .arg(signal.sdi_locked)
-                              .arg(signal.sdi_ddr_ok)
-                              .arg(signal.hdmi_locked)
-                              .arg(signal.hdmi_ddr_ok);
-    const QString lineRaw = QStringLiteral("FPGA raw | size=%1x%2 fmt=%3 fps=%4 bit=%5 status=%6")
-                                .arg(signal.raw.width)
-                                .arg(signal.raw.height)
-                                .arg(hex32(signal.raw.video_format))
-                                .arg(hex32(signal.raw.frame_rate))
-                                .arg(signal.raw.bit_depth)
-                                .arg(hex32(signal.raw.status));
-    const QString line3 = previewRenderer_.active()
+                              .arg(signal.hdmi_locked);
+    const QString lineRaw = haveRaw
+                                ? QStringLiteral("FPGA raw | valid=%1 size=%2x%3 fmt=%4 fps=%5 bit=%6 status=%7")
+                                      .arg(hex32(fpgaRaw.valid_mask))
+                                      .arg(fpgaRaw.width_raw)
+                                      .arg(fpgaRaw.height_raw)
+                                      .arg(hex32(fpgaRaw.video_format_raw))
+                                      .arg(hex32(fpgaRaw.frame_rate_raw))
+                                      .arg(fpgaRaw.bit_depth_raw)
+                                      .arg(hex32(fpgaRaw.status_raw))
+                                : QStringLiteral("FPGA raw | unavailable");
+    gvfg_preview_info_t previewInfo{};
+    const bool previewInfoOk = previewHandle_ &&
+                               gvfg_preview_get_info(previewHandle_, &previewInfo) == GVFG_PREVIEW_OK &&
+                               previewInfo.active;
+    const QString line3 = previewInfoOk
                               ? QStringLiteral("Preview output | frame=%1x%2 format=%3 bitdepth=%4")
-                                    .arg(previewRenderer_.width())
-                                    .arg(previewRenderer_.height())
-                                    .arg(QString::fromUtf8(previewRenderer_.pixelFormat()))
-                                    .arg(previewRenderer_.bitDepth())
+                                    .arg(previewInfo.width)
+                                    .arg(previewInfo.height)
+                                    .arg(QString::fromUtf8(previewInfo.pixel_format))
+                                    .arg(previewInfo.bit_depth)
                               : QStringLiteral("Preview output | app renderer inactive");
     const QString line4 = readFrame.valid
                               ? QStringLiteral("Read frame | frame=%1x%2 format=%3 bitdepth=%4")
@@ -377,16 +394,12 @@ void MainWindow::captureReadLoop()
         while (gvfg_poll_event(handle_, &event, 0) == GVFG_OK)
         {
             const QString type = eventTypeText(event.type);
-            const uint32_t irqBit = event.irq_bit;
-            const uint32_t irqMask = event.irq_mask;
             const uint64_t timestampNs = event.timestamp_ns;
             QMetaObject::invokeMethod(this,
-                                      [this, type, irqBit, irqMask, timestampNs]()
+                                      [this, type, timestampNs]()
                                       {
-                                          appendLog(QStringLiteral("event %1 irq=%2 mask=%3 ts=%4")
+                                          appendLog(QStringLiteral("event %1 ts=%2")
                                                         .arg(type)
-                                                        .arg(irqBit)
-                                                        .arg(hex32(irqMask))
                                                         .arg(static_cast<qulonglong>(timestampNs)));
                                       },
                                       Qt::QueuedConnection);
@@ -400,7 +413,8 @@ void MainWindow::captureReadLoop()
             const int width = frame.width;
             const int height = frame.height;
             const uint64_t frameId = frame.frame_id;
-            previewRenderer_.render(frame);
+            if (previewHandle_)
+                gvfg_preview_render_frame(previewHandle_, &frame);
             gvfg_release_frame(handle_, &frame);
 
             if (count <= 5 || (count % 60) == 0)

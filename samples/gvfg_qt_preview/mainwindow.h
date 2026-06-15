@@ -1,8 +1,7 @@
 #pragma once
 
 #include <gvfg_capture.h>
-
-#include "sample_preview_renderer.h"
+#include <gvfg_preview.h>
 
 #include <QString>
 #include <QWidget>
@@ -57,7 +56,7 @@ private:
     std::array<gvfg_device_info_t, GVFG_MAX_DEVICES> devices_{};
     int deviceCount_ = 0;
     gvfg_handle handle_ = nullptr;
-    SamplePreviewRenderer previewRenderer_;
+    gvfg_preview_handle previewHandle_ = nullptr;
     bool captureRunning_ = false;
     std::atomic<bool> captureStop_{false};
     std::thread captureThread_;

@@ -1,5 +1,6 @@
 #include "gvfg_capture.h"
 
+#include "gvfg_debug.h"
 #include "xdma_capture_session.h"
 
 #include <algorithm>
@@ -101,8 +102,6 @@ namespace
     {
         switch (type)
         {
-        case XDMA_EVENT_VIDEO_IRQ:
-            return GVFG_EVENT_VIDEO_IRQ;
         case XDMA_EVENT_PLUG_IN:
             return GVFG_EVENT_PLUG_IN;
         case XDMA_EVENT_PLUG_OUT:
@@ -112,25 +111,8 @@ namespace
         case XDMA_EVENT_CAPTURE_RESUMED:
             return GVFG_EVENT_CAPTURE_RESUMED;
         default:
-            return GVFG_EVENT_VIDEO_IRQ;
+            return GVFG_EVENT_UNKNOWN;
         }
-    }
-
-    uint32_t map_event_mask_to_xdma(uint32_t mask)
-    {
-        const uint32_t effective = mask ? mask : GVFG_EVENT_MASK_DEFAULT;
-        uint32_t out = 0;
-        if (effective & GVFG_EVENT_MASK_VIDEO_IRQ)
-            out |= XDMA_EVENT_MASK_VIDEO_IRQ;
-        if (effective & GVFG_EVENT_MASK_PLUG_IN)
-            out |= XDMA_EVENT_MASK_PLUG_IN;
-        if (effective & GVFG_EVENT_MASK_PLUG_OUT)
-            out |= XDMA_EVENT_MASK_PLUG_OUT;
-        if (effective & GVFG_EVENT_MASK_CAPTURE_PAUSED)
-            out |= XDMA_EVENT_MASK_CAPTURE_PAUSED;
-        if (effective & GVFG_EVENT_MASK_CAPTURE_RESUMED)
-            out |= XDMA_EVENT_MASK_CAPTURE_RESUMED;
-        return out ? out : XDMA_EVENT_MASK_DEFAULT;
     }
 
     bool fpga_field_valid(uint32_t mask, int bit)
@@ -238,18 +220,6 @@ namespace
         }
     }
 
-    void copy_binary4(char *dst, size_t dstSize, uint32_t value)
-    {
-        if (!dst || dstSize == 0)
-            return;
-        const uint32_t code = value & 0x0fu;
-        char bits[5] = {};
-        for (int i = 0; i < 4; ++i)
-            bits[i] = (code & (1u << (3 - i))) ? '1' : '0';
-        bits[4] = '\0';
-        copy_cstr(dst, dstSize, bits);
-    }
-
 }
 
 struct gvfg_handle_t
@@ -270,7 +240,7 @@ struct gvfg_handle_t
         const xdma_status_t stOpen = backend->open_device_index(static_cast<size_t>(index));
         if (stOpen != XDMA_OK)
         {
-            emitError(map_status(stOpen), xdma_error_text(stOpen, backend.get()));
+            recordError(xdma_error_text(stOpen, backend.get()));
             backend.reset();
             return map_status(stOpen);
         }
@@ -282,7 +252,7 @@ struct gvfg_handle_t
         const xdma_status_t stInput = backend->set_input(selectedInput);
         if (stInput != XDMA_OK)
         {
-            emitError(map_status(stInput), xdma_error_text(stInput, backend.get()));
+            recordError(xdma_error_text(stInput, backend.get()));
             close();
             return map_status(stInput);
         }
@@ -306,7 +276,7 @@ struct gvfg_handle_t
         const xdma_status_t st = backend->start_stream();
         if (st != XDMA_OK)
         {
-            emitError(map_status(st), xdma_error_text(st, backend.get()));
+            recordError(xdma_error_text(st, backend.get()));
             return map_status(st);
         }
 
@@ -335,15 +305,6 @@ struct gvfg_handle_t
         currentIndex = -1;
     }
 
-    gvfg_status_t setEventCallback(gvfg_on_event_cb callback, void *user, uint32_t mask)
-    {
-        onEvent = callback;
-        eventCallbackUser = user;
-        eventMask = mask ? mask : GVFG_EVENT_MASK_DEFAULT;
-        syncBackendEventCallback();
-        return GVFG_OK;
-    }
-
     gvfg_status_t getSignalStatus(gvfg_signal_status_t &out)
     {
         std::memset(&out, 0, sizeof(out));
@@ -358,29 +319,15 @@ struct gvfg_handle_t
             const bool statusValid = fpga_field_valid(fpgaValidMask, 3);
             out.width = haveSignalSize ? static_cast<int>(fpgaWidthRaw) : 0;
             out.height = haveSignalSize ? static_cast<int>(fpgaHeightRaw) : 0;
-            out.video_format_code = videoFormatValid ? static_cast<int>(fpgaVideoFormatRaw & 0x3u) : -1;
             copy_cstr(out.video_format,
                       sizeof(out.video_format),
                       videoFormatValid ? fpga_video_format_name(fpgaVideoFormatRaw) : "--");
-            out.frame_rate_code = frameRateValid ? static_cast<int>(fpgaFrameRateRaw & 0x0fu) : -1;
-            if (frameRateValid)
-                copy_binary4(out.frame_rate_bits, sizeof(out.frame_rate_bits), fpgaFrameRateRaw);
-            else
-                copy_cstr(out.frame_rate_bits, sizeof(out.frame_rate_bits), "--");
             copy_cstr(out.frame_rate_name,
                       sizeof(out.frame_rate_name),
                       frameRateValid ? fpga_frame_rate_name(fpgaFrameRateRaw) : "--");
             out.bit_depth = bitDepthValid ? static_cast<int>(fpgaBitDepthRaw) : 0;
             out.sdi_locked = statusValid && (fpgaStatusRaw & (1u << 0)) ? 1 : 0;
-            out.sdi_ddr_ok = statusValid && (fpgaStatusRaw & (1u << 1)) ? 1 : 0;
             out.hdmi_locked = statusValid && (fpgaStatusRaw & (1u << 2)) ? 1 : 0;
-            out.hdmi_ddr_ok = statusValid && (fpgaStatusRaw & (1u << 3)) ? 1 : 0;
-            out.raw.width = fpgaWidthRaw;
-            out.raw.height = fpgaHeightRaw;
-            out.raw.video_format = fpgaVideoFormatRaw;
-            out.raw.frame_rate = fpgaFrameRateRaw;
-            out.raw.bit_depth = fpgaBitDepthRaw;
-            out.raw.status = fpgaStatusRaw;
         }
         return haveSignalSize ? GVFG_OK : GVFG_ENODEV;
     }
@@ -392,14 +339,14 @@ struct gvfg_handle_t
         const uint64_t frames = deliveredFrames.load(std::memory_order_relaxed);
         const bool deliveredValid = running.load(std::memory_order_relaxed) && frames > 0;
 
-        out.callback_frame.valid = deliveredValid ? 1 : 0;
+        out.last_frame.valid = deliveredValid ? 1 : 0;
         if (deliveredValid)
         {
-            out.callback_frame.width = static_cast<int>(deliveredWidth.load(std::memory_order_relaxed));
-            out.callback_frame.height = static_cast<int>(deliveredHeight.load(std::memory_order_relaxed));
-            out.callback_frame.bit_depth = static_cast<int>(deliveredBitDepth.load(std::memory_order_relaxed));
-            copy_cstr(out.callback_frame.pixel_format,
-                      sizeof(out.callback_frame.pixel_format),
+            out.last_frame.width = static_cast<int>(deliveredWidth.load(std::memory_order_relaxed));
+            out.last_frame.height = static_cast<int>(deliveredHeight.load(std::memory_order_relaxed));
+            out.last_frame.bit_depth = static_cast<int>(deliveredBitDepth.load(std::memory_order_relaxed));
+            copy_cstr(out.last_frame.pixel_format,
+                      sizeof(out.last_frame.pixel_format),
                       gvfg_pixel_format_name(deliveredPixelFormat.load(std::memory_order_relaxed)));
         }
         out.capture_fps = runtimeFps.load(std::memory_order_relaxed);
@@ -413,7 +360,7 @@ struct gvfg_handle_t
             return;
         backend->set_event_callback(&gvfg_handle_t::onBackendEvent,
                                     this,
-                                    map_event_mask_to_xdma(eventMask));
+                                    XDMA_EVENT_MASK_DEFAULT);
     }
 
     static void onBackendEvent(const xdma_event_t *event, void *user)
@@ -428,8 +375,6 @@ struct gvfg_handle_t
     {
         gvfg_event_t out{};
         out.type = map_event_type(event.type);
-        out.irq_bit = event.irq_bit;
-        out.irq_mask = event.irq_mask;
         out.timestamp_ns = event.timestamp_ns;
         {
             std::lock_guard<std::mutex> lock(eventMutex);
@@ -439,8 +384,6 @@ struct gvfg_handle_t
         }
         eventCv.notify_one();
 
-        if (onEvent)
-            onEvent(&out, eventCallbackUser);
     }
 
     void querySignal()
@@ -507,7 +450,7 @@ struct gvfg_handle_t
                           sdiDdrOk ? 1 : 0,
                           hdmiLocked ? 1 : 0,
                           hdmiDdrOk ? 1 : 0);
-            emitError(GVFG_ENODEV, msg);
+            recordError(msg);
             return GVFG_ENODEV;
         }
 
@@ -522,7 +465,7 @@ struct gvfg_handle_t
                           fpgaWidthRaw,
                           fpgaHeightValid ? 1 : 0,
                           fpgaHeightRaw);
-            emitError(GVFG_ENODEV, msg);
+            recordError(msg);
             return GVFG_ENODEV;
         }
 
@@ -554,7 +497,7 @@ struct gvfg_handle_t
         const xdma_status_t st = backend->configure_stream(desc);
         if (st != XDMA_OK)
         {
-            emitError(map_status(st), xdma_error_text(st, backend.get()));
+            recordError(xdma_error_text(st, backend.get()));
             return map_status(st);
         }
         return GVFG_OK;
@@ -582,7 +525,7 @@ struct gvfg_handle_t
                 readInProgress = false;
             }
             if (st != XDMA_ETIMEOUT && st != XDMA_ESTATE)
-                emitError(map_status(st), xdma_error_text(st, backend.get()));
+                recordError(xdma_error_text(st, backend.get()));
             return map_status(st);
         }
 
@@ -675,10 +618,78 @@ struct gvfg_handle_t
         return GVFG_OK;
     }
 
-    void emitError(gvfg_status_t code, const char *msg)
+    gvfg_status_t getDebugBackendStats(gvfg_debug_backend_stats_t &out)
     {
-        if (onError)
-            onError(code, msg ? msg : "", callbackUser);
+        std::memset(&out, 0, sizeof(out));
+        out.sdk_running = running.load(std::memory_order_relaxed) ? 1 : 0;
+        out.runtime_fps = runtimeFps.load(std::memory_order_relaxed);
+        out.frames_returned = deliveredFrames.load(std::memory_order_relaxed);
+        out.last_frame_width = static_cast<int>(deliveredWidth.load(std::memory_order_relaxed));
+        out.last_frame_height = static_cast<int>(deliveredHeight.load(std::memory_order_relaxed));
+        out.last_frame_pixel_format = deliveredPixelFormat.load(std::memory_order_relaxed);
+        out.last_frame_bit_depth = static_cast<int>(deliveredBitDepth.load(std::memory_order_relaxed));
+
+        {
+            std::lock_guard<std::mutex> lock(frameMutex);
+            out.frame_held = frameHeld ? 1 : 0;
+        }
+        {
+            std::lock_guard<std::mutex> lock(eventMutex);
+            out.event_queue_depth = static_cast<uint32_t>(eventQueue.size());
+        }
+
+        if (backend)
+        {
+            xdma_stream_stats_t stats{};
+            uint64_t waitTimeouts = 0;
+            backend->get_debug_stats(stats, waitTimeouts);
+            out.backend_state = static_cast<int>(stats.state);
+            out.backend_frames_captured = stats.frames_captured;
+            out.backend_frames_delivered = stats.frames_delivered;
+            out.backend_frames_dropped = stats.frames_dropped;
+            out.backend_dma_errors = stats.dma_errors;
+            out.backend_interrupt_count = stats.interrupt_count;
+            out.backend_wait_timeouts = waitTimeouts;
+        }
+
+        return GVFG_OK;
+    }
+
+    gvfg_status_t getDebugFpgaSignalRaw(gvfg_debug_fpga_signal_raw_t &out)
+    {
+        if (!backend)
+            return GVFG_ESTATE;
+
+        querySignal();
+        std::lock_guard<std::mutex> lock(stateMutex);
+        std::memset(&out, 0, sizeof(out));
+        out.valid_mask = fpgaValidMask;
+        out.width_valid = fpgaWidthValid ? 1u : 0u;
+        out.height_valid = fpgaHeightValid ? 1u : 0u;
+        out.width_raw = fpgaWidthRaw;
+        out.height_raw = fpgaHeightRaw;
+        out.video_format_raw = fpgaVideoFormatRaw;
+        out.frame_rate_raw = fpgaFrameRateRaw;
+        out.bit_depth_raw = fpgaBitDepthRaw;
+        out.status_raw = fpgaStatusRaw;
+        return GVFG_OK;
+    }
+
+    gvfg_status_t getLastErrorDetail(char *outMessage, uint32_t outMessageSize)
+    {
+        if (!outMessage || outMessageSize == 0)
+            return GVFG_EINVAL;
+        outMessage[0] = '\0';
+        if (!lastError.empty())
+            copy_cstr(outMessage, outMessageSize, lastError.c_str());
+        else
+            copy_cstr(outMessage, outMessageSize, backend ? backend->last_error() : "");
+        return GVFG_OK;
+    }
+
+    void recordError(const char *msg)
+    {
+        lastError = msg ? msg : "";
     }
 
     void updateRuntimeFps(uint64_t ptsNs)
@@ -742,13 +753,7 @@ struct gvfg_handle_t
     std::atomic<int> deliveredPixelFormat{GVFG_PIXFMT_UNKNOWN};
     std::atomic<double> runtimeFps{0.0};
 
-    gvfg_on_frame_cb onFrame = nullptr;
-    gvfg_on_error_cb onError = nullptr;
-    void *callbackUser = nullptr;
-    std::atomic<uint32_t> callbackFrameInterval{1};
-    gvfg_on_event_cb onEvent = nullptr;
-    void *eventCallbackUser = nullptr;
-    uint32_t eventMask = GVFG_EVENT_MASK_DEFAULT;
+    std::string lastError;
 
     std::atomic<bool> running{false};
     std::mutex frameMutex;
@@ -802,38 +807,6 @@ extern "C"
     {
         delete handle;
         return GVFG_OK;
-    }
-
-    gvfg_status_t gvfg_set_callbacks(gvfg_handle handle,
-                                     gvfg_on_frame_cb on_frame,
-                                     gvfg_on_error_cb on_error,
-                                     void *user)
-    {
-        if (!handle)
-            return GVFG_EINVAL;
-        handle->onFrame = on_frame;
-        handle->onError = on_error;
-        handle->callbackUser = user;
-        return GVFG_OK;
-    }
-
-    gvfg_status_t gvfg_set_frame_callback_interval(gvfg_handle handle, uint32_t frame_interval)
-    {
-        if (!handle)
-            return GVFG_EINVAL;
-        handle->callbackFrameInterval.store(frame_interval <= 1 ? 1u : frame_interval,
-                                            std::memory_order_relaxed);
-        return GVFG_OK;
-    }
-
-    gvfg_status_t gvfg_set_event_callback(gvfg_handle handle,
-                                          gvfg_on_event_cb on_event,
-                                          void *user,
-                                          uint32_t event_mask)
-    {
-        if (!handle)
-            return GVFG_EINVAL;
-        return handle->setEventCallback(on_event, user, event_mask);
     }
 
     gvfg_status_t gvfg_open(gvfg_handle handle, int device_index)
@@ -913,6 +886,31 @@ extern "C"
         default:
             return "Unknown";
         }
+    }
+
+    gvfg_status_t gvfg_debug_get_backend_stats(gvfg_handle handle,
+                                               gvfg_debug_backend_stats_t *out_stats)
+    {
+        if (!handle || !out_stats)
+            return GVFG_EINVAL;
+        return handle->getDebugBackendStats(*out_stats);
+    }
+
+    gvfg_status_t gvfg_debug_get_fpga_signal_raw(gvfg_handle handle,
+                                                 gvfg_debug_fpga_signal_raw_t *out_raw)
+    {
+        if (!handle || !out_raw)
+            return GVFG_EINVAL;
+        return handle->getDebugFpgaSignalRaw(*out_raw);
+    }
+
+    gvfg_status_t gvfg_debug_get_last_error_detail(gvfg_handle handle,
+                                                   char *out_message,
+                                                   uint32_t out_message_size)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        return handle->getLastErrorDetail(out_message, out_message_size);
     }
 }
 

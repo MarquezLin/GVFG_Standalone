@@ -45,6 +45,7 @@ namespace gvfg::internal
         xdma_status_t release_frame(const xdma_frame_t &frame);
 
         const char *last_error() const;
+        void get_debug_stats(xdma_stream_stats_t &outStats, uint64_t &outWaitTimeouts) const;
 
     private:
         xdma_status_t open_device(const XdmaDevice &device);

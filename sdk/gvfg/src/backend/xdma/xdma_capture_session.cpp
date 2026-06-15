@@ -1679,6 +1679,13 @@ namespace gvfg::internal
         return last_error_.c_str();
     }
 
+    void XdmaCaptureSession::get_debug_stats(xdma_stream_stats_t &outStats, uint64_t &outWaitTimeouts) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        outStats = stats_;
+        outWaitTimeouts = wait_timeout_count_;
+    }
+
     uint32_t XdmaCaptureSession::active_input_path() const
     {
         return stream_desc_.input == XDMA_INPUT_HDMI ? 1u : 0u;

@@ -66,6 +66,16 @@ if not exist "%LIB_DIR%\gvfg.lib" (
     goto fail
 )
 
+if not exist "%BIN_DIR%\gvfg_preview.dll" (
+    echo [release] ERROR: "%BIN_DIR%\gvfg_preview.dll" not found.
+    goto fail
+)
+
+if not exist "%LIB_DIR%\gvfg_preview.lib" (
+    echo [release] ERROR: "%LIB_DIR%\gvfg_preview.lib" not found.
+    goto fail
+)
+
 if not exist "%BIN_DIR%\gvfg_qt_preview.exe" (
     echo [release] ERROR: "%BIN_DIR%\gvfg_qt_preview.exe" not found.
     goto fail
@@ -82,10 +92,14 @@ mkdir "%STAGE_DIR%\samples\gvfg_qt_preview" || goto fail
 mkdir "%STAGE_DIR%\samples\gvfg_qt_preview_source" || goto fail
 
 copy /Y "%PROJECT_DIR%\sdk\gvfg\include\gvfg_capture.h" "%STAGE_DIR%\include\" >nul || goto fail
+copy /Y "%PROJECT_DIR%\helpers\gvfg_preview\include\gvfg_preview.h" "%STAGE_DIR%\include\" >nul || goto fail
 copy /Y "%BIN_DIR%\gvfg.dll" "%STAGE_DIR%\bin\" >nul || goto fail
+copy /Y "%BIN_DIR%\gvfg_preview.dll" "%STAGE_DIR%\bin\" >nul || goto fail
 copy /Y "%LIB_DIR%\gvfg.lib" "%STAGE_DIR%\lib\" >nul || goto fail
+copy /Y "%LIB_DIR%\gvfg_preview.lib" "%STAGE_DIR%\lib\" >nul || goto fail
 copy /Y "%BIN_DIR%\gvfg_qt_preview.exe" "%STAGE_DIR%\samples\gvfg_qt_preview\" >nul || goto fail
 copy /Y "%BIN_DIR%\gvfg.dll" "%STAGE_DIR%\samples\gvfg_qt_preview\" >nul || goto fail
+copy /Y "%BIN_DIR%\gvfg_preview.dll" "%STAGE_DIR%\samples\gvfg_qt_preview\" >nul || goto fail
 copy /Y "%PROJECT_DIR%\README.md" "%STAGE_DIR%\" >nul || goto fail
 copy /Y "%PROJECT_DIR%\docs\GVFG_CUSTOMER_API.md" "%STAGE_DIR%\docs\" >nul || goto fail
 
@@ -115,13 +129,18 @@ echo [release] Write package notes...
     echo.
     echo Layout:
     echo   include\gvfg_capture.h
+    echo   include\gvfg_preview.h
     echo   lib\gvfg.lib
+    echo   lib\gvfg_preview.lib
     echo   bin\gvfg.dll
+    echo   bin\gvfg_preview.dll
     echo   samples\gvfg_qt_preview\gvfg_qt_preview.exe
     echo   samples\gvfg_qt_preview_source\
     echo   docs\GVFG_CUSTOMER_API.md
     echo.
-    echo Link with lib\gvfg.lib and deploy bin\gvfg.dll next to the customer application executable.
+    echo Link with lib\gvfg.lib for capture.
+    echo Link with lib\gvfg_preview.lib only if the application uses the optional preview helper.
+    echo Deploy bin\gvfg.dll and, when used, bin\gvfg_preview.dll next to the customer application executable.
     echo Run samples\gvfg_qt_preview\gvfg_qt_preview.exe to verify the packaged runtime.
 ) > "%STAGE_DIR%\PACKAGE_README.txt"
 

@@ -1,9 +1,8 @@
-#include "../internal/gvfg_logging.h"
+#include "d3d_preview_pipeline.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include "shared_scene_pipeline.h"
 
 using namespace gvfg::internal;
 
@@ -13,6 +12,11 @@ using namespace gvfg::internal;
 #include <cstring>
 
 using Microsoft::WRL::ComPtr;
+
+static void d3d_preview_log_debug(const char *message)
+{
+    OutputDebugStringA(message ? message : "");
+}
 
 static inline uint16_t normalize_y210_word_for_upload(uint16_t v)
 {
@@ -46,8 +50,8 @@ static void ssp_log_text(const char *msg)
 {
     if (!msg)
         return;
-    gvfg_log_debug(msg);
-    gvfg_log_debug("\n");
+    d3d_preview_log_debug(msg);
+    d3d_preview_log_debug("\n");
 }
 
 static ComPtr<ID3D11ShaderResourceView> createSRV_NV12(ID3D11Device *dev, ID3D11Texture2D *tex, bool uv)
@@ -615,7 +619,7 @@ float4 main(PSIn i) : SV_Target
 }
 )";
 
-bool SharedScenePipeline::initialize(ID3D11Device *d3d,
+bool D3DPreviewPipeline::initialize(ID3D11Device *d3d,
                                      ID3D11DeviceContext *ctx)
 {
     d3d_ = d3d;
@@ -623,7 +627,7 @@ bool SharedScenePipeline::initialize(ID3D11Device *d3d,
     return d3d_ && ctx_;
 }
 
-bool SharedScenePipeline::configurePreview(const gvfg_render_preview_desc_t &desc)
+bool D3DPreviewPipeline::configurePreview(const gvfg_render_preview_desc_t &desc)
 {
     int requestedMode = desc.swapchain_10bit;
     if (requestedMode != GVFG_RENDER_PREVIEW_BITDEPTH_8BIT &&
@@ -648,7 +652,7 @@ bool SharedScenePipeline::configurePreview(const gvfg_render_preview_desc_t &des
     return true;
 }
 
-void SharedScenePipeline::set_source_bit_depth(int bits)
+void D3DPreviewPipeline::set_source_bit_depth(int bits)
 {
     if (bits != 8 && bits != 10 && bits != 12 && bits != 16)
         bits = 0;
@@ -665,7 +669,7 @@ void SharedScenePipeline::set_source_bit_depth(int bits)
         release_preview_swapchain();
 }
 
-bool SharedScenePipeline::create_shaders_and_states()
+bool D3DPreviewPipeline::create_shaders_and_states()
 {
     // Compile shaders
     ComPtr<ID3DBlob> vsb, psb1, psb2, psb3, psb4, psb5, psb6, err;
@@ -764,7 +768,7 @@ bool SharedScenePipeline::create_shaders_and_states()
     return true;
 }
 
-bool SharedScenePipeline::ensure_rt_and_pipeline(int w, int h)
+bool D3DPreviewPipeline::ensure_rt_and_pipeline(int w, int h)
 {
     const bool hasAllTargets = rt_fp16_ && rtv_fp16_ && srv_fp16_ &&
                                rt_scene_fp16_ && rtv_scene_fp16_ && srv_scene_fp16_ &&
@@ -844,7 +848,7 @@ bool SharedScenePipeline::ensure_rt_and_pipeline(int w, int h)
     return ok;
 }
 
-bool SharedScenePipeline::blit_fp16_to_rgba8(int frame_w, int frame_h)
+bool D3DPreviewPipeline::blit_fp16_to_rgba8(int frame_w, int frame_h)
 {
     if (!rtv_rgba_ || !srv_scene_fp16_ || !vs_ || !ps_fp16_to_rgba8_ || !ctx_)
         return false;
@@ -887,7 +891,7 @@ bool SharedScenePipeline::blit_fp16_to_rgba8(int frame_w, int frame_h)
     return true;
 }
 
-bool SharedScenePipeline::upload_nv12_frame(const uint8_t *y, int stride_y, const uint8_t *uv, int stride_uv, int frame_w, int frame_h)
+bool D3DPreviewPipeline::upload_nv12_frame(const uint8_t *y, int stride_y, const uint8_t *uv, int stride_uv, int frame_w, int frame_h)
 {
     if (!d3d_ || !ctx_ || !y || !uv || frame_w <= 0 || frame_h <= 0 || stride_y <= 0 || stride_uv <= 0)
         return false;
@@ -935,7 +939,7 @@ bool SharedScenePipeline::upload_nv12_frame(const uint8_t *y, int stride_y, cons
     return true;
 }
 
-bool SharedScenePipeline::upload_p010_frame(const uint8_t *y, int stride_y, const uint8_t *uv, int stride_uv, int frame_w, int frame_h)
+bool D3DPreviewPipeline::upload_p010_frame(const uint8_t *y, int stride_y, const uint8_t *uv, int stride_uv, int frame_w, int frame_h)
 {
     if (!ctx_ || !d3d_ || !y || !uv || frame_w <= 0 || frame_h <= 0)
         return false;
@@ -983,7 +987,7 @@ bool SharedScenePipeline::upload_p010_frame(const uint8_t *y, int stride_y, cons
     return true;
 }
 
-bool SharedScenePipeline::upload_yuy2_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h)
+bool D3DPreviewPipeline::upload_yuy2_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h)
 {
     if (!d3d_ || !ctx_ || !data || frame_w <= 0 || frame_h <= 0 || src_stride <= 0)
         return false;
@@ -1031,7 +1035,7 @@ bool SharedScenePipeline::upload_yuy2_frame(const uint8_t *data, int src_stride,
     return true;
 }
 
-bool SharedScenePipeline::upload_y210_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h)
+bool D3DPreviewPipeline::upload_y210_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h)
 {
     if (!ctx_ || !d3d_ || !data || frame_w <= 0 || frame_h <= 0)
         return false;
@@ -1099,7 +1103,7 @@ bool SharedScenePipeline::upload_y210_frame(const uint8_t *data, int src_stride,
     return true;
 }
 
-bool SharedScenePipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, int frame_w, int frame_h)
+bool D3DPreviewPipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, int frame_w, int frame_h)
 {
     if (!ctx_ || !vs_ || !il_ || !vb_ || !rtv_fp16_ || !rt_fp16_ || frame_w <= 0 || frame_h <= 0)
         return false;
@@ -1250,7 +1254,7 @@ bool SharedScenePipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, 
     return true;
 }
 
-bool SharedScenePipeline::copy_fp16_to_scene()
+bool D3DPreviewPipeline::copy_fp16_to_scene()
 {
     if (!ctx_ || !rt_fp16_ || !rt_scene_fp16_)
         return false;
@@ -1258,7 +1262,7 @@ bool SharedScenePipeline::copy_fp16_to_scene()
     return true;
 }
 
-bool SharedScenePipeline::readback_to_frame(int frame_w, int frame_h, uint64_t pts_ns, uint64_t frame_id,
+bool D3DPreviewPipeline::readback_to_frame(int frame_w, int frame_h, uint64_t pts_ns, uint64_t frame_id,
                                             gvfg_render_frame_t *out)
 {
     if (!out || !ctx_ || !rt_stage_ || !rt_rgba_)
@@ -1281,7 +1285,7 @@ bool SharedScenePipeline::readback_to_frame(int frame_w, int frame_h, uint64_t p
     return true;
 }
 
-void SharedScenePipeline::release_preview_swapchain()
+void D3DPreviewPipeline::release_preview_swapchain()
 {
     preview_rtv_.Reset();
     preview_backbuf_.Reset();
@@ -1292,7 +1296,7 @@ void SharedScenePipeline::release_preview_swapchain()
     preview_swapchain_format_ = DXGI_FORMAT_UNKNOWN;
 }
 
-bool SharedScenePipeline::ensure_preview_swapchain(int w, int h)
+bool D3DPreviewPipeline::ensure_preview_swapchain(int w, int h)
 {
     if (!preview_enabled_ || !preview_hwnd_ || !d3d_)
         return false;
@@ -1441,7 +1445,7 @@ bool SharedScenePipeline::ensure_preview_swapchain(int w, int h)
     return true;
 }
 
-bool SharedScenePipeline::present_preview(int src_w, int src_h)
+bool D3DPreviewPipeline::present_preview(int src_w, int src_h)
 {
     static bool s_loggedPresentPath = false;
     if (!preview_enabled_ || !preview_swapchain_ || !preview_backbuf_ || !ctx_)
@@ -1554,7 +1558,7 @@ bool SharedScenePipeline::present_preview(int src_w, int src_h)
     return SUCCEEDED(hr);
 }
 
-DXGI_FORMAT SharedScenePipeline::preview_backbuffer_format() const
+DXGI_FORMAT D3DPreviewPipeline::preview_backbuffer_format() const
 {
     if (preview_swapchain_format_ != DXGI_FORMAT_UNKNOWN)
         return preview_swapchain_format_;
@@ -1565,7 +1569,7 @@ DXGI_FORMAT SharedScenePipeline::preview_backbuffer_format() const
     return d.Format;
 }
 
-DXGI_FORMAT SharedScenePipeline::scene_texture_format() const
+DXGI_FORMAT D3DPreviewPipeline::scene_texture_format() const
 {
     if (!rt_scene_fp16_)
         return DXGI_FORMAT_UNKNOWN;
@@ -1574,7 +1578,7 @@ DXGI_FORMAT SharedScenePipeline::scene_texture_format() const
     return d.Format;
 }
 
-DXGI_FORMAT SharedScenePipeline::linear_fp16_texture_format() const
+DXGI_FORMAT D3DPreviewPipeline::linear_fp16_texture_format() const
 {
     if (!rt_fp16_)
         return DXGI_FORMAT_UNKNOWN;

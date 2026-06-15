@@ -16,8 +16,8 @@
         <mxCell id="apiLayer" parent="1" style="swimlane;html=1;startSize=34;horizontal=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;align=left;" value="2. Public API / gvfg.dll" vertex="1">
           <mxGeometry height="230" width="1180" x="50" y="230" as="geometry" />
         </mxCell>
-        <mxCell id="render" parent="apiLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#82b366;fontSize=14;" value="sdk/gvfg/src/render/shared_scene_pipeline.cpp&lt;br&gt;SDK-managed D3D preview" vertex="1">
-          <mxGeometry height="58" width="310" x="850" y="151" as="geometry" />
+        <mxCell id="render" parent="appLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=14;" value="helpers/gvfg_preview&lt;br&gt;optional gvfg_preview.dll" vertex="1">
+          <mxGeometry height="58" width="330" x="820" y="45" as="geometry" />
         </mxCell>
         <mxCell id="publicHeader" parent="apiLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#82b366;fontSize=14;" value="sdk/gvfg/include/gvfg_capture.h&lt;br&gt;customer-facing C API" vertex="1">
           <mxGeometry height="58" width="280" x="450" y="50" as="geometry" />
@@ -50,7 +50,7 @@
         <mxCell id="customerApp" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=14;" value="Customer application" vertex="1">
           <mxGeometry height="52" width="230" x="715" y="85" as="geometry" />
         </mxCell>
-        <mxCell id="facade" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#82b366;fontSize=14;" value="sdk/gvfg/src/gvfg_capture.cpp&lt;br&gt;session facade / lifecycle / callbacks" vertex="1">
+        <mxCell id="facade" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#82b366;fontSize=14;" value="sdk/gvfg/src/gvfg_capture.cpp&lt;br&gt;session facade / lifecycle / pull API" vertex="1">
           <mxGeometry height="58" width="340" x="470" y="385" as="geometry" />
         </mxCell>
         <mxCell id="ring" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="frame_ring_&lt;br&gt;ready / in_use / sequence" vertex="1">
@@ -65,7 +65,7 @@
         <mxCell id="e3" edge="1" parent="1" source="publicHeader" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="facade" value="exports">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e4" edge="1" parent="1" source="facade" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="render" value="preview path">
+        <mxCell id="e4" edge="1" parent="1" source="qtSample" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="render" value="private preview">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="e5" edge="1" parent="1" source="facade" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="xdmaSession" value="backend API calls">

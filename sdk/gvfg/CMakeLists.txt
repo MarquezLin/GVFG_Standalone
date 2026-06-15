@@ -8,12 +8,12 @@ project(gvfg VERSION ${GVFG_SDK_VERSION} LANGUAGES CXX)
 
 add_library(gvfg SHARED
     include/gvfg_capture.h
+    include/gvfg_debug.h
     src/backend/xdma/xdma_backend_types.h
     src/backend/xdma/xdma_capture_session.cpp
     src/backend/xdma/xdma_capture_session.h
     src/backend/xdma/xdma_public.h
     src/gvfg_capture.cpp
-    src/gvfg_log_bridge.cpp
 )
 
 set_target_properties(gvfg PROPERTIES
@@ -27,7 +27,6 @@ target_include_directories(gvfg
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/xdma
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/internal
 )
 
 target_compile_definitions(gvfg PRIVATE

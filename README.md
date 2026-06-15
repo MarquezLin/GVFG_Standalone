@@ -8,13 +8,14 @@ the GVFG source directly.
 
 ## Contents
 
-- `sdk/gvfg`: GVFG public C API and internal XDMA backend.
-- `sdk/gvfg/src/render`: GVFG internal D3D preview/render pipeline.
-- `samples/gvfg_qt_preview`: customer-facing Qt preview sample.
+- `sdk/gvfg`: GVFG customer C API, internal debug API, and XDMA backend.
+- `helpers/gvfg_preview`: optional preview helper DLL used after gvfg_read_frame().
+- `samples/gvfg_qt_preview`: internal debug Qt preview tool.
 - `docs`: API and integration notes.
 
-Start with `docs/GVFG_PROJECT_MAP.md` for the project layer map, API
-lifecycle, and frame/event data-flow overview.
+Customer-facing API details are in `docs/GVFG_CUSTOMER_API.md`. Internal
+architecture, package split, threading, and frame ownership notes are in
+`docs/GVFG_INTERNAL_NOTES.md`.
 
 ## Build
 
@@ -39,7 +40,9 @@ Build outputs:
 
 ```text
 build/.../bin/gvfg.dll
+build/.../bin/gvfg_preview.dll
 build/.../lib/gvfg.lib
+build/.../lib/gvfg_preview.lib
 build/.../bin/gvfg_qt_preview.exe
 ```
 
@@ -53,6 +56,15 @@ lib/gvfg.lib
 bin/gvfg.dll
 ```
 
-The XDMA backend headers are implementation details and should not be included by
-customer applications.
+Applications that want the optional display helper can also consume:
+
+```text
+include/gvfg_preview.h
+lib/gvfg_preview.lib
+bin/gvfg_preview.dll
+```
+
+Customer/demo packages should not include `gvfg_debug.h`, SDK source, XDMA
+backend headers, IRQ details, raw FPGA values, or preview helper source. Those
+belong in the internal debug/full application packages.
 

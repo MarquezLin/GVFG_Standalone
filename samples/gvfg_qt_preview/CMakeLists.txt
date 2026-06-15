@@ -17,10 +17,6 @@ if (QT_VERSION_MAJOR GREATER_EQUAL 6)
     previewwindow.cpp
     previewwindow.h
     previewwindow.ui
-    sample_preview_renderer.cpp
-    sample_preview_renderer.h
-    ${CMAKE_SOURCE_DIR}/sdk/gvfg/src/gvfg_log_bridge.cpp
-    ${CMAKE_SOURCE_DIR}/sdk/gvfg/src/render/shared_scene_pipeline.cpp
   )
 else()
   add_executable(gvfg_qt_preview
@@ -31,26 +27,17 @@ else()
     previewwindow.cpp
     previewwindow.h
     previewwindow.ui
-    sample_preview_renderer.cpp
-    sample_preview_renderer.h
-    ${CMAKE_SOURCE_DIR}/sdk/gvfg/src/gvfg_log_bridge.cpp
-    ${CMAKE_SOURCE_DIR}/sdk/gvfg/src/render/shared_scene_pipeline.cpp
   )
 endif()
 
 target_link_libraries(gvfg_qt_preview PRIVATE
   Qt${QT_VERSION_MAJOR}::Widgets
   gvfg
-  user32
-  dxgi
-  d3d11
-  D3DCompiler
+  gvfg_preview
 )
 
 target_include_directories(gvfg_qt_preview PRIVATE
   ${CMAKE_SOURCE_DIR}/sdk/gvfg/include
-  ${CMAKE_SOURCE_DIR}/sdk/gvfg/src/internal
-  ${CMAKE_SOURCE_DIR}/sdk/gvfg/src/render
 )
 
 if (MSVC)

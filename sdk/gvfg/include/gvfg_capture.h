@@ -3,8 +3,8 @@
 /*
  * Customer-facing GVFG capture API.
  *
- * Include only this header in customer applications. Internal XDMA backend
- * headers are implementation details behind gvfg.dll.
+ * Include only this header in customer applications. Driver/backend headers
+ * are implementation details behind gvfg.dll.
  *
  * Minimal capture flow:
  *
@@ -90,29 +90,13 @@ typedef struct
 
 typedef struct
 {
-    uint32_t width;         /* Raw FPGA width value. */
-    uint32_t height;        /* Raw FPGA height value. */
-    uint32_t video_format;  /* Raw FPGA video-format value. */
-    uint32_t frame_rate;    /* Raw FPGA frame-rate value. */
-    uint32_t bit_depth;     /* Raw FPGA bit-depth value. */
-    uint32_t status;        /* Raw FPGA lock/status value. */
-} gvfg_fpga_signal_raw_t;
-
-typedef struct
-{
-    int width;                       /* Signal width in pixels, from FPGA when available. */
-    int height;                      /* Signal height in pixels, from FPGA when available. */
-    int video_format_code;           /* 0=yuv422, 1=rgb, 2=yuv444, 3=yuv420. */
-    char video_format[16];           /* Decoded FPGA signal format name. */
-    int frame_rate_code;             /* FPGA frame-rate code. */
-    char frame_rate_bits[5];         /* 4-bit binary text, for example "0110". */
+    int width;                       /* Signal width in pixels when available. */
+    int height;                      /* Signal height in pixels when available. */
+    char video_format[16];           /* Decoded signal format name. */
     char frame_rate_name[16];        /* None, 23.98, 24, 47.95, ..., or "--" for unsupported codes. */
-    int bit_depth;                   /* FPGA signal bit depth: 8 or 10 when valid. */
+    int bit_depth;                   /* Signal bit depth: 8 or 10 when valid. */
     int sdi_locked;                  /* Non-zero when SDI reports locked. */
-    int sdi_ddr_ok;                  /* Non-zero when SDI DDR status is OK. */
     int hdmi_locked;                 /* Non-zero when HDMI reports locked. */
-    int hdmi_ddr_ok;                 /* Non-zero when HDMI DDR status is OK. */
-    gvfg_fpga_signal_raw_t raw;       /* Raw FPGA values for diagnostics; validity is handled by the SDK. */
 } gvfg_signal_status_t;
 
 typedef struct
@@ -122,12 +106,12 @@ typedef struct
     int bit_depth;          /* Bits per color channel of the frame buffer. */
     char pixel_format[32];  /* Native frame buffer format, for example YUY2, Y210, NV12, or P010. */
     int valid;              /* Non-zero while capture is running after at least one frame read. */
-} gvfg_callback_frame_info_t;
+} gvfg_last_frame_info_t;
 
 typedef struct
 {
-    gvfg_signal_status_t input_signal; /* FPGA-reported signal metadata. */
-    gvfg_callback_frame_info_t callback_frame;   /* Last frame returned by gvfg_read_frame(); name kept for ABI compatibility. */
+    gvfg_signal_status_t input_signal; /* Decoded input signal metadata. */
+    gvfg_last_frame_info_t last_frame;           /* Last frame returned by gvfg_read_frame(). */
     double capture_fps;                /* Runtime FPS measured from frames returned by gvfg_read_frame(). */
     uint64_t delivered_frames;         /* Number of frames returned by gvfg_read_frame(). */
 } gvfg_runtime_info_t;
@@ -145,47 +129,21 @@ typedef struct
 
 typedef enum
 {
-    GVFG_EVENT_VIDEO_IRQ = 1,
-    GVFG_EVENT_PLUG_IN = 2,
-    GVFG_EVENT_PLUG_OUT = 3,
-    GVFG_EVENT_CAPTURE_PAUSED = 4,
-    GVFG_EVENT_CAPTURE_RESUMED = 5
+    GVFG_EVENT_UNKNOWN = 0,
+    GVFG_EVENT_PLUG_IN = 1,
+    GVFG_EVENT_PLUG_OUT = 2,
+    GVFG_EVENT_CAPTURE_PAUSED = 3,
+    GVFG_EVENT_CAPTURE_RESUMED = 4
 } gvfg_event_type_t;
-
-enum
-{
-    GVFG_EVENT_MASK_VIDEO_IRQ = 1u << 0,
-    GVFG_EVENT_MASK_PLUG_IN = 1u << 1,
-    GVFG_EVENT_MASK_PLUG_OUT = 1u << 2,
-    GVFG_EVENT_MASK_CAPTURE_PAUSED = 1u << 3,
-    GVFG_EVENT_MASK_CAPTURE_RESUMED = 1u << 4,
-    GVFG_EVENT_MASK_HOTPLUG = GVFG_EVENT_MASK_PLUG_IN |
-                              GVFG_EVENT_MASK_PLUG_OUT |
-                              GVFG_EVENT_MASK_CAPTURE_PAUSED |
-                              GVFG_EVENT_MASK_CAPTURE_RESUMED,
-    GVFG_EVENT_MASK_DEFAULT = GVFG_EVENT_MASK_HOTPLUG,
-    GVFG_EVENT_MASK_ALL = GVFG_EVENT_MASK_VIDEO_IRQ | GVFG_EVENT_MASK_HOTPLUG
-};
 
 typedef struct
 {
     gvfg_event_type_t type;
-    uint32_t irq_bit;
-    uint32_t irq_mask;
     uint64_t timestamp_ns;
 } gvfg_event_t;
 
 /* Opaque session handle created by gvfg_create() and released by gvfg_destroy(). */
 typedef struct gvfg_handle_t *gvfg_handle;
-
-/* Legacy callback type kept for source compatibility. */
-typedef void (*gvfg_on_frame_cb)(const gvfg_frame_t *frame, void *user);
-
-/* Called for capture events such as PLUG_IN / PLUG_OUT. */
-typedef void (*gvfg_on_event_cb)(const gvfg_event_t *event, void *user);
-
-/* Called for asynchronous SDK messages or errors. */
-typedef void (*gvfg_on_error_cb)(gvfg_status_t status, const char *message, void *user);
 
 /*
  * Enumerate GVFG capture devices.
@@ -232,69 +190,6 @@ GVFG_API gvfg_status_t gvfg_create(gvfg_handle *out_handle);
  * must not be used again.
  */
 GVFG_API gvfg_status_t gvfg_destroy(gvfg_handle handle);
-
-/*
- * Register legacy frame and error callbacks.
- *
- * Parameters:
- * - handle: Session handle returned by gvfg_create().
- * - on_frame: Reserved for the legacy callback path. The pull-based
- *   gvfg_read_frame() API is the primary frame API.
- * - on_error: Function called for asynchronous SDK messages/errors. Pass NULL
- *   if error callbacks are not needed.
- * - user: Application-defined pointer passed back to both callbacks.
- *
- * Returns:
- * - GVFG_OK on success.
- * - GVFG_EINVAL if handle is NULL.
- *
- * New applications should use gvfg_read_frame() and gvfg_release_frame()
- * instead of frame callbacks.
- */
-GVFG_API gvfg_status_t gvfg_set_callbacks(gvfg_handle handle,
-                                             gvfg_on_frame_cb on_frame,
-                                             gvfg_on_error_cb on_error,
-                                             void *user);
-
-/*
- * Configure frame callback rate.
- *
- * Parameters:
- * - handle: Session handle returned by gvfg_create().
- * - frame_interval: 0 or 1 calls on_frame for every delivered frame. N > 1
- *   calls on_frame once for every N delivered backend frames.
- *
- * Returns:
- * - GVFG_OK on success.
- * - GVFG_EINVAL if handle is NULL.
- *
- * This setting is kept for source compatibility with the legacy callback API.
- */
-GVFG_API gvfg_status_t gvfg_set_frame_callback_interval(gvfg_handle handle,
-                                                        uint32_t frame_interval);
-
-/*
- * Register legacy capture event callback.
- *
- * Parameters:
- * - handle: Session handle returned by gvfg_create().
- * - on_event: Function called when an enabled capture event occurs. Pass NULL
- *   to disable event callbacks. New applications should use gvfg_poll_event().
- * - user: Application-defined pointer passed back to the callback.
- * - event_mask: GVFG_EVENT_MASK_* bits. Pass 0 to use GVFG_EVENT_MASK_DEFAULT.
- *
- * Returns:
- * - GVFG_OK on success.
- * - GVFG_EINVAL if handle is NULL.
- *
- * VIDEO_IRQ is not included in the default mask because it can occur once per
- * video frame. Enable GVFG_EVENT_MASK_VIDEO_IRQ only for debug or when the
- * application explicitly needs it.
- */
-GVFG_API gvfg_status_t gvfg_set_event_callback(gvfg_handle handle,
-                                               gvfg_on_event_cb on_event,
-                                               void *user,
-                                               uint32_t event_mask);
 
 /*
  * Open a device by index from gvfg_enumerate_devices().
@@ -412,8 +307,7 @@ GVFG_API gvfg_status_t gvfg_stop(gvfg_handle handle);
  * - GVFG_EINVAL if handle or out_status is NULL.
  * - GVFG_ENODEV if no valid signal information is available.
  *
- * The FPGA metadata describes the hardware signal. Use
- * gvfg_runtime_info_t::callback_frame for the callback buffer format.
+ * Use gvfg_runtime_info_t::last_frame for the frame buffer format.
  */
 GVFG_API gvfg_status_t gvfg_get_signal_status(gvfg_handle handle, gvfg_signal_status_t *out_status);
 
