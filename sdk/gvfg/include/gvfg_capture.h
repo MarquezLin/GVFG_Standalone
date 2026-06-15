@@ -13,31 +13,26 @@
  *
  *   gvfg_handle h = NULL;
  *   gvfg_create(&h);
- *   gvfg_set_callbacks(h, on_frame, on_error, user);
- *   // Optional: gvfg_set_frame_callback_interval(h, 6); // one callback per 6 frames
- *
- *   // Optional: let the SDK render preview directly into a native HWND.
- *   gvfg_preview_desc_t preview = {};
- *   preview.hwnd = hwnd;
- *   preview.enable_preview = 1;
- *   preview.swapchain_bitdepth = GVFG_PREVIEW_BITDEPTH_AUTO;
- *   gvfg_set_preview(h, &preview);
- *
  *   gvfg_open(h, devices[0].index);
  *   gvfg_start(h);
  *
- *   // Capture is now running. Use callbacks for frames/messages and
- *   // gvfg_get_runtime_info() for status.
+ *   while (running) {
+ *       gvfg_frame_t frame = {};
+ *       if (gvfg_read_frame(h, &frame, 1000) == GVFG_OK) {
+ *           // Use frame.data before releasing the frame.
+ *           gvfg_release_frame(h, &frame);
+ *       }
+ *   }
  *
  *   gvfg_stop(h);
  *   gvfg_destroy(h);
  *
  * Threading notes:
- * - Frame and error callbacks are called from an SDK worker thread, not from
- *   the UI thread. UI applications should marshal callback work back to their
- *   UI thread.
- * - The frame data pointer is valid only during the callback. Copy the data if
- *   it must be used after the callback returns.
+ * - The main frame API is pull-based: applications call gvfg_read_frame() from
+ *   the thread they choose.
+ * - The frame data pointer remains valid until gvfg_release_frame() is called.
+ *   Copy the data if it must outlive that call.
+ * - At most one frame may be held by a handle at a time.
  */
 
 #include <stdint.h>
@@ -75,13 +70,6 @@ typedef enum
 
 typedef enum
 {
-    GVFG_PREVIEW_BITDEPTH_AUTO = 0,  /* Let the SDK choose the best swapchain format. */
-    GVFG_PREVIEW_BITDEPTH_10BIT = 10, /* Prefer a 10-bit preview swapchain when available. */
-    GVFG_PREVIEW_BITDEPTH_8BIT = 8    /* Force an 8-bit preview swapchain. */
-} gvfg_preview_bitdepth_t;
-
-typedef enum
-{
     GVFG_PIXFMT_UNKNOWN = 0,
     GVFG_PIXFMT_YUY2 = 1,
     GVFG_PIXFMT_UYVY = 2,
@@ -99,13 +87,6 @@ typedef struct
     int index;       /* Device index to pass to gvfg_open(). */
     char name[128];  /* Display name for UI/logging. UTF-8, null-terminated. */
 } gvfg_device_info_t;
-
-typedef struct
-{
-    void *hwnd;              /* Native Windows HWND that stays alive while capture runs. */
-    int enable_preview;      /* Non-zero enables SDK-managed preview rendering. */
-    int swapchain_bitdepth;  /* gvfg_preview_bitdepth_t value. */
-} gvfg_preview_desc_t;
 
 typedef struct
 {
@@ -136,47 +117,24 @@ typedef struct
 
 typedef struct
 {
-    int width;              /* Width of frames delivered to the customer callback. */
-    int height;             /* Height of frames delivered to the customer callback. */
-    int bit_depth;          /* Bits per color channel of the callback buffer. */
-    char pixel_format[32];  /* Native callback buffer format, for example YUY2, Y210, NV12, or P010. */
-    int valid;              /* Non-zero while capture is running after at least one callback frame. */
+    int width;              /* Width of the most recent frame returned by gvfg_read_frame(). */
+    int height;             /* Height of the most recent frame returned by gvfg_read_frame(). */
+    int bit_depth;          /* Bits per color channel of the frame buffer. */
+    char pixel_format[32];  /* Native frame buffer format, for example YUY2, Y210, NV12, or P010. */
+    int valid;              /* Non-zero while capture is running after at least one frame read. */
 } gvfg_callback_frame_info_t;
 
 typedef struct
 {
-    int enabled;             /* Non-zero when SDK-managed preview was requested. */
-    int active;              /* Non-zero when the preview pipeline is active. */
-    int width;               /* Preview render width. */
-    int height;              /* Preview render height. */
-    int bit_depth;           /* Preview output bit depth, usually 8 or 10. */
-    char pixel_format[32];   /* Preview output format, for example BGRA8 or RGB10A2. */
-} gvfg_preview_output_info_t;
-
-typedef struct
-{
     gvfg_signal_status_t input_signal; /* FPGA-reported signal metadata. */
-    gvfg_preview_output_info_t preview_output;   /* SDK-managed preview output, separate from callbacks. */
-    gvfg_callback_frame_info_t callback_frame;   /* Frame buffer delivered by gvfg.dll to the app callback. */
-    double capture_fps;                /* Runtime FPS measured from backend frames seen by the SDK worker. */
-    uint64_t delivered_frames;         /* Number of frames delivered to the app callback. */
+    gvfg_callback_frame_info_t callback_frame;   /* Last frame returned by gvfg_read_frame(); name kept for ABI compatibility. */
+    double capture_fps;                /* Runtime FPS measured from frames returned by gvfg_read_frame(). */
+    uint64_t delivered_frames;         /* Number of frames returned by gvfg_read_frame(). */
 } gvfg_runtime_info_t;
 
 typedef struct
 {
-    int enabled;                  /* Non-zero when preview was requested. */
-    int active;                   /* Non-zero when the preview pipeline is currently active. */
-    int width;                    /* Preview render width. */
-    int height;                   /* Preview render height. */
-    int swapchain_bitdepth;       /* Actual preview swapchain bit depth, usually 8 or 10. */
-    int swapchain_10bit;          /* Non-zero when the active swapchain is 10-bit. */
-    char render_path[128];        /* Human-readable preview pipeline description. */
-    char backbuffer_format[64];   /* DXGI backbuffer format name. */
-} gvfg_preview_info_t;
-
-typedef struct
-{
-    const void *data;       /* Native frame buffer. Valid only during the frame callback. */
+    const void *data;       /* Native frame buffer. Valid until gvfg_release_frame() is called. */
     uint64_t data_size;     /* Total bytes available from data. */
     int width;              /* Frame width in pixels. */
     int height;             /* Frame height in pixels. */
@@ -220,9 +178,7 @@ typedef struct
 /* Opaque session handle created by gvfg_create() and released by gvfg_destroy(). */
 typedef struct gvfg_handle_t *gvfg_handle;
 
-/* Called when the SDK provides a frame for application use.
- * This callback is not required for SDK-managed preview rendering.
- */
+/* Legacy callback type kept for source compatibility. */
 typedef void (*gvfg_on_frame_cb)(const gvfg_frame_t *frame, void *user);
 
 /* Called for capture events such as PLUG_IN / PLUG_OUT. */
@@ -278,12 +234,12 @@ GVFG_API gvfg_status_t gvfg_create(gvfg_handle *out_handle);
 GVFG_API gvfg_status_t gvfg_destroy(gvfg_handle handle);
 
 /*
- * Register frame and error callbacks.
+ * Register legacy frame and error callbacks.
  *
  * Parameters:
  * - handle: Session handle returned by gvfg_create().
- * - on_frame: Function called when a frame is available. Pass NULL if frame
- *   callbacks are not needed.
+ * - on_frame: Reserved for the legacy callback path. The pull-based
+ *   gvfg_read_frame() API is the primary frame API.
  * - on_error: Function called for asynchronous SDK messages/errors. Pass NULL
  *   if error callbacks are not needed.
  * - user: Application-defined pointer passed back to both callbacks.
@@ -292,8 +248,8 @@ GVFG_API gvfg_status_t gvfg_destroy(gvfg_handle handle);
  * - GVFG_OK on success.
  * - GVFG_EINVAL if handle is NULL.
  *
- * Callbacks are called from an SDK worker thread. The application must marshal
- * UI work to its UI thread.
+ * New applications should use gvfg_read_frame() and gvfg_release_frame()
+ * instead of frame callbacks.
  */
 GVFG_API gvfg_status_t gvfg_set_callbacks(gvfg_handle handle,
                                              gvfg_on_frame_cb on_frame,
@@ -312,19 +268,18 @@ GVFG_API gvfg_status_t gvfg_set_callbacks(gvfg_handle handle,
  * - GVFG_OK on success.
  * - GVFG_EINVAL if handle is NULL.
  *
- * This only affects the application frame callback. SDK-managed preview
- * rendering, gvfg_get_runtime_info(), and capture itself continue at full rate.
+ * This setting is kept for source compatibility with the legacy callback API.
  */
 GVFG_API gvfg_status_t gvfg_set_frame_callback_interval(gvfg_handle handle,
                                                         uint32_t frame_interval);
 
 /*
- * Register capture event callback.
+ * Register legacy capture event callback.
  *
  * Parameters:
  * - handle: Session handle returned by gvfg_create().
  * - on_event: Function called when an enabled capture event occurs. Pass NULL
- *   to disable event callbacks.
+ *   to disable event callbacks. New applications should use gvfg_poll_event().
  * - user: Application-defined pointer passed back to the callback.
  * - event_mask: GVFG_EVENT_MASK_* bits. Pass 0 to use GVFG_EVENT_MASK_DEFAULT.
  *
@@ -340,24 +295,6 @@ GVFG_API gvfg_status_t gvfg_set_event_callback(gvfg_handle handle,
                                                gvfg_on_event_cb on_event,
                                                void *user,
                                                uint32_t event_mask);
-
-/*
- * Configure SDK-managed preview rendering.
- *
- * Parameters:
- * - handle: Session handle returned by gvfg_create().
- * - desc: Preview configuration. Must not be NULL. When preview is enabled,
- *   desc->hwnd must be a valid native Windows HWND.
- *
- * Returns:
- * - GVFG_OK on success.
- * - GVFG_EINVAL if handle or desc is NULL.
- *
- * This API is optional. If enabled, call it before gvfg_start() and keep the
- * HWND alive while capture is running. Applications that render frames
- * themselves can skip this API and use the frame callback instead.
- */
-GVFG_API gvfg_status_t gvfg_set_preview(gvfg_handle handle, const gvfg_preview_desc_t *desc);
 
 /*
  * Open a device by index from gvfg_enumerate_devices().
@@ -388,10 +325,66 @@ GVFG_API gvfg_status_t gvfg_open(gvfg_handle handle, int device_index);
  * - GVFG_ESTATE if no device is open.
  * - GVFG_EIO or another status code if stream configuration/start fails.
  *
- * After success, frames and asynchronous messages are delivered through the
- * callbacks registered by gvfg_set_callbacks().
+ * After success, call gvfg_read_frame() to receive frames and gvfg_poll_event()
+ * to receive capture events.
  */
 GVFG_API gvfg_status_t gvfg_start(gvfg_handle handle);
+
+/*
+ * Read one captured frame.
+ *
+ * Parameters:
+ * - handle: Running capture session.
+ * - out_frame: Receives a frame descriptor. Must not be NULL.
+ * - timeout_ms: Maximum time to wait. Use 0 to wait indefinitely.
+ *
+ * Returns:
+ * - GVFG_OK on success.
+ * - GVFG_EINVAL if handle or out_frame is NULL.
+ * - GVFG_ESTATE if capture is not running or a previous frame has not been
+ *   released.
+ * - GVFG_ETIMEOUT if no frame is ready before timeout_ms expires.
+ * - GVFG_EIO for driver/backend failures.
+ *
+ * The returned data pointer is owned by the SDK and remains valid until
+ * gvfg_release_frame() is called. A handle may hold only one frame at a time.
+ */
+GVFG_API gvfg_status_t gvfg_read_frame(gvfg_handle handle,
+                                       gvfg_frame_t *out_frame,
+                                       uint32_t timeout_ms);
+
+/*
+ * Release a frame returned by gvfg_read_frame().
+ *
+ * Parameters:
+ * - handle: Running capture session.
+ * - frame: Frame previously returned by gvfg_read_frame(). The SDK currently
+ *   uses this as a lifetime token; pass the same descriptor back.
+ *
+ * Returns:
+ * - GVFG_OK on success.
+ * - GVFG_EINVAL if handle or frame is NULL.
+ * - GVFG_ESTATE if no frame is currently held.
+ */
+GVFG_API gvfg_status_t gvfg_release_frame(gvfg_handle handle,
+                                          const gvfg_frame_t *frame);
+
+/*
+ * Poll one capture event.
+ *
+ * Parameters:
+ * - handle: Opened session handle.
+ * - out_event: Receives the event. Must not be NULL.
+ * - timeout_ms: Maximum time to wait. Use 0 to return immediately.
+ *
+ * Returns:
+ * - GVFG_OK on success.
+ * - GVFG_EINVAL if handle or out_event is NULL.
+ * - GVFG_ETIMEOUT if no event is available before timeout_ms expires.
+ */
+GVFG_API gvfg_status_t gvfg_poll_event(gvfg_handle handle,
+                                       gvfg_event_t *out_event,
+                                       uint32_t timeout_ms);
 
 /*
  * Stop capture.
@@ -403,7 +396,7 @@ GVFG_API gvfg_status_t gvfg_start(gvfg_handle handle);
  * - GVFG_OK on success, including when capture is already stopped.
  * - GVFG_EINVAL if handle is NULL.
  *
- * This waits for the SDK capture worker thread to exit.
+ * This stops backend capture and invalidates any unreleased frame.
  */
 GVFG_API gvfg_status_t gvfg_stop(gvfg_handle handle);
 
@@ -439,21 +432,6 @@ GVFG_API gvfg_status_t gvfg_get_signal_status(gvfg_handle handle, gvfg_signal_st
  * number of frames delivered by the SDK.
  */
 GVFG_API gvfg_status_t gvfg_get_runtime_info(gvfg_handle handle, gvfg_runtime_info_t *out_info);
-
-/*
- * Query SDK-managed preview diagnostics.
- *
- * Parameters:
- * - handle: Session handle returned by gvfg_create().
- * - out_info: Receives preview information. Must not be NULL.
- *
- * Returns:
- * - GVFG_OK on success.
- * - GVFG_EINVAL if handle or out_info is NULL.
- *
- * This is useful only when the application uses gvfg_set_preview().
- */
-GVFG_API gvfg_status_t gvfg_get_preview_info(gvfg_handle handle, gvfg_preview_info_t *out_info);
 
 /*
  * Convert a GVFG status code to a static English error string.

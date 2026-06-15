@@ -43,16 +43,16 @@
           <mxGeometry x="1280" y="310" width="260" height="120" as="geometry"/>
         </mxCell>
 
-        <mxCell id="wait" value="captureLoop()&#xa;backend-&gt;wait_frame(1000, frame)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;fontStyle=1" vertex="1" parent="1">
+        <mxCell id="wait" value="gvfg_read_frame()&#xa;backend-&gt;wait_frame(timeout, frame)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;fontStyle=1" vertex="1" parent="1">
           <mxGeometry x="80" y="560" width="270" height="80" as="geometry"/>
         </mxCell>
         <mxCell id="select" value="wait_frame() selects newest ready slot&#xa;slot.ready = false&#xa;slot.in_use = true&#xa;out.data = slot.data.data()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14" vertex="1" parent="1">
           <mxGeometry x="430" y="540" width="310" height="120" as="geometry"/>
         </mxCell>
-        <mxCell id="render" value="renderGpuFrame(frame)&#xa;SDK preview uses same slot pointer" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14" vertex="1" parent="1">
+        <mxCell id="render" value="app/private preview renderer&#xa;uses frame before release" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14" vertex="1" parent="1">
           <mxGeometry x="820" y="540" width="270" height="90" as="geometry"/>
         </mxCell>
-        <mxCell id="callback" value="emitNativeFrame(frame)&#xa;customer callback gets out.data = frame.data" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14" vertex="1" parent="1">
+        <mxCell id="callback" value="app uses frame&#xa;data valid until gvfg_release_frame()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14" vertex="1" parent="1">
           <mxGeometry x="1160" y="540" width="300" height="90" as="geometry"/>
         </mxCell>
         <mxCell id="release" value="release_frame(frame)&#xa;slot.in_use = false&#xa;data_cv_.notify_all()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;fontStyle=1" vertex="1" parent="1">

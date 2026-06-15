@@ -1,25 +1,19 @@
 #include "gvfg_capture.h"
 
-#include "gvfg_render_types.h"
-#include "shared_scene_pipeline.h"
 #include "xdma_capture_session.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
-#include <d3d11_4.h>
-#include <dxgi.h>
-#include <wrl/client.h>
-
-using Microsoft::WRL::ComPtr;
 using namespace gvfg::internal;
 
 namespace
@@ -137,23 +131,6 @@ namespace
         if (effective & GVFG_EVENT_MASK_CAPTURE_RESUMED)
             out |= XDMA_EVENT_MASK_CAPTURE_RESUMED;
         return out ? out : XDMA_EVENT_MASK_DEFAULT;
-    }
-
-    const char *dxgi_format_name(DXGI_FORMAT fmt)
-    {
-        switch (fmt)
-        {
-        case DXGI_FORMAT_UNKNOWN:
-            return "UNKNOWN";
-        case DXGI_FORMAT_B8G8R8A8_UNORM:
-            return "B8G8R8A8_UNORM";
-        case DXGI_FORMAT_R10G10B10A2_UNORM:
-            return "R10G10B10A2_UNORM";
-        case DXGI_FORMAT_R16G16B16A16_FLOAT:
-            return "R16G16B16A16_FLOAT";
-        default:
-            return "DXGI_FORMAT_OTHER";
-        }
     }
 
     bool fpga_field_valid(uint32_t mask, int bit)
@@ -325,9 +302,6 @@ struct gvfg_handle_t
         if (cfg != GVFG_OK)
             return cfg;
 
-        if (previewHwnd && !createRenderPipeline())
-            emitError(GVFG_ENOTSUP, "GVFG preview pipeline unavailable");
-
         resetRuntimeCounters();
         const xdma_status_t st = backend->start_stream();
         if (st != XDMA_OK)
@@ -337,16 +311,13 @@ struct gvfg_handle_t
         }
 
         running = true;
-        captureThread = std::thread([this]()
-                                    { captureLoop(); });
         return GVFG_OK;
     }
 
     gvfg_status_t stop()
     {
         running = false;
-        if (captureThread.joinable())
-            captureThread.join();
+        releaseHeldFrameForStop();
         if (backend)
             backend->stop_stream();
         return GVFG_OK;
@@ -355,7 +326,6 @@ struct gvfg_handle_t
     void close()
     {
         stop();
-        releaseRenderPipeline();
         if (backend)
         {
             backend->set_event_callback(nullptr, nullptr, 0);
@@ -371,17 +341,6 @@ struct gvfg_handle_t
         eventCallbackUser = user;
         eventMask = mask ? mask : GVFG_EVENT_MASK_DEFAULT;
         syncBackendEventCallback();
-        return GVFG_OK;
-    }
-
-    gvfg_status_t setPreview(const gvfg_preview_desc_t &desc)
-    {
-        previewDesc = desc;
-        previewHwnd = desc.enable_preview ? desc.hwnd : nullptr;
-        if (pipeline)
-            pipeline->configurePreview(toRenderPreviewDesc());
-        if (previewHwnd && width > 0 && height > 0)
-            createRenderPipeline();
         return GVFG_OK;
     }
 
@@ -432,16 +391,6 @@ struct gvfg_handle_t
         getSignalStatus(out.input_signal);
         const uint64_t frames = deliveredFrames.load(std::memory_order_relaxed);
         const bool deliveredValid = running.load(std::memory_order_relaxed) && frames > 0;
-        out.preview_output.enabled = previewHwnd ? 1 : 0;
-        out.preview_output.active = (pipeline && previewHwnd) ? 1 : 0;
-        if (out.preview_output.active)
-        {
-            out.preview_output.width = pipeline->preview_w_;
-            out.preview_output.height = pipeline->preview_h_;
-            out.preview_output.bit_depth = pipeline->preview_swapchain_10bit() ? 10 : 8;
-            copy_cstr(out.preview_output.pixel_format, sizeof(out.preview_output.pixel_format),
-                      pipeline->preview_swapchain_10bit() ? "RGB10A2" : "BGRA8");
-        }
 
         out.callback_frame.valid = deliveredValid ? 1 : 0;
         if (deliveredValid)
@@ -458,32 +407,11 @@ struct gvfg_handle_t
         return GVFG_OK;
     }
 
-    gvfg_status_t getPreviewInfo(gvfg_preview_info_t &out)
-    {
-        std::memset(&out, 0, sizeof(out));
-        out.enabled = previewHwnd ? 1 : 0;
-        out.active = (pipeline && previewHwnd) ? 1 : 0;
-        out.width = pipeline ? pipeline->preview_w_ : 0;
-        out.height = pipeline ? pipeline->preview_h_ : 0;
-        out.swapchain_bitdepth = pipeline ? (pipeline->preview_swapchain_10bit() ? 10 : 8)
-                                          : previewDesc.swapchain_bitdepth;
-        out.swapchain_10bit = pipeline && pipeline->preview_swapchain_10bit() ? 1 : 0;
-        copy_cstr(out.render_path, sizeof(out.render_path),
-                  pipeline ? (pipeline->preview_swapchain_10bit()
-                                  ? "YUY2 Shader -> FP16 Scene -> 10bit Swapchain"
-                                  : "YUY2 Shader -> FP16 Scene -> 8bit Swapchain")
-                           : (previewHwnd ? "Preview helper configured, pipeline inactive"
-                                          : "Preview helper disabled"));
-        copy_cstr(out.backbuffer_format, sizeof(out.backbuffer_format),
-                  pipeline ? dxgi_format_name(pipeline->preview_backbuffer_format()) : "N/A");
-        return GVFG_OK;
-    }
-
     void syncBackendEventCallback()
     {
         if (!backend)
             return;
-        backend->set_event_callback(onEvent ? &gvfg_handle_t::onBackendEvent : nullptr,
+        backend->set_event_callback(&gvfg_handle_t::onBackendEvent,
                                     this,
                                     map_event_mask_to_xdma(eventMask));
     }
@@ -498,15 +426,21 @@ struct gvfg_handle_t
 
     void emitEvent(const xdma_event_t &event)
     {
-        if (!onEvent)
-            return;
-
         gvfg_event_t out{};
         out.type = map_event_type(event.type);
         out.irq_bit = event.irq_bit;
         out.irq_mask = event.irq_mask;
         out.timestamp_ns = event.timestamp_ns;
-        onEvent(&out, eventCallbackUser);
+        {
+            std::lock_guard<std::mutex> lock(eventMutex);
+            if (eventQueue.size() >= 64)
+                eventQueue.pop_front();
+            eventQueue.push_back(out);
+        }
+        eventCv.notify_one();
+
+        if (onEvent)
+            onEvent(&out, eventCallbackUser);
     }
 
     void querySignal()
@@ -626,176 +560,42 @@ struct gvfg_handle_t
         return GVFG_OK;
     }
 
-    gvfg_render_preview_desc_t toRenderPreviewDesc() const
+    gvfg_status_t readFrame(gvfg_frame_t &out, uint32_t timeoutMs)
     {
-        gvfg_render_preview_desc_t desc{};
-        desc.hwnd = previewHwnd;
-        desc.enable_preview = previewHwnd ? 1 : 0;
-        desc.use_fp16_pipeline = 1;
-        switch (previewDesc.swapchain_bitdepth)
+        std::memset(&out, 0, sizeof(out));
+        if (!backend || !running)
+            return GVFG_ESTATE;
+
         {
-        case GVFG_PREVIEW_BITDEPTH_8BIT:
-            desc.swapchain_10bit = GVFG_RENDER_PREVIEW_BITDEPTH_8BIT;
-            break;
-        case GVFG_PREVIEW_BITDEPTH_10BIT:
-            desc.swapchain_10bit = GVFG_RENDER_PREVIEW_BITDEPTH_10BIT;
-            break;
-        case GVFG_PREVIEW_BITDEPTH_AUTO:
-        default:
-            desc.swapchain_10bit = GVFG_RENDER_PREVIEW_BITDEPTH_AUTO;
-            break;
+            std::lock_guard<std::mutex> lock(frameMutex);
+            if (readInProgress || frameHeld)
+                return GVFG_ESTATE;
+            readInProgress = true;
         }
-        return desc;
-    }
 
-    bool createRenderPipeline()
-    {
-        if (!previewHwnd || width == 0 || height == 0)
-            return false;
-
-        if (!pipeline)
-            pipeline = std::make_unique<SharedScenePipeline>();
-
-        if (!d3d)
+        xdma_frame_t frame{};
+        const xdma_status_t st = backend->wait_frame(timeoutMs, frame);
+        if (st != XDMA_OK)
         {
-            UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-#ifdef _DEBUG
-            flags |= D3D11_CREATE_DEVICE_DEBUG;
-#endif
-            D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
-            D3D_FEATURE_LEVEL got{};
-            HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
-                                           flags, levels, _countof(levels), D3D11_SDK_VERSION,
-                                           &d3d, &got, &ctx);
-#ifdef _DEBUG
-            if (FAILED(hr))
             {
-                flags &= ~D3D11_CREATE_DEVICE_DEBUG;
-                hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
-                                       flags, levels, _countof(levels), D3D11_SDK_VERSION,
-                                       &d3d, &got, &ctx);
+                std::lock_guard<std::mutex> lock(frameMutex);
+                readInProgress = false;
             }
-#endif
-            if (FAILED(hr) || !d3d || !ctx)
-                return false;
-
-            ComPtr<ID3D11Multithread> mt;
-            if (SUCCEEDED(d3d.As(&mt)) && mt)
-                mt->SetMultithreadProtected(TRUE);
-
-        }
-
-        if (!pipeline->initialize(d3d.Get(), ctx.Get()))
-            return false;
-
-        pipeline->configurePreview(toRenderPreviewDesc());
-        pipeline->set_source_bit_depth(static_cast<int>(bitDepth ? bitDepth : 8));
-        return pipeline->ensure_rt_and_pipeline(static_cast<int>(width), static_cast<int>(height)) &&
-               pipeline->ensure_preview_swapchain(static_cast<int>(width), static_cast<int>(height));
-    }
-
-    void releaseRenderPipeline()
-    {
-        if (pipeline)
-        {
-            pipeline->release_preview_swapchain();
-            pipeline.reset();
-        }
-        ctx.Reset();
-        d3d.Reset();
-    }
-
-    void captureLoop()
-    {
-        while (running)
-        {
-            xdma_frame_t frame{};
-            const xdma_status_t st = backend->wait_frame(1000, frame);
-            if (!running)
-                break;
-            if (st == XDMA_ETIMEOUT)
-                continue;
-            if (st != XDMA_OK)
-            {
+            if (st != XDMA_ETIMEOUT && st != XDMA_ESTATE)
                 emitError(map_status(st), xdma_error_text(st, backend.get()));
-                break;
-            }
+            return map_status(st);
+        }
 
-            updateRuntimeFps(now_ns());
-            renderGpuFrame(frame);
-            emitNativeFrame(frame);
+        updateRuntimeFps(now_ns());
+
+        if (!frame.data || frame.width == 0 || frame.height == 0)
+        {
             backend->release_frame(frame);
-        }
-    }
-
-    bool renderGpuFrame(const xdma_frame_t &frame)
-    {
-        if (!pipeline || !previewHwnd || !frame.data)
-            return false;
-
-        const int w = static_cast<int>(frame.width);
-        const int h = static_cast<int>(frame.height);
-        if (w <= 0 || h <= 0)
-            return false;
-
-        if (!pipeline->ensure_rt_and_pipeline(w, h) || !pipeline->ensure_preview_swapchain(w, h))
-            return false;
-        uint32_t fallbackBitDepth = 8;
-        {
-            std::lock_guard<std::mutex> lock(stateMutex);
-            fallbackBitDepth = bitDepth ? bitDepth : 8;
-        }
-        pipeline->set_source_bit_depth(static_cast<int>(frame.bit_depth ? frame.bit_depth : fallbackBitDepth));
-
-        const auto *base = static_cast<const uint8_t *>(frame.data);
-        gvfg_render_pixfmt_t renderFmt = GVFG_RENDER_FMT_YUY2;
-        bool uploaded = false;
-
-        switch (frame.pixel_format)
-        {
-        case XDMA_PIXFMT_YUY2:
-        {
-            renderFmt = GVFG_RENDER_FMT_YUY2;
-            uploaded = pipeline->upload_yuy2_frame(base, w * 2, w, h);
-            break;
-        }
-        case XDMA_PIXFMT_Y210:
-        {
-            renderFmt = GVFG_RENDER_FMT_Y210;
-            uploaded = pipeline->upload_y210_frame(base, w * 4, w, h);
-            break;
-        }
-        case XDMA_PIXFMT_NV12:
-        case XDMA_PIXFMT_P010:
-            return false;
-        default:
-            return false;
+            std::lock_guard<std::mutex> lock(frameMutex);
+            readInProgress = false;
+            return GVFG_EIO;
         }
 
-        if (!uploaded ||
-            !pipeline->render_uploaded_yuv_to_fp16(renderFmt, w, h) ||
-            !pipeline->copy_fp16_to_scene())
-            return false;
-
-        bool ok = true;
-        if (!pipeline->preview_swapchain_10bit())
-            ok = pipeline->blit_fp16_to_rgba8(w, h);
-        if (ok)
-            pipeline->present_preview(w, h);
-        return ok;
-    }
-
-    void emitNativeFrame(const xdma_frame_t &frame)
-    {
-        if (!onFrame || !frame.data)
-            return;
-        if (!shouldEmitFrameCallback(frame.frame_id))
-            return;
-
-        if (frame.width == 0 || frame.height == 0)
-            return;
-
-        gvfg_frame_t out{};
         out.data = frame.data;
         out.data_size = static_cast<uint64_t>(frame.data_size_bytes);
         out.width = static_cast<int>(frame.width);
@@ -803,16 +603,76 @@ struct gvfg_handle_t
         out.pixel_format = to_gvfg_pixel_format(frame.pixel_format);
         out.bit_depth = static_cast<int>(frame.bit_depth);
         out.frame_id = frame.frame_id;
-        onFrame(&out, callbackUser);
         noteDeliveredFrame(out.width, out.height, out.bit_depth, out.pixel_format);
+
+        std::lock_guard<std::mutex> lock(frameMutex);
+        heldBackendFrame = frame;
+        readInProgress = false;
+        frameHeld = true;
+        return GVFG_OK;
     }
 
-    bool shouldEmitFrameCallback(uint64_t frameId) const
+    gvfg_status_t releaseFrame(const gvfg_frame_t &)
     {
-        const uint32_t interval = callbackFrameInterval.load(std::memory_order_relaxed);
-        if (interval <= 1)
-            return true;
-        return (frameId % interval) == 1;
+        if (!backend)
+            return GVFG_ESTATE;
+
+        xdma_frame_t frame{};
+        {
+            std::lock_guard<std::mutex> lock(frameMutex);
+            if (!frameHeld)
+                return GVFG_ESTATE;
+            frame = heldBackendFrame;
+            heldBackendFrame = {};
+            frameHeld = false;
+        }
+
+        return map_status(backend->release_frame(frame));
+    }
+
+    void releaseHeldFrameForStop()
+    {
+        if (!backend)
+            return;
+
+        xdma_frame_t frame{};
+        bool shouldRelease = false;
+        {
+            std::lock_guard<std::mutex> lock(frameMutex);
+            if (frameHeld)
+            {
+                frame = heldBackendFrame;
+                heldBackendFrame = {};
+                frameHeld = false;
+                shouldRelease = true;
+            }
+        }
+
+        if (shouldRelease)
+            backend->release_frame(frame);
+    }
+
+    gvfg_status_t pollEvent(gvfg_event_t &out, uint32_t timeoutMs)
+    {
+        std::unique_lock<std::mutex> lock(eventMutex);
+        const auto hasEvent = [this]()
+        {
+            return !eventQueue.empty();
+        };
+
+        if (timeoutMs == 0)
+        {
+            if (!hasEvent())
+                return GVFG_ETIMEOUT;
+        }
+        else if (!eventCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), hasEvent))
+        {
+            return GVFG_ETIMEOUT;
+        }
+
+        out = eventQueue.front();
+        eventQueue.pop_front();
+        return GVFG_OK;
     }
 
     void emitError(gvfg_status_t code, const char *msg)
@@ -859,8 +719,6 @@ struct gvfg_handle_t
     std::unique_ptr<gvfg::internal::XdmaCaptureSession> backend;
     int currentIndex = -1;
     xdma_input_t selectedInput = XDMA_INPUT_SDI;
-    gvfg_preview_desc_t previewDesc{};
-    void *previewHwnd = nullptr;
 
     uint32_t width = 0;
     uint32_t height = 0;
@@ -893,11 +751,14 @@ struct gvfg_handle_t
     uint32_t eventMask = GVFG_EVENT_MASK_DEFAULT;
 
     std::atomic<bool> running{false};
-    std::thread captureThread;
+    std::mutex frameMutex;
+    bool readInProgress = false;
+    bool frameHeld = false;
+    xdma_frame_t heldBackendFrame{};
+    std::mutex eventMutex;
+    std::condition_variable eventCv;
+    std::deque<gvfg_event_t> eventQueue;
 
-    ComPtr<ID3D11Device> d3d;
-    ComPtr<ID3D11DeviceContext> ctx;
-    std::unique_ptr<SharedScenePipeline> pipeline;
 };
 
 extern "C"
@@ -975,13 +836,6 @@ extern "C"
         return handle->setEventCallback(on_event, user, event_mask);
     }
 
-    gvfg_status_t gvfg_set_preview(gvfg_handle handle, const gvfg_preview_desc_t *desc)
-    {
-        if (!handle || !desc)
-            return GVFG_EINVAL;
-        return handle->setPreview(*desc);
-    }
-
     gvfg_status_t gvfg_open(gvfg_handle handle, int device_index)
     {
         if (!handle)
@@ -994,6 +848,27 @@ extern "C"
         if (!handle)
             return GVFG_EINVAL;
         return handle->start();
+    }
+
+    gvfg_status_t gvfg_read_frame(gvfg_handle handle, gvfg_frame_t *out_frame, uint32_t timeout_ms)
+    {
+        if (!handle || !out_frame)
+            return GVFG_EINVAL;
+        return handle->readFrame(*out_frame, timeout_ms);
+    }
+
+    gvfg_status_t gvfg_release_frame(gvfg_handle handle, const gvfg_frame_t *frame)
+    {
+        if (!handle || !frame)
+            return GVFG_EINVAL;
+        return handle->releaseFrame(*frame);
+    }
+
+    gvfg_status_t gvfg_poll_event(gvfg_handle handle, gvfg_event_t *out_event, uint32_t timeout_ms)
+    {
+        if (!handle || !out_event)
+            return GVFG_EINVAL;
+        return handle->pollEvent(*out_event, timeout_ms);
     }
 
     gvfg_status_t gvfg_stop(gvfg_handle handle)
@@ -1015,13 +890,6 @@ extern "C"
         if (!handle || !out_info)
             return GVFG_EINVAL;
         return handle->getRuntimeInfo(*out_info);
-    }
-
-    gvfg_status_t gvfg_get_preview_info(gvfg_handle handle, gvfg_preview_info_t *out_info)
-    {
-        if (!handle || !out_info)
-            return GVFG_EINVAL;
-        return handle->getPreviewInfo(*out_info);
     }
 
     const char *gvfg_strerror(gvfg_status_t status)

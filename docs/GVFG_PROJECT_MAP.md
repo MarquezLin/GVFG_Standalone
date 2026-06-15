@@ -68,17 +68,14 @@ flowchart TD
     B --> C["gvfg_set_callbacks\noptional frame/error callback"]
     C --> D["gvfg_set_event_callback\noptional event callback"]
     D --> E["gvfg_open"]
-    E --> F["gvfg_set_preview\noptional SDK-managed preview"]
-    F --> G["gvfg_start"]
+    E --> G["gvfg_start"]
     G --> H["running"]
     H --> I["gvfg_get_runtime_info\nor gvfg_get_signal_status"]
-    H --> J["frame callback\noptional"]
-    H --> K["event callback\noptional"]
-    H --> L["D3D preview present\noptional"]
+    H --> J["gvfg_read_frame\napp-owned loop"]
+    H --> K["gvfg_poll_event\noptional"]
     I --> H
     J --> H
     K --> H
-    L --> H
     H --> M["gvfg_stop"]
     M --> N["gvfg_destroy"]
 ```
@@ -87,9 +84,10 @@ flowchart TD
 
 1. `refreshDevices()` calls `gvfg_enumerate_devices()`.
 2. `openDevice()` calls `gvfg_create()`, callback setup, then `gvfg_open()`.
-3. `startCapture()` calls `gvfg_set_preview()` and `gvfg_start()`.
-4. A timer calls `gvfg_get_runtime_info()` to refresh signal, preview, callback, and FPS status.
-5. `stopCapture()` calls `gvfg_stop()`, and `closeDevice()` calls `gvfg_destroy()`.
+3. `startCapture()` calls `gvfg_start()` and starts an app-owned read loop.
+4. The read loop calls `gvfg_read_frame()`, renders preview with app-private code, then calls `gvfg_release_frame()`.
+5. A timer calls `gvfg_get_runtime_info()` to refresh signal, read-frame, and FPS status.
+6. `stopCapture()` calls `gvfg_stop()`, and `closeDevice()` calls `gvfg_destroy()`.
 
 ## 3. SDK Frame 資料流圖
 
@@ -99,12 +97,11 @@ flowchart LR
     EventWorker --> DataWorker["XdmaCaptureSession data worker"]
     DataWorker --> Ring["frame_ring_ slot\nready=true, sequence++"]
     Ring --> WaitFrame["wait_frame()"]
-    WaitFrame --> CaptureLoop["gvfg_handle_t::captureLoop"]
-    CaptureLoop --> Preview["renderGpuFrame()\nD3D preview path"]
-    CaptureLoop --> Callback["emitNativeFrame()\ncustomer callback path"]
+    WaitFrame --> ReadFrame["gvfg_read_frame()"]
+    ReadFrame --> App["App-owned read loop\nframe valid until release"]
+    App --> Preview["app-private preview renderer\ninternal/demo tool only"]
     Preview --> HWND["App-provided HWND"]
-    Callback --> App["App onFrame callback\npointer valid only during callback"]
-    CaptureLoop --> Release["release_frame()\nslot reusable"]
+    App --> Release["gvfg_release_frame()\nslot reusable"]
     Release --> Ring
 ```
 
@@ -112,7 +109,7 @@ flowchart LR
 
 1. data worker 什麼時候寫入 `frame_ring_`。
 2. `wait_frame()` 什麼時候把 slot 交給 `gvfg_capture.cpp`。
-3. `renderGpuFrame()` 和 `emitNativeFrame()` 共用同一個 backend frame 的時間點。
+3. `gvfg_read_frame()` owns the backend frame until the app calls `gvfg_release_frame()`.
 4. `release_frame()` 後 slot 什麼時候可重用。
 
 更底層的外部來源細節先不放進這張圖。
@@ -129,11 +126,12 @@ sequenceDiagram
     Source->>Backend: backend event
     Backend->>Backend: classify event and update capture state
     Backend->>Facade: xdma_event_callback_t
-    Facade->>Facade: map XDMA event to gvfg_event_t
-    Facade->>App: gvfg_on_event_cb
+    Facade->>Facade: map XDMA event and queue gvfg_event_t
+    App->>Facade: gvfg_poll_event()
+    Facade->>App: gvfg_event_t
 ```
 
-`VIDEO_IRQ` 類型的事件會推動 frame 資料進入 SDK frame path。Hotplug 類型事件則可能讓 backend pause/resume capture，並透過 `gvfg_on_event_cb` 通知 App。
+`VIDEO_IRQ` 類型的事件會推動 frame 資料進入 SDK frame path。Hotplug 類型事件則可能讓 backend pause/resume capture，App 可透過 `gvfg_poll_event()` 取得事件。
 
 ## 5. Build / 交付圖
 

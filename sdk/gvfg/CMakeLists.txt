@@ -14,7 +14,6 @@ add_library(gvfg SHARED
     src/backend/xdma/xdma_public.h
     src/gvfg_capture.cpp
     src/gvfg_log_bridge.cpp
-    src/render/shared_scene_pipeline.cpp
 )
 
 set_target_properties(gvfg PROPERTIES
@@ -29,7 +28,6 @@ target_include_directories(gvfg
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/xdma
         ${CMAKE_CURRENT_SOURCE_DIR}/src/internal
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/render
 )
 
 target_compile_definitions(gvfg PRIVATE
@@ -43,8 +41,6 @@ endif()
 
 target_link_libraries(gvfg PRIVATE
     setupapi
-    user32
-    dxgi d3d11 D3DCompiler
 )
 
 if (MSVC)

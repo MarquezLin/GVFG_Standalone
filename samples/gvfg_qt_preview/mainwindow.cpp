@@ -145,9 +145,6 @@ bool MainWindow::openDevice()
         return false;
     }
 
-    gvfg_set_callbacks(handle_, &MainWindow::onFrame, &MainWindow::onError, this);
-    gvfg_set_event_callback(handle_, &MainWindow::onEvent, this, GVFG_EVENT_MASK_DEFAULT);
-
     const int deviceIndex = ui_->deviceCombo->currentData().toInt();
     st = gvfg_open(handle_, deviceIndex);
     if (st != GVFG_OK)
@@ -169,6 +166,7 @@ bool MainWindow::openDevice()
 void MainWindow::closeDevice()
 {
     stopCapture();
+    previewRenderer_.shutdown();
 
     if (signalStatusTimer_)
         signalStatusTimer_->stop();
@@ -211,7 +209,10 @@ void MainWindow::startCapture()
     }
 
     frameCount_ = 0;
+    captureStop_.store(false, std::memory_order_release);
     captureRunning_ = true;
+    captureThread_ = std::thread([this]()
+                                 { captureReadLoop(); });
     updateUiState();
     appendLog(QStringLiteral("Started capture"));
     updateSignalStatus(true);
@@ -221,6 +222,8 @@ void MainWindow::stopCapture()
 {
     if (handle_ && captureRunning_)
     {
+        captureStop_.store(true, std::memory_order_release);
+        joinCaptureThread();
         gvfg_stop(handle_);
         captureRunning_ = false;
         appendLog(QStringLiteral("Stopped capture"));
@@ -232,18 +235,9 @@ void MainWindow::stopCapture()
 
 bool MainWindow::applyPreview()
 {
-    if (!handle_)
-        return false;
-
-    gvfg_preview_desc_t preview{};
-    preview.hwnd = previewWindow_->nativePreviewHandle();
-    preview.enable_preview = 1;
-    preview.swapchain_bitdepth = GVFG_PREVIEW_BITDEPTH_AUTO;
-
-    const gvfg_status_t st = gvfg_set_preview(handle_, &preview);
-    if (st != GVFG_OK)
+    if (!previewRenderer_.configure(previewWindow_->nativePreviewHandle()))
     {
-        showError(QStringLiteral("gvfg_set_preview"), st);
+        appendLog(QStringLiteral("Preview setup failed: invalid preview window"));
         return false;
     }
     return true;
@@ -252,7 +246,7 @@ bool MainWindow::applyPreview()
 void MainWindow::updatePreviewSourceSize(const gvfg_runtime_info_t &info)
 {
     const auto &signal = info.input_signal;
-    const auto &callback = info.callback_frame;
+    const auto &readFrame = info.callback_frame;
 
     if (signal.width > 0 && signal.height > 0)
     {
@@ -260,8 +254,8 @@ void MainWindow::updatePreviewSourceSize(const gvfg_runtime_info_t &info)
         return;
     }
 
-    if (callback.valid && callback.width > 0 && callback.height > 0)
-        previewWindow_->setSourceSize(callback.width, callback.height);
+    if (readFrame.valid && readFrame.width > 0 && readFrame.height > 0)
+        previewWindow_->setSourceSize(readFrame.width, readFrame.height);
 }
 
 void MainWindow::updatePreviewSourceSize()
@@ -284,8 +278,7 @@ void MainWindow::updateSignalStatus(bool writeLog)
         return;
 
     const auto &signal = info.input_signal;
-    const auto &preview = info.preview_output;
-    const auto &callback = info.callback_frame;
+    const auto &readFrame = info.callback_frame;
     if (previewWindow_->isVisible())
         updatePreviewSourceSize(info);
 
@@ -320,21 +313,20 @@ void MainWindow::updateSignalStatus(bool writeLog)
                                 .arg(hex32(signal.raw.frame_rate))
                                 .arg(signal.raw.bit_depth)
                                 .arg(hex32(signal.raw.status));
-    const QString line3 = preview.active
+    const QString line3 = previewRenderer_.active()
                               ? QStringLiteral("Preview output | frame=%1x%2 format=%3 bitdepth=%4")
-                                    .arg(preview.width)
-                                    .arg(preview.height)
-                                    .arg(QString::fromUtf8(preview.pixel_format))
-                                    .arg(preview.bit_depth)
-                              : (preview.enabled ? QStringLiteral("Preview output | configured, inactive")
-                                                 : QStringLiteral("Preview output | disabled"));
-    const QString line4 = callback.valid
-                              ? QStringLiteral("Callback frame | frame=%1x%2 format=%3 bitdepth=%4")
-                                    .arg(callback.width)
-                                    .arg(callback.height)
-                                    .arg(QString::fromUtf8(callback.pixel_format))
-                                    .arg(callback.bit_depth)
-                              : QStringLiteral("Callback frame | --");
+                                    .arg(previewRenderer_.width())
+                                    .arg(previewRenderer_.height())
+                                    .arg(QString::fromUtf8(previewRenderer_.pixelFormat()))
+                                    .arg(previewRenderer_.bitDepth())
+                              : QStringLiteral("Preview output | app renderer inactive");
+    const QString line4 = readFrame.valid
+                              ? QStringLiteral("Read frame | frame=%1x%2 format=%3 bitdepth=%4")
+                                    .arg(readFrame.width)
+                                    .arg(readFrame.height)
+                                    .arg(QString::fromUtf8(readFrame.pixel_format))
+                                    .arg(readFrame.bit_depth)
+                              : QStringLiteral("Read frame | --");
     const QString line5 = QStringLiteral("App runtime | capture=%1 fps delivered=%2")
                               .arg(info.capture_fps > 0.0 ? QString::number(info.capture_fps, 'f', 2)
                                                           : QStringLiteral("--"))
@@ -377,69 +369,74 @@ void MainWindow::appendLog(const QString &message)
     ui_->logEdit->appendPlainText(line);
 }
 
-void MainWindow::onFrame(const gvfg_frame_t *frame, void *user)
+void MainWindow::captureReadLoop()
 {
-    MainWindow *self = static_cast<MainWindow *>(user);
-    if (!self || !frame)
-        return;
-
-    const uint64_t count = ++self->frameCount_;
-    if (count <= 5 || (count % 60) == 0)
+    while (!captureStop_.load(std::memory_order_acquire))
     {
-        const int width = frame->width;
-        const int height = frame->height;
-        const uint64_t frameId = frame->frame_id;
-        QMetaObject::invokeMethod(self,
-                                  [self, count, frameId, width, height]()
+        gvfg_event_t event{};
+        while (gvfg_poll_event(handle_, &event, 0) == GVFG_OK)
+        {
+            const QString type = eventTypeText(event.type);
+            const uint32_t irqBit = event.irq_bit;
+            const uint32_t irqMask = event.irq_mask;
+            const uint64_t timestampNs = event.timestamp_ns;
+            QMetaObject::invokeMethod(this,
+                                      [this, type, irqBit, irqMask, timestampNs]()
+                                      {
+                                          appendLog(QStringLiteral("event %1 irq=%2 mask=%3 ts=%4")
+                                                        .arg(type)
+                                                        .arg(irqBit)
+                                                        .arg(hex32(irqMask))
+                                                        .arg(static_cast<qulonglong>(timestampNs)));
+                                      },
+                                      Qt::QueuedConnection);
+        }
+
+        gvfg_frame_t frame{};
+        const gvfg_status_t st = gvfg_read_frame(handle_, &frame, 200);
+        if (st == GVFG_OK)
+        {
+            const uint64_t count = ++frameCount_;
+            const int width = frame.width;
+            const int height = frame.height;
+            const uint64_t frameId = frame.frame_id;
+            previewRenderer_.render(frame);
+            gvfg_release_frame(handle_, &frame);
+
+            if (count <= 5 || (count % 60) == 0)
+            {
+                QMetaObject::invokeMethod(this,
+                                          [this, count, frameId, width, height]()
+                                          {
+                                              appendLog(QStringLiteral("read_frame #%1 source id=%2 %3x%4")
+                                                            .arg(static_cast<qulonglong>(count))
+                                                            .arg(static_cast<qulonglong>(frameId))
+                                                            .arg(width)
+                                                            .arg(height));
+                                          },
+                                          Qt::QueuedConnection);
+            }
+            continue;
+        }
+
+        if (st == GVFG_ETIMEOUT)
+            continue;
+        if (captureStop_.load(std::memory_order_acquire) || st == GVFG_ESTATE)
+            break;
+
+        QMetaObject::invokeMethod(this,
+                                  [this, st]()
                                   {
-                                      self->appendLog(QStringLiteral("callback #%1 source id=%2 %3x%4")
-                                                          .arg(static_cast<qulonglong>(count))
-                                                          .arg(static_cast<qulonglong>(frameId))
-                                                          .arg(width)
-                                                          .arg(height));
+                                      appendLog(QStringLiteral("gvfg_read_frame failed: %1")
+                                                    .arg(QString::fromUtf8(gvfg_strerror(st))));
                                   },
                                   Qt::QueuedConnection);
+        break;
     }
 }
 
-void MainWindow::onEvent(const gvfg_event_t *event, void *user)
+void MainWindow::joinCaptureThread()
 {
-    MainWindow *self = static_cast<MainWindow *>(user);
-    if (!self || !event)
-        return;
-
-    const QString type = eventTypeText(event->type);
-    const uint32_t irqBit = event->irq_bit;
-    const uint32_t irqMask = event->irq_mask;
-    const uint64_t timestampNs = event->timestamp_ns;
-    QMetaObject::invokeMethod(self,
-                              [self, type, irqBit, irqMask, timestampNs]()
-                              {
-                                  self->appendLog(QStringLiteral("event %1 irq=%2 mask=%3 ts=%4")
-                                                      .arg(type)
-                                                      .arg(irqBit)
-                                                      .arg(hex32(irqMask))
-                                                      .arg(static_cast<qulonglong>(timestampNs)));
-                              },
-                              Qt::QueuedConnection);
-}
-
-void MainWindow::onError(gvfg_status_t status, const char *message, void *user)
-{
-    MainWindow *self = static_cast<MainWindow *>(user);
-    if (!self)
-        return;
-
-    const QString text = message && message[0]
-                             ? QString::fromUtf8(message)
-                             : QString::fromUtf8(gvfg_strerror(status));
-
-    QMetaObject::invokeMethod(self,
-                              [self, status, text]()
-                              {
-                                  self->appendLog(QStringLiteral("message %1: %2")
-                                                      .arg(static_cast<int>(status))
-                                                      .arg(text));
-                              },
-                              Qt::QueuedConnection);
+    if (captureThread_.joinable())
+        captureThread_.join();
 }

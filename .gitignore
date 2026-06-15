@@ -1,5 +1,6 @@
 build*/
 out/
+packages/
 demosrc/
 .vs/
 .vscode/
