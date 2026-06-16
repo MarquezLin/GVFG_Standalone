@@ -24,6 +24,7 @@ endif()
 
 add_subdirectory(sdk/gvfg)
 add_subdirectory(helpers/gvfg_preview)
+add_subdirectory(helpers/gvfg_convert)
 
 if (BUILD_GVFG_SAMPLES)
   add_subdirectory(samples/gvfg_qt_preview)

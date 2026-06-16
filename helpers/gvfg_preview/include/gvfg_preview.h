@@ -46,16 +46,20 @@ typedef struct
     char pixel_format[32];
 } gvfg_preview_info_t;
 
-GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_create(gvfg_preview_handle *out_handle);
-GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_destroy(gvfg_preview_handle handle);
+GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_create(
+    _Outptr_ gvfg_preview_handle *out_handle);
+
+GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_destroy(
+    _In_opt_ gvfg_preview_handle handle);
 
 /*
  * Attach a native window handle for preview output.
  *
  * On Windows, native_window_handle is an HWND.
  */
-GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_attach_window(gvfg_preview_handle handle,
-                                                                  void *native_window_handle);
+GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_attach_window(
+    _In_ gvfg_preview_handle handle,
+    _In_ void *native_window_handle);
 
 /*
  * Synchronously render one frame.
@@ -63,15 +67,19 @@ GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_attach_window(gvfg_preview_h
  * The frame remains owned by gvfg.dll. The caller should call this between
  * gvfg_read_frame() and gvfg_release_frame().
  */
-GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_render_frame(gvfg_preview_handle handle,
-                                                                 const gvfg_frame_t *frame);
+GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_render_frame(
+    _In_ gvfg_preview_handle handle,
+    _In_ const gvfg_frame_t *frame);
 
-GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_get_info(gvfg_preview_handle handle,
-                                                             gvfg_preview_info_t *out_info);
+GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_get_info(
+    _In_ gvfg_preview_handle handle,
+    _Out_ gvfg_preview_info_t *out_info);
 
-GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_shutdown(gvfg_preview_handle handle);
+GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_shutdown(
+    _In_ gvfg_preview_handle handle);
 
-GVFG_PREVIEW_API const char *gvfg_preview_strerror(gvfg_preview_status_t status);
+GVFG_PREVIEW_API const char *gvfg_preview_strerror(
+    _In_ gvfg_preview_status_t status);
 
 #ifdef __cplusplus
 }

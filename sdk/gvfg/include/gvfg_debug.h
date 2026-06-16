@@ -56,25 +56,28 @@ typedef struct
  * This exposes implementation-level counters for internal tools only. Customer
  * applications should use gvfg_get_runtime_info() instead.
  */
-GVFG_API gvfg_status_t gvfg_debug_get_backend_stats(gvfg_handle handle,
-                                                    gvfg_debug_backend_stats_t *out_stats);
+GVFG_API gvfg_status_t gvfg_debug_get_backend_stats(
+    _In_ gvfg_handle handle,
+    _Out_ gvfg_debug_backend_stats_t *out_stats);
 
 /*
  * Query raw FPGA signal values for internal hardware/FPGA debugging.
  *
  * These values are intentionally excluded from gvfg_capture.h.
  */
-GVFG_API gvfg_status_t gvfg_debug_get_fpga_signal_raw(gvfg_handle handle,
-                                                      gvfg_debug_fpga_signal_raw_t *out_raw);
+GVFG_API gvfg_status_t gvfg_debug_get_fpga_signal_raw(
+    _In_ gvfg_handle handle,
+    _Out_ gvfg_debug_fpga_signal_raw_t *out_raw);
 
 /*
  * Copy the latest backend error detail into out_message.
  *
  * The message is UTF-8 and null-terminated when out_message_size is non-zero.
  */
-GVFG_API gvfg_status_t gvfg_debug_get_last_error_detail(gvfg_handle handle,
-                                                        char *out_message,
-                                                        uint32_t out_message_size);
+GVFG_API gvfg_status_t gvfg_debug_get_last_error_detail(
+    _In_ gvfg_handle handle,
+    _Out_writes_to_opt_(out_message_size, out_message_size) char *out_message,
+    _In_ uint32_t out_message_size);
 
 #ifdef __cplusplus
 }

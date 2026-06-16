@@ -1,13 +1,13 @@
-# GVFG Customer API
+# GVFG 客戶端 API
 
-This document describes the customer-facing GVFG capture API in
-`sdk/gvfg/include/gvfg_capture.h`.
+本文說明客戶端使用的 GVFG capture API，主要 public header 是
+`sdk/gvfg/include/gvfg_capture.h`。
 
-The customer SDK is capture-only. It does not expose SDK-managed preview,
-driver registers, DMA internals, or FPGA debug controls. Preview rendering is
-handled by internal applications or tools on top of frames returned by the SDK.
+Customer SDK 的 core API 只負責 capture。它不 expose SDK-managed preview、
+driver registers、DMA internals 或 FPGA debug controls。Preview rendering、
+snapshot conversion 這類功能放在 helper DLL，使用者需要時再另外 link。
 
-## Basic Flow
+## 基本流程
 
 ```text
 gvfg_enumerate_devices
@@ -23,12 +23,12 @@ gvfg_enumerate_devices
 -> gvfg_destroy
 ```
 
-## Threading
+## 執行緒模型
 
-The frame API is pull-based. The SDK does not start a customer frame thread or
-preview thread from the public API layer.
+Frame API 是 pull-based。Public API layer 不會替 customer 啟動 frame thread
+或 preview thread。
 
-Applications decide where to call `gvfg_read_frame()`:
+Application 自己決定在哪裡呼叫 `gvfg_read_frame()`：
 
 ```text
 UI app:
@@ -40,25 +40,25 @@ console/service app:
   call gvfg_read_frame() directly from its processing loop
 ```
 
-The backend may still use internal driver I/O workers while capture is running.
-Those are implementation details behind `gvfg.dll`.
+Backend 在 capture running 時可以有自己的 internal driver I/O workers，但那是
+`gvfg.dll` 背後的 implementation detail。
 
-## Frame Ownership
+## Frame 所有權
 
-`gvfg_read_frame()` returns one SDK-owned frame buffer.
+`gvfg_read_frame()` 會回傳一個 SDK-owned frame buffer。
 
-Rules:
+規則：
 
-- `frame.data` is valid until `gvfg_release_frame()` is called.
-- A handle may hold only one frame at a time.
-- If the application needs the data after release, it must copy the frame.
-- `gvfg_stop()` invalidates any unreleased frame.
+- `frame.data` 在呼叫 `gvfg_release_frame()` 前有效。
+- 同一個 handle 一次最多只能 hold 一個 frame。
+- Application 如果需要在 release 後繼續使用資料，必須自己 copy frame。
+- `gvfg_stop()` 會讓尚未 release 的 frame 失效。
 
-## Public Types
+## 公開型別
 
 ### `gvfg_handle`
 
-Opaque session handle.
+Opaque session handle。
 
 ```c
 typedef struct gvfg_handle_t *gvfg_handle;
@@ -66,7 +66,7 @@ typedef struct gvfg_handle_t *gvfg_handle;
 
 ### `gvfg_status_t`
 
-Common return status.
+共用 return status。
 
 ```c
 typedef enum
@@ -83,11 +83,11 @@ typedef enum
 
 ### `gvfg_device_info_t`
 
-Device entry returned by `gvfg_enumerate_devices()`.
+`gvfg_enumerate_devices()` 回傳的 device entry。
 
 ### `gvfg_signal_status_t`
 
-Customer-readable input signal status:
+Customer-readable input signal status：
 
 - width / height
 - video format text
@@ -95,13 +95,12 @@ Customer-readable input signal status:
 - bit depth
 - SDI / HDMI lock status
 
-Raw FPGA values, register-like values, and validity masks are internal debug
-data and are available only through `gvfg_debug.h` in the internal debug
-package.
+Raw FPGA values、register-like values、validity masks 都是 internal debug data，
+只應透過 internal debug package 裡的 `gvfg_debug.h` 提供。
 
 ### `gvfg_frame_t`
 
-Frame returned by `gvfg_read_frame()`.
+`gvfg_read_frame()` 回傳的 frame descriptor。
 
 ```c
 typedef struct
@@ -116,21 +115,110 @@ typedef struct
 } gvfg_frame_t;
 ```
 
+### `gvfg_frame_layout_t`
+
+由 `gvfg_get_frame_layout()` 回傳的 optional per-plane layout。
+
+```c
+typedef struct
+{
+    uint32_t struct_size;
+    uint32_t layout_flags;
+    int row_bytes;
+    int plane_count;
+    const void *plane_data[GVFG_MAX_PLANES];
+    int plane_stride[GVFG_MAX_PLANES];
+    uint64_t plane_size[GVFG_MAX_PLANES];
+    uint64_t plane_offset[GVFG_MAX_PLANES];
+    uint64_t reserved[8];
+} gvfg_frame_layout_t;
+```
+
+需要 row pitch 或 plane offset 的 application，應該在 `gvfg_read_frame()` 後呼叫
+`gvfg_get_frame_layout()`，並使用 `plane_data[]`、`plane_stride[]`、
+`plane_size[]`，不要自己用 width 和 pixel format 猜 stride。
+
+`gvfg_frame_t::data` 和 `data_size` 仍然描述整個 native buffer。`plane_offset[]`
+是從 `data` 開始算的 byte offset，未來 driver 如果回報 padded 或 non-default
+DMA layout，也可以在不改 `gvfg_frame_t` 的情況下支援。
+
+`layout_flags` 是 `gvfg_frame_layout_flags_t` bitmask。目前 backend 會設
+`GVFG_FRAME_LAYOUT_CONTIGUOUS` 和 `GVFG_FRAME_LAYOUT_SDK_DERIVED`，表示 planes
+位在同一個 native DMA buffer 裡，而且 pitch 是 SDK 依照 known native format
+推導出來的。Application 必須忽略 `reserved[]`。
+
+目前 tightly packed layout：
+
+- `YUY2` / `UYVY`：one plane，`plane_stride[0] = width * 2`。
+- `Y210`：one plane，`plane_stride[0] = width * 4`。
+- `RGB24`：one plane，`plane_stride[0] = width * 3`。
+- `YUV444`：one plane，8-bit 時 `width * 3`，>8-bit 時 `width * 6`。
+- `NV12`：two planes，Y 後接 interleaved UV，
+  `plane_stride[0] = plane_stride[1] = width`。
+- `P010`：two planes，Y 後接 interleaved UV，
+  `plane_stride[0] = plane_stride[1] = width * 2`。
+
+### `gvfg_convert_frame`
+
+Optional `gvfg_convert.dll` 使用的 helper-owned destination frame。
+
+```c
+typedef struct gvfg_convert_frame_t *gvfg_convert_frame;
+
+typedef struct
+{
+    uint32_t struct_size;
+    int width;
+    int height;
+    int pixel_format;
+    int row_bytes;
+    uint32_t flags;
+    uint32_t reserved0;
+    uint64_t data_size;
+    uint64_t reserved[8];
+} gvfg_convert_frame_desc_t;
+```
+
+這個設計接近 Blackmagic-style conversion：application 先建立 destination
+frame，再明確把 source frame convert 進去。Core capture API 仍然回傳
+hardware/native buffer，不會在 `gvfg_read_frame()` 裡偷偷轉格式。
+
+Snapshot 用途可以把 `width`、`height`、`row_bytes` 設成 0，讓 helper 依照
+captured source frame 自動決定大小。
+
+第一版 destination formats：
+
+- `GVFG_CONVERT_FMT_BGRA8`：8-bit BGRA，alpha 255。
+- `GVFG_CONVERT_FMT_RGB48`：16-bit RGB container，適合 10-bit-friendly snapshot。
+- `GVFG_CONVERT_FMT_RGBA64`：16-bit RGBA container，alpha 65535。
+
+第一版 conversions：
+
+- `YUY2 -> BGRA8 / RGB48 / RGBA64`
+- `Y210 -> BGRA8 / RGB48 / RGBA64`
+
+Conversion 使用 BT.709 limited-range YUV to RGB，和 preview path 對齊。其他
+source 或 destination format 會回傳 `GVFG_ENOTSUP`。
+
 ### `gvfg_event_t`
 
-Capture event returned by `gvfg_poll_event()`.
+`gvfg_poll_event()` 回傳的 capture event。
 
-Customer events are driver-neutral:
+Customer event 保持 driver-neutral：
 
 - `GVFG_EVENT_PLUG_IN`
 - `GVFG_EVENT_PLUG_OUT`
 - `GVFG_EVENT_CAPTURE_PAUSED`
 - `GVFG_EVENT_CAPTURE_RESUMED`
 
-Frame interrupts, IRQ bit numbers, and IRQ masks are internal details and are
-not exposed through `gvfg_capture.h`.
+Frame interrupts、IRQ bit numbers、IRQ masks 都是 internal details，不應出現在
+`gvfg_capture.h`。
 
-## Main APIs
+## 主要 API
+
+Public header 內的 function prototype 會使用 Windows SAL annotation，例如
+`_In_`、`_Out_`、`_Inout_` 來標示參數方向。以下文件中的 prototype 為了閱讀性會省略
+SAL；實際呼叫 API 時，application 不需要也不能額外傳入這些 annotation。
 
 ### `gvfg_enumerate_devices`
 
@@ -138,7 +226,7 @@ not exposed through `gvfg_capture.h`.
 int gvfg_enumerate_devices(gvfg_device_info_t *out_devices, int max_devices);
 ```
 
-Enumerates GVFG capture devices. Pass `NULL, 0` to query the device count.
+列舉 GVFG capture devices。傳 `NULL, 0` 可以只查詢 device count。
 
 ### `gvfg_create` / `gvfg_destroy`
 
@@ -147,8 +235,7 @@ gvfg_status_t gvfg_create(gvfg_handle *out_handle);
 gvfg_status_t gvfg_destroy(gvfg_handle handle);
 ```
 
-Creates or destroys a session handle. Destroying a running handle stops capture
-first.
+建立或銷毀 session handle。銷毀 running handle 時會先 stop capture。
 
 ### `gvfg_open`
 
@@ -156,7 +243,7 @@ first.
 gvfg_status_t gvfg_open(gvfg_handle handle, int device_index);
 ```
 
-Opens a device by index from `gvfg_enumerate_devices()`.
+用 `gvfg_enumerate_devices()` 得到的 device index 開啟 device。
 
 ### `gvfg_start` / `gvfg_stop`
 
@@ -165,8 +252,7 @@ gvfg_status_t gvfg_start(gvfg_handle handle);
 gvfg_status_t gvfg_stop(gvfg_handle handle);
 ```
 
-Starts or stops capture. After `gvfg_start()`, call `gvfg_read_frame()` to
-receive frames.
+開始或停止 capture。`gvfg_start()` 成功後，用 `gvfg_read_frame()` 取 frame。
 
 ### `gvfg_read_frame`
 
@@ -176,13 +262,95 @@ gvfg_status_t gvfg_read_frame(gvfg_handle handle,
                               uint32_t timeout_ms);
 ```
 
-Reads one frame. Use `timeout_ms == 0` to wait indefinitely.
+讀取一個 frame。`timeout_ms == 0` 表示 indefinite wait。
 
-Returns:
+回傳值：
 
-- `GVFG_OK` when a frame is available.
-- `GVFG_ETIMEOUT` when no frame arrives before the timeout.
-- `GVFG_ESTATE` when capture is not running or a previous frame is still held.
+- `GVFG_OK`：取得 frame。
+- `GVFG_ETIMEOUT`：timeout 前沒有 frame。
+- `GVFG_ESTATE`：capture 尚未 running，或上一個 frame 還沒 release。
+
+### `gvfg_get_frame_layout`
+
+```c
+gvfg_status_t gvfg_get_frame_layout(const gvfg_frame_t *frame,
+                                    gvfg_frame_layout_t *out_layout);
+```
+
+回傳 `gvfg_read_frame()` 取得 frame 的 per-plane layout。
+
+呼叫前先初始化 `out_layout->struct_size`：
+
+```c
+gvfg_frame_layout_t layout = {};
+layout.struct_size = sizeof(layout);
+gvfg_get_frame_layout(&frame, &layout);
+```
+
+回傳的 `plane_data[]` pointers 只在 `gvfg_release_frame()` 前有效。
+
+### `gvfg_convert_create_frame` / `gvfg_convert_destroy_frame`
+
+```c
+gvfg_status_t gvfg_convert_create_frame(const gvfg_convert_frame_desc_t *desc,
+                                        gvfg_convert_frame *out_frame);
+gvfg_status_t gvfg_convert_destroy_frame(gvfg_convert_frame frame);
+```
+
+建立或銷毀 helper-owned destination frame。Caller 主要設定
+`desc.pixel_format`；`width`、`height`、`row_bytes` 可以是 0，讓
+`gvfg_convert_frame_from_capture()` 依照 source frame 自動 configure。
+
+### `gvfg_convert_frame_from_capture`
+
+```c
+gvfg_status_t gvfg_convert_frame_from_capture(const gvfg_frame_t *src,
+                                              gvfg_convert_frame dst_frame);
+```
+
+把 captured native frame 轉進 helper-owned destination frame。這不會改變
+capture output format。
+
+Snapshot buffer flow 範例：
+
+```c
+#include <gvfg_capture.h>
+#include <gvfg_convert.h>
+
+gvfg_frame_t frame = {};
+if (gvfg_read_frame(h, &frame, 1000) == GVFG_OK) {
+    gvfg_convert_frame_desc_t desc = {};
+    desc.struct_size = sizeof(desc);
+    desc.pixel_format = GVFG_CONVERT_FMT_RGB48;
+
+    gvfg_convert_frame image = NULL;
+    if (gvfg_convert_create_frame(&desc, &image) == GVFG_OK &&
+        gvfg_convert_frame_from_capture(&frame, image) == GVFG_OK) {
+        const void *data = NULL;
+        uint64_t size = 0;
+        gvfg_convert_get_buffer(image, &data, &size);
+        /* data contains RGB48 rows; query layout for row_bytes. */
+    }
+
+    gvfg_convert_destroy_frame(image);
+    gvfg_release_frame(h, &frame);
+}
+```
+
+### `gvfg_convert_get_frame_desc` / `gvfg_convert_get_buffer` / `gvfg_convert_get_layout`
+
+```c
+gvfg_status_t gvfg_convert_get_frame_desc(gvfg_convert_frame frame,
+                                          gvfg_convert_frame_desc_t *out_desc);
+gvfg_status_t gvfg_convert_get_buffer(gvfg_convert_frame frame,
+                                      const void **out_data,
+                                      uint64_t *out_size);
+gvfg_status_t gvfg_convert_get_layout(gvfg_convert_frame frame,
+                                      gvfg_frame_layout_t *out_layout);
+```
+
+在 `gvfg_convert_frame_from_capture()` 後，用這些 API 取得 converted image
+buffer、metadata 和 row stride。
 
 ### `gvfg_release_frame`
 
@@ -191,7 +359,7 @@ gvfg_status_t gvfg_release_frame(gvfg_handle handle,
                                  const gvfg_frame_t *frame);
 ```
 
-Releases the frame returned by `gvfg_read_frame()`.
+Release `gvfg_read_frame()` 回傳的 frame。
 
 ### `gvfg_poll_event`
 
@@ -201,7 +369,7 @@ gvfg_status_t gvfg_poll_event(gvfg_handle handle,
                               uint32_t timeout_ms);
 ```
 
-Polls one event. Use `timeout_ms == 0` for a non-blocking poll.
+Poll 一個 event。`timeout_ms == 0` 表示 non-blocking poll。
 
 ### `gvfg_get_signal_status`
 
@@ -210,7 +378,7 @@ gvfg_status_t gvfg_get_signal_status(gvfg_handle handle,
                                      gvfg_signal_status_t *out_status);
 ```
 
-Queries current input signal metadata.
+查詢目前 input signal metadata。
 
 ### `gvfg_get_runtime_info`
 
@@ -219,14 +387,13 @@ gvfg_status_t gvfg_get_runtime_info(gvfg_handle handle,
                                     gvfg_runtime_info_t *out_info);
 ```
 
-Queries current signal status, last read frame format, FPS, and delivered frame
-count.
+查詢目前 signal status、last read frame format、FPS、delivered frame count。
 
-## Preview Boundary
+## Preview 邊界
 
-Preview is not part of the core capture SDK API.
+Preview 不是 core capture SDK API 的一部分。
 
-Applications have two choices after `gvfg_read_frame()` returns a frame:
+Application 在 `gvfg_read_frame()` 回傳 frame 後有幾種選擇：
 
 ```text
 gvfg_read_frame
@@ -235,6 +402,6 @@ gvfg_read_frame
 -> gvfg_release_frame
 ```
 
-Customer demo source may include `gvfg_preview.h` and link `gvfg_preview.dll`
-when it needs a simple display path. The preview helper source remains private;
-customer code only sees the helper API and binary.
+Customer demo source 需要簡單 display path 時，可以 include `gvfg_preview.h`
+並 link `gvfg_preview.dll`。Preview helper source 保持 private；customer code
+只看到 helper API 和 binary。

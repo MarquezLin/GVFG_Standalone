@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <climits>
 #include <condition_variable>
 #include <cstdio>
 #include <cstring>
@@ -170,6 +171,149 @@ namespace
         default:
             return "UNKNOWN";
         }
+    }
+
+    bool checked_mul_u64(uint64_t a, uint64_t b, uint64_t &out)
+    {
+        if (a != 0 && b > UINT64_MAX / a)
+            return false;
+        out = a * b;
+        return true;
+    }
+
+    bool checked_add_u64(uint64_t a, uint64_t b, uint64_t &out)
+    {
+        if (b > UINT64_MAX - a)
+            return false;
+        out = a + b;
+        return true;
+    }
+
+    bool set_frame_plane(const gvfg_frame_t &frame,
+                         gvfg_frame_layout_t &layout,
+                         int index,
+                         uint64_t offset,
+                         uint64_t size,
+                         int stride)
+    {
+        if (index < 0 || index >= GVFG_MAX_PLANES || !frame.data || stride < 0)
+            return false;
+
+        uint64_t end = 0;
+        if (!checked_add_u64(offset, size, end) || end > frame.data_size)
+            return false;
+
+        layout.plane_data[index] = static_cast<const uint8_t *>(frame.data) + offset;
+        layout.plane_offset[index] = offset;
+        layout.plane_size[index] = size;
+        layout.plane_stride[index] = stride;
+        return true;
+    }
+
+    void set_fallback_frame_layout(const gvfg_frame_t &frame, gvfg_frame_layout_t &layout)
+    {
+        layout.row_bytes = 0;
+        layout.plane_count = frame.data ? 1 : 0;
+        layout.layout_flags = 0;
+        if (layout.plane_count == 0)
+            return;
+
+        int stride = 0;
+        if (frame.height > 0)
+        {
+            const uint64_t guessedStride = frame.data_size / static_cast<uint64_t>(frame.height);
+            if (guessedStride <= static_cast<uint64_t>(INT_MAX))
+                stride = static_cast<int>(guessedStride);
+        }
+
+        layout.row_bytes = stride;
+        if (set_frame_plane(frame, layout, 0, 0, frame.data_size, stride))
+            layout.layout_flags = GVFG_FRAME_LAYOUT_CONTIGUOUS | GVFG_FRAME_LAYOUT_SDK_DERIVED;
+    }
+
+    gvfg_status_t populate_frame_layout(const gvfg_frame_t &frame, gvfg_frame_layout_t &layout)
+    {
+        layout.layout_flags = 0;
+        layout.row_bytes = 0;
+        layout.plane_count = 0;
+        std::memset(layout.plane_data, 0, sizeof(layout.plane_data));
+        std::memset(layout.plane_stride, 0, sizeof(layout.plane_stride));
+        std::memset(layout.plane_size, 0, sizeof(layout.plane_size));
+        std::memset(layout.plane_offset, 0, sizeof(layout.plane_offset));
+        std::memset(layout.reserved, 0, sizeof(layout.reserved));
+
+        if (!frame.data || frame.data_size == 0 || frame.width <= 0 || frame.height <= 0)
+            return GVFG_EINVAL;
+
+        const uint64_t width = static_cast<uint64_t>(frame.width);
+        const uint64_t height = static_cast<uint64_t>(frame.height);
+        uint64_t row = 0;
+        uint64_t size0 = 0;
+        uint64_t size1 = 0;
+
+        switch (frame.pixel_format)
+        {
+        case GVFG_PIXFMT_YUY2:
+        case GVFG_PIXFMT_UYVY:
+            if (!checked_mul_u64(width, 2u, row) || !checked_mul_u64(row, height, size0))
+                break;
+            if (row <= static_cast<uint64_t>(INT_MAX) && set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)))
+                layout.plane_count = 1;
+            break;
+        case GVFG_PIXFMT_Y210:
+        case GVFG_PIXFMT_BGRX32:
+        case GVFG_PIXFMT_BGRA8:
+            if (!checked_mul_u64(width, 4u, row) || !checked_mul_u64(row, height, size0))
+                break;
+            if (row <= static_cast<uint64_t>(INT_MAX) && set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)))
+                layout.plane_count = 1;
+            break;
+        case GVFG_PIXFMT_RGB24:
+            if (!checked_mul_u64(width, 3u, row) || !checked_mul_u64(row, height, size0))
+                break;
+            if (row <= static_cast<uint64_t>(INT_MAX) && set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)))
+                layout.plane_count = 1;
+            break;
+        case GVFG_PIXFMT_YUV444:
+            if (!checked_mul_u64(width, frame.bit_depth > 8 ? 6u : 3u, row) ||
+                !checked_mul_u64(row, height, size0))
+                break;
+            if (row <= static_cast<uint64_t>(INT_MAX) && set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)))
+                layout.plane_count = 1;
+            break;
+        case GVFG_PIXFMT_NV12:
+            row = width;
+            if (!checked_mul_u64(row, height, size0) ||
+                !checked_mul_u64(row, height / 2u, size1))
+                break;
+            if (row <= static_cast<uint64_t>(INT_MAX) &&
+                set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)) &&
+                set_frame_plane(frame, layout, 1, size0, size1, static_cast<int>(row)))
+                layout.plane_count = 2;
+            break;
+        case GVFG_PIXFMT_P010:
+            if (!checked_mul_u64(width, 2u, row) ||
+                !checked_mul_u64(row, height, size0) ||
+                !checked_mul_u64(row, height / 2u, size1))
+                break;
+            if (row <= static_cast<uint64_t>(INT_MAX) &&
+                set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)) &&
+                set_frame_plane(frame, layout, 1, size0, size1, static_cast<int>(row)))
+                layout.plane_count = 2;
+            break;
+        default:
+            break;
+        }
+
+        if (layout.plane_count > 0)
+        {
+            layout.row_bytes = layout.plane_stride[0];
+            layout.layout_flags = GVFG_FRAME_LAYOUT_CONTIGUOUS | GVFG_FRAME_LAYOUT_SDK_DERIVED;
+            return GVFG_OK;
+        }
+
+        set_fallback_frame_layout(frame, layout);
+        return layout.plane_count > 0 ? GVFG_OK : GVFG_ENOTSUP;
     }
 
     const char *fpga_video_format_name(uint32_t value)
@@ -828,6 +972,20 @@ extern "C"
         if (!handle || !out_frame)
             return GVFG_EINVAL;
         return handle->readFrame(*out_frame, timeout_ms);
+    }
+
+    gvfg_status_t gvfg_get_frame_layout(const gvfg_frame_t *frame,
+                                        gvfg_frame_layout_t *out_layout)
+    {
+        if (!frame || !out_layout)
+            return GVFG_EINVAL;
+        if (out_layout->struct_size < sizeof(gvfg_frame_layout_t))
+            return GVFG_EINVAL;
+
+        const uint32_t callerSize = out_layout->struct_size;
+        std::memset(out_layout, 0, sizeof(*out_layout));
+        out_layout->struct_size = callerSize;
+        return populate_frame_layout(*frame, *out_layout);
     }
 
     gvfg_status_t gvfg_release_frame(gvfg_handle handle, const gvfg_frame_t *frame)

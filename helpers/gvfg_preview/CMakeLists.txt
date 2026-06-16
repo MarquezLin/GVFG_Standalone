@@ -26,6 +26,7 @@ target_compile_definitions(gvfg_preview PRIVATE
 )
 
 target_link_libraries(gvfg_preview PRIVATE
+    gvfg
     user32
     dxgi
     d3d11

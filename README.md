@@ -1,54 +1,55 @@
 # GVFG Standalone SDK
 
-This is the standalone source tree for the GVFG capture SDK.
+這是 GVFG capture SDK 的 standalone source tree。
 
-GVFG is the source of truth here. Other projects should consume GVFG through
-the exported public header, import library, and runtime DLL instead of compiling
-the GVFG source directly.
+這個 repo 以 GVFG 為 source of truth。其他專案應該透過 public header、
+import library、runtime DLL 來使用 GVFG，不要直接把 GVFG source 編進去。
 
-## Contents
+## 內容
 
-- `sdk/gvfg`: GVFG customer C API, internal debug API, and XDMA backend.
-- `helpers/gvfg_preview`: optional preview helper DLL used after gvfg_read_frame().
-- `samples/gvfg_qt_preview`: internal debug Qt preview tool.
-- `docs`: API and integration notes.
+- `sdk/gvfg`：GVFG customer C API、internal debug API、XDMA backend。
+- `helpers/gvfg_preview`：可選的 preview helper DLL，在 `gvfg_read_frame()` 後使用。
+- `helpers/gvfg_convert`：可選的 snapshot/export conversion helper DLL。
+- `samples/gvfg_qt_preview`：內部 debug Qt preview tool。
+- `docs`：API 與整合說明。
 
-Customer-facing API details are in `docs/GVFG_CUSTOMER_API.md`. Internal
-architecture, package split, threading, and frame ownership notes are in
-`docs/GVFG_INTERNAL_NOTES.md`.
+客戶端 API 細節在 `docs/GVFG_CUSTOMER_API.md`。內部架構、package
+切分、threading、frame ownership 說明在 `docs/GVFG_INTERNAL_NOTES.md`。
 
 ## Build
 
-Open this folder's `CMakeLists.txt` in Qt Creator with a Windows MSVC Qt kit, or
-configure from a Visual Studio developer shell.
+可以用 Windows MSVC Qt kit 在 Qt Creator 打開此資料夾的 `CMakeLists.txt`，
+或在 Visual Studio developer shell 裡 configure。
 
-Example:
+範例：
 
 ```bat
 cmake -S . -B build -DBUILD_GVFG_SAMPLES=ON -DCMAKE_PREFIX_PATH=C:\Qt\6.10.2\msvc2022_64
 cmake --build build --target gvfg_qt_preview --config Release
 ```
 
-Useful CMake options:
+常用 CMake options：
 
 ```text
 BUILD_GVFG_SAMPLES=ON
 GVFG_XDMA_DEBUG_LOG=OFF
 ```
 
-Build outputs:
+Build 產物：
 
 ```text
 build/.../bin/gvfg.dll
 build/.../bin/gvfg_preview.dll
+build/.../bin/gvfg_convert.dll
 build/.../lib/gvfg.lib
 build/.../lib/gvfg_preview.lib
+build/.../lib/gvfg_convert.lib
 build/.../bin/gvfg_qt_preview.exe
 ```
 
 ## Consumer Layout
 
-Applications should consume the SDK with:
+一般 application 使用 core SDK 只需要：
 
 ```text
 include/gvfg_capture.h
@@ -56,7 +57,7 @@ lib/gvfg.lib
 bin/gvfg.dll
 ```
 
-Applications that want the optional display helper can also consume:
+需要 optional display helper 時，再加：
 
 ```text
 include/gvfg_preview.h
@@ -64,7 +65,14 @@ lib/gvfg_preview.lib
 bin/gvfg_preview.dll
 ```
 
-Customer/demo packages should not include `gvfg_debug.h`, SDK source, XDMA
-backend headers, IRQ details, raw FPGA values, or preview helper source. Those
-belong in the internal debug/full application packages.
+需要 snapshot/export conversion 時，再加：
 
+```text
+include/gvfg_convert.h
+lib/gvfg_convert.lib
+bin/gvfg_convert.dll
+```
+
+Customer/demo package 不應包含 `gvfg_debug.h`、SDK source、XDMA backend
+headers、IRQ details、raw FPGA values 或 helper source。這些只屬於 internal
+debug/full application package。

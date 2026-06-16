@@ -42,19 +42,43 @@ public:
         if (!ensureDevice() || !ensurePipeline(frame.width, frame.height, frame.bit_depth > 0 ? frame.bit_depth : 8))
             return false;
 
-        const auto *base = static_cast<const uint8_t *>(frame.data);
         gvfg::internal::gvfg_render_pixfmt_t renderFmt = gvfg::internal::GVFG_RENDER_FMT_YUY2;
+        const uint8_t *base = static_cast<const uint8_t *>(frame.data);
+        int stride = 0;
         bool uploaded = false;
 
         switch (frame.pixel_format)
         {
         case GVFG_PIXFMT_YUY2:
             renderFmt = gvfg::internal::GVFG_RENDER_FMT_YUY2;
-            uploaded = pipeline_->upload_yuy2_frame(base, frame.width * 2, frame.width, frame.height);
+            stride = frame.width * 2;
             break;
         case GVFG_PIXFMT_Y210:
             renderFmt = gvfg::internal::GVFG_RENDER_FMT_Y210;
-            uploaded = pipeline_->upload_y210_frame(base, frame.width * 4, frame.width, frame.height);
+            stride = frame.width * 4;
+            break;
+        default:
+            return false;
+        }
+
+        gvfg_frame_layout_t layout{};
+        layout.struct_size = sizeof(layout);
+        if (gvfg_get_frame_layout(&frame, &layout) == GVFG_OK &&
+            layout.plane_count > 0 &&
+            layout.plane_data[0] &&
+            layout.plane_stride[0] > 0)
+        {
+            base = static_cast<const uint8_t *>(layout.plane_data[0]);
+            stride = layout.plane_stride[0];
+        }
+
+        switch (frame.pixel_format)
+        {
+        case GVFG_PIXFMT_YUY2:
+            uploaded = pipeline_->upload_yuy2_frame(base, stride, frame.width, frame.height);
+            break;
+        case GVFG_PIXFMT_Y210:
+            uploaded = pipeline_->upload_y210_frame(base, stride, frame.width, frame.height);
             break;
         default:
             return false;

@@ -35,9 +35,8 @@
  * - At most one frame may be held by a handle at a time.
  */
 
-#include <stdint.h>
-
 #ifdef _WIN32
+#include <sal.h>
 #ifdef GVFG_BUILD
 #define GVFG_API __declspec(dllexport)
 #else
@@ -45,7 +44,30 @@
 #endif
 #else
 #define GVFG_API
+#ifndef _In_
+#define _In_
 #endif
+#ifndef _In_opt_
+#define _In_opt_
+#endif
+#ifndef _Inout_
+#define _Inout_
+#endif
+#ifndef _Out_
+#define _Out_
+#endif
+#ifndef _Outptr_
+#define _Outptr_
+#endif
+#ifndef _Out_writes_to_opt_
+#define _Out_writes_to_opt_(size, count)
+#endif
+#ifndef _Out_writes_z_
+#define _Out_writes_z_(size)
+#endif
+#endif
+
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -81,6 +103,12 @@ typedef enum
     GVFG_PIXFMT_YUV444 = 8,
     GVFG_PIXFMT_BGRA8 = 100
 } gvfg_pixel_format_t;
+
+typedef enum
+{
+    GVFG_FRAME_LAYOUT_CONTIGUOUS = 1u << 0,  /* Planes are contained inside one contiguous data buffer. */
+    GVFG_FRAME_LAYOUT_SDK_DERIVED = 1u << 1  /* Layout was derived by the SDK from the native format. */
+} gvfg_frame_layout_flags_t;
 
 typedef struct
 {
@@ -127,6 +155,19 @@ typedef struct
     uint64_t frame_id;      /* Monotonic frame identifier from the backend. */
 } gvfg_frame_t;
 
+typedef struct
+{
+    uint32_t struct_size;                    /* Set to sizeof(gvfg_frame_layout_t) before calling. */
+    uint32_t layout_flags;                   /* Bitmask of gvfg_frame_layout_flags_t values. */
+    int row_bytes;                           /* Bytes per row for plane 0. Prefer plane_stride[] for new code. */
+    int plane_count;                         /* Number of valid entries in plane_data/plane_stride/plane_size. */
+    const void *plane_data[GVFG_MAX_PLANES]; /* Plane pointers inside frame.data, valid until gvfg_release_frame(). */
+    int plane_stride[GVFG_MAX_PLANES];       /* Bytes from one row to the next for each plane. */
+    uint64_t plane_size[GVFG_MAX_PLANES];    /* Bytes available in each plane. */
+    uint64_t plane_offset[GVFG_MAX_PLANES];  /* Byte offset from frame.data to each plane. */
+    uint64_t reserved[8];                    /* Reserved for future SDK/driver layout metadata. Must be ignored. */
+} gvfg_frame_layout_t;
+
 typedef enum
 {
     GVFG_EVENT_UNKNOWN = 0,
@@ -160,7 +201,9 @@ typedef struct gvfg_handle_t *gvfg_handle;
  *   available devices.
  * - Returns <= 0 when no device is available.
  */
-GVFG_API int gvfg_enumerate_devices(gvfg_device_info_t *out_devices, int max_devices);
+GVFG_API int gvfg_enumerate_devices(
+    _Out_writes_to_opt_(max_devices, return) gvfg_device_info_t *out_devices,
+    _In_ int max_devices);
 
 /*
  * Create a GVFG capture session.
@@ -175,7 +218,8 @@ GVFG_API int gvfg_enumerate_devices(gvfg_device_info_t *out_devices, int max_dev
  * The returned handle starts in the closed state. Release it with
  * gvfg_destroy().
  */
-GVFG_API gvfg_status_t gvfg_create(gvfg_handle *out_handle);
+GVFG_API gvfg_status_t gvfg_create(
+    _Outptr_ gvfg_handle *out_handle);
 
 /*
  * Destroy a GVFG capture session.
@@ -189,7 +233,8 @@ GVFG_API gvfg_status_t gvfg_create(gvfg_handle *out_handle);
  * If capture is still running, it is stopped first. After this call, the handle
  * must not be used again.
  */
-GVFG_API gvfg_status_t gvfg_destroy(gvfg_handle handle);
+GVFG_API gvfg_status_t gvfg_destroy(
+    _In_opt_ gvfg_handle handle);
 
 /*
  * Open a device by index from gvfg_enumerate_devices().
@@ -206,7 +251,9 @@ GVFG_API gvfg_status_t gvfg_destroy(gvfg_handle handle);
  *
  * The current implementation selects the SDI input internally.
  */
-GVFG_API gvfg_status_t gvfg_open(gvfg_handle handle, int device_index);
+GVFG_API gvfg_status_t gvfg_open(
+    _In_ gvfg_handle handle,
+    _In_ int device_index);
 
 /*
  * Configure and start capture on an opened device.
@@ -223,7 +270,8 @@ GVFG_API gvfg_status_t gvfg_open(gvfg_handle handle, int device_index);
  * After success, call gvfg_read_frame() to receive frames and gvfg_poll_event()
  * to receive capture events.
  */
-GVFG_API gvfg_status_t gvfg_start(gvfg_handle handle);
+GVFG_API gvfg_status_t gvfg_start(
+    _In_ gvfg_handle handle);
 
 /*
  * Read one captured frame.
@@ -244,9 +292,31 @@ GVFG_API gvfg_status_t gvfg_start(gvfg_handle handle);
  * The returned data pointer is owned by the SDK and remains valid until
  * gvfg_release_frame() is called. A handle may hold only one frame at a time.
  */
-GVFG_API gvfg_status_t gvfg_read_frame(gvfg_handle handle,
-                                       gvfg_frame_t *out_frame,
-                                       uint32_t timeout_ms);
+GVFG_API gvfg_status_t gvfg_read_frame(
+    _In_ gvfg_handle handle,
+    _Out_ gvfg_frame_t *out_frame,
+    _In_ uint32_t timeout_ms);
+
+/*
+ * Query per-plane layout for a frame returned by gvfg_read_frame().
+ *
+ * Parameters:
+ * - frame: Frame descriptor returned by gvfg_read_frame(). Must not be NULL.
+ * - out_layout: Receives plane pointers, strides, sizes, and offsets. Must not
+ *   be NULL. Set out_layout->struct_size to sizeof(gvfg_frame_layout_t) before
+ *   calling so future SDKs can safely extend this struct.
+ *
+ * Returns:
+ * - GVFG_OK on success.
+ * - GVFG_EINVAL if frame/out_layout is NULL or struct_size is too small.
+ * - GVFG_ENOTSUP if the SDK cannot describe the frame layout.
+ *
+ * The returned plane_data pointers are owned by the SDK and remain valid only
+ * until gvfg_release_frame() is called for the source frame.
+ */
+GVFG_API gvfg_status_t gvfg_get_frame_layout(
+    _In_ const gvfg_frame_t *frame,
+    _Inout_ gvfg_frame_layout_t *out_layout);
 
 /*
  * Release a frame returned by gvfg_read_frame().
@@ -261,8 +331,9 @@ GVFG_API gvfg_status_t gvfg_read_frame(gvfg_handle handle,
  * - GVFG_EINVAL if handle or frame is NULL.
  * - GVFG_ESTATE if no frame is currently held.
  */
-GVFG_API gvfg_status_t gvfg_release_frame(gvfg_handle handle,
-                                          const gvfg_frame_t *frame);
+GVFG_API gvfg_status_t gvfg_release_frame(
+    _In_ gvfg_handle handle,
+    _In_ const gvfg_frame_t *frame);
 
 /*
  * Poll one capture event.
@@ -277,9 +348,10 @@ GVFG_API gvfg_status_t gvfg_release_frame(gvfg_handle handle,
  * - GVFG_EINVAL if handle or out_event is NULL.
  * - GVFG_ETIMEOUT if no event is available before timeout_ms expires.
  */
-GVFG_API gvfg_status_t gvfg_poll_event(gvfg_handle handle,
-                                       gvfg_event_t *out_event,
-                                       uint32_t timeout_ms);
+GVFG_API gvfg_status_t gvfg_poll_event(
+    _In_ gvfg_handle handle,
+    _Out_ gvfg_event_t *out_event,
+    _In_ uint32_t timeout_ms);
 
 /*
  * Stop capture.
@@ -293,7 +365,8 @@ GVFG_API gvfg_status_t gvfg_poll_event(gvfg_handle handle,
  *
  * This stops backend capture and invalidates any unreleased frame.
  */
-GVFG_API gvfg_status_t gvfg_stop(gvfg_handle handle);
+GVFG_API gvfg_status_t gvfg_stop(
+    _In_ gvfg_handle handle);
 
 /*
  * Query current signal information and delivered buffer format.
@@ -309,7 +382,9 @@ GVFG_API gvfg_status_t gvfg_stop(gvfg_handle handle);
  *
  * Use gvfg_runtime_info_t::last_frame for the frame buffer format.
  */
-GVFG_API gvfg_status_t gvfg_get_signal_status(gvfg_handle handle, gvfg_signal_status_t *out_status);
+GVFG_API gvfg_status_t gvfg_get_signal_status(
+    _In_ gvfg_handle handle,
+    _Out_ gvfg_signal_status_t *out_status);
 
 /*
  * Query runtime capture diagnostics.
@@ -325,7 +400,9 @@ GVFG_API gvfg_status_t gvfg_get_signal_status(gvfg_handle handle, gvfg_signal_st
  * The result includes current signal status, SDK-measured capture FPS, and the
  * number of frames delivered by the SDK.
  */
-GVFG_API gvfg_status_t gvfg_get_runtime_info(gvfg_handle handle, gvfg_runtime_info_t *out_info);
+GVFG_API gvfg_status_t gvfg_get_runtime_info(
+    _In_ gvfg_handle handle,
+    _Out_ gvfg_runtime_info_t *out_info);
 
 /*
  * Convert a GVFG status code to a static English error string.
@@ -336,7 +413,8 @@ GVFG_API gvfg_status_t gvfg_get_runtime_info(gvfg_handle handle, gvfg_runtime_in
  * Returns:
  * - Static null-terminated English string. The caller must not free it.
  */
-GVFG_API const char *gvfg_strerror(gvfg_status_t status);
+GVFG_API const char *gvfg_strerror(
+    _In_ gvfg_status_t status);
 
 #ifdef __cplusplus
 }

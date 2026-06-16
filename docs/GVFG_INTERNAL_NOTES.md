@@ -1,11 +1,11 @@
 # GVFG Internal Notes
 
-This document is the internal engineering map for the standalone GVFG SDK.
-Customer-facing API details live in `docs/GVFG_CUSTOMER_API.md`.
+這份文件是 standalone GVFG SDK 的內部工程地圖。客戶端 API 細節請看
+`docs/GVFG_CUSTOMER_API.md`。
 
-## Current Direction
+## 目前方向
 
-GVFG is split into three clear pieces:
+GVFG 目前切成幾個清楚的模組：
 
 ```text
 sdk/gvfg/
@@ -16,15 +16,19 @@ helpers/gvfg_preview/
   gvfg_preview.dll
   optional display helper; renders gvfg_frame_t after gvfg_read_frame()
 
+helpers/gvfg_convert/
+  gvfg_convert.dll
+  optional snapshot/export helper; converts native capture frames on request
+
 samples/gvfg_qt_preview/
   internal debug Qt tool
   uses gvfg.dll + gvfg_preview.dll + gvfg_debug.h
 ```
 
-The core SDK must stay driver-neutral from the customer's point of view.
-XDMA, IRQ, DMA counters, raw FPGA values, and backend details are internal.
+從 customer 角度看，core SDK 必須維持 driver-neutral。XDMA、IRQ、DMA counters、
+raw FPGA values、backend details 都是 internal。
 
-## Architecture
+## 架構
 
 ```mermaid
 flowchart TD
@@ -36,6 +40,11 @@ flowchart TD
     subgraph Preview["Optional Preview Helper: gvfg_preview.dll"]
         PreviewApi["helpers/gvfg_preview/include/gvfg_preview.h"]
         PreviewPipe["private D3D preview pipeline"]
+    end
+
+    subgraph Convert["Optional Convert Helper: gvfg_convert.dll"]
+        ConvertApi["helpers/gvfg_convert/include/gvfg_convert.h"]
+        ConvertPipe["private CPU/GPU conversion path"]
     end
 
     subgraph SDK["Core SDK: gvfg.dll"]
@@ -52,10 +61,13 @@ flowchart TD
 
     CustomerApp --> CaptureApi
     CustomerApp -. optional display .-> PreviewApi
+    CustomerApp -. optional snapshot .-> ConvertApi
     QtApp --> CaptureApi
     QtApp --> DebugApi
     QtApp --> PreviewApi
     PreviewApi --> PreviewPipe
+    ConvertApi --> ConvertPipe
+    ConvertApi --> CaptureApi
     CaptureApi --> Facade
     DebugApi --> Facade
     Facade --> Xdma
@@ -63,9 +75,9 @@ flowchart TD
     Workers --> Ring
 ```
 
-## Capture Flow
+## Capture 流程
 
-The capture API follows an FFmpeg-style pull model:
+Capture API 採 FFmpeg-style pull model：
 
 ```text
 gvfg_enumerate_devices
@@ -81,19 +93,27 @@ gvfg_enumerate_devices
 -> gvfg_destroy
 ```
 
-`gvfg.dll` does not own the application's public read thread. UI apps should
-create their own worker thread and call `gvfg_read_frame()` there.
+`gvfg.dll` 不擁有 application 的 public read thread。UI app 應該自己建立 worker
+thread，並在那個 thread 呼叫 `gvfg_read_frame()`。
 
-## Frame Ownership
+## Frame 所有權
 
-- `gvfg_read_frame()` returns one SDK-owned frame buffer.
-- `frame.data` remains valid until `gvfg_release_frame()` is called.
-- A handle may hold only one frame at a time.
-- If the application needs data after release, it must copy the frame.
-- `gvfg_preview_render_frame()` is synchronous and should be called before
-  `gvfg_release_frame()`.
+- `gvfg_read_frame()` 回傳一個 SDK-owned frame buffer。
+- `frame.data` 在 `gvfg_release_frame()` 前有效。
+- `gvfg_frame_t` 要保持 ABI-stable；不要為了 layout 直接 append fields。
+- `gvfg_get_frame_layout()` 回傳 SDK-filled layout metadata：`plane_data`、
+  `plane_stride`、`plane_size`、`plane_offset`。目前 XDMA backend 先用
+  width/height/format 推導 tightly packed layout；未來 driver 如果能回報真實
+  pitch 或 plane offsets，應該更新 layout query path，而不是改既有 frame struct。
+- `gvfg_preview.dll` 應優先吃 `gvfg_get_frame_layout()`；layout query 不可用時才
+  fallback 到 width-derived stride。
+- `gvfg_convert.dll` 負責 explicit snapshot/export conversion。不要把 color
+  conversion、image export、GPU conversion policy 搬進 `gvfg.dll`。
+- 同一個 handle 一次最多 hold 一個 frame。
+- Application 如果 release 後還要用 data，必須自己 copy frame。
+- `gvfg_preview_render_frame()` 是 synchronous，應該在 `gvfg_release_frame()` 前呼叫。
 
-Typical two-way use:
+Typical two-way use：
 
 ```text
 gvfg_read_frame
@@ -102,9 +122,9 @@ gvfg_read_frame
 -> gvfg_release_frame
 ```
 
-## Event Boundary
+## Event 邊界
 
-Customer events stay driver-neutral:
+Customer event 保持 driver-neutral：
 
 ```text
 GVFG_EVENT_PLUG_IN
@@ -113,20 +133,21 @@ GVFG_EVENT_CAPTURE_PAUSED
 GVFG_EVENT_CAPTURE_RESUMED
 ```
 
-Video IRQ handling is internal to `sdk/gvfg/src/backend/xdma`. IRQ bit numbers,
-IRQ masks, DMA counters, and raw FPGA register-like values should not appear in
-`gvfg_capture.h`.
+Video IRQ handling 是 `sdk/gvfg/src/backend/xdma` 內部細節。IRQ bit numbers、
+IRQ masks、DMA counters、raw FPGA register-like values 不應出現在
+`gvfg_capture.h`。
 
 ## API Surfaces
 
-Customer/demo visible:
+Customer/demo 可見：
 
 ```text
 include/gvfg_capture.h
 include/gvfg_preview.h when display helper is used
+include/gvfg_convert.h when snapshot/export conversion is used
 ```
 
-Internal debug only:
+Internal debug only：
 
 ```text
 include/gvfg_debug.h
@@ -139,29 +160,32 @@ PDB symbols
 internal diagnostic tools
 ```
 
-## Package Split
+## Package 切分
 
 ### Demo / Customer Package
 
-Include:
+Include：
 
 ```text
 include/gvfg_capture.h
 include/gvfg_preview.h when the demo shows video
+include/gvfg_convert.h when the demo exports snapshots
 lib/gvfg.lib
 lib/gvfg_preview.lib when the demo shows video
+lib/gvfg_convert.lib when the demo exports snapshots
 bin/gvfg.dll
 bin/gvfg_preview.dll when the demo shows video
+bin/gvfg_convert.dll when the demo exports snapshots
 samples/customer-facing source
 docs/GVFG_CUSTOMER_API.md
 ```
 
-Do not include:
+Do not include：
 
 ```text
 include/gvfg_debug.h
 SDK source
-preview helper source
+helper source
 XDMA backend headers
 PDB symbols
 register / DMA / IRQ debug docs
@@ -170,16 +194,19 @@ internal diagnostic tools
 
 ### Internal Debug Package
 
-Include:
+Include：
 
 ```text
 include/gvfg_capture.h
 include/gvfg_debug.h
 include/gvfg_preview.h
+include/gvfg_convert.h
 lib/gvfg.lib
 lib/gvfg_preview.lib
+lib/gvfg_convert.lib
 bin/gvfg.dll
 bin/gvfg_preview.dll
+bin/gvfg_convert.dll
 bin/gvfg_qt_preview.exe
 PDB symbols
 internal debug notes
@@ -187,41 +214,42 @@ internal debug notes
 
 ### Full Release Package
 
-The full application release can use `gvfg.dll` and `gvfg_preview.dll`, plus
-licensing and closed-source application integration. Do not use the full release
-package as the daily driver/FPGA bring-up vehicle.
+Full application release 可以使用 `gvfg.dll`、`gvfg_preview.dll` 和
+`gvfg_convert.dll`，再加上 licensing 與 closed-source application integration。
+不要把 full release package 當成 daily driver/FPGA bring-up vehicle。
 
 ## Build
 
-Top-level CMake builds the core SDK, preview helper, and optional sample:
+Top-level CMake 會 build core SDK、helpers 和 optional sample：
 
 ```text
 BUILD_GVFG_SAMPLES=ON
 GVFG_XDMA_DEBUG_LOG=OFF
 ```
 
-Outputs:
+輸出產物：
 
 ```text
 bin/gvfg.dll
 bin/gvfg_preview.dll
+bin/gvfg_convert.dll
 lib/gvfg.lib
 lib/gvfg_preview.lib
+lib/gvfg_convert.lib
 bin/gvfg_qt_preview.exe
 ```
 
-`GVFG_XDMA_DEBUG_LOG=ON` enables verbose XDMA flow logging in the internal
-backend.
+`GVFG_XDMA_DEBUG_LOG=ON` 會打開 internal backend 的 verbose XDMA flow logging。
 
 ## Draw.io Files
 
-Keep draw.io files for visual discussions:
+保留 draw.io files 方便討論圖：
 
 ```text
 docs/GVFG_ARCHITECTURE_OVERVIEW.drawio
 docs/GVFG_DMA_RING_DATA_FLOW.drawio
 ```
 
-When code changes only affect API order, package boundaries, or module
-ownership, update this Markdown file. Update draw.io only when the deeper data
-flow or frame ownership diagram changes.
+如果 code change 只影響 API order、package boundary 或 module ownership，更新這份
+Markdown 即可。只有 deeper data flow 或 frame ownership diagram 改變時，才需要更新
+draw.io。
