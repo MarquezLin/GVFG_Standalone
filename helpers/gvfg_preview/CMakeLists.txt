@@ -16,7 +16,6 @@ set_target_properties(gvfg_preview PROPERTIES
 target_include_directories(gvfg_preview
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_SOURCE_DIR}/sdk/gvfg/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
@@ -25,8 +24,10 @@ target_compile_definitions(gvfg_preview PRIVATE
     GVFG_PREVIEW_BUILD
 )
 
-target_link_libraries(gvfg_preview PRIVATE
+target_link_libraries(gvfg_preview
+    PUBLIC
     gvfg
+    PRIVATE
     user32
     dxgi
     d3d11

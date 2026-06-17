@@ -16,7 +16,6 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 option(BUILD_GVFG_SAMPLES "Build GVFG customer samples" ON)
-option(GVFG_XDMA_DEBUG_LOG "Enable verbose XDMA flow debug logging in GVFG internal XDMA backend" OFF)
 
 if (NOT WIN32)
   message(FATAL_ERROR "GVFG currently supports Windows only.")

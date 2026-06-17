@@ -36,10 +36,6 @@ target_link_libraries(gvfg_qt_preview PRIVATE
   gvfg_preview
 )
 
-target_include_directories(gvfg_qt_preview PRIVATE
-  ${CMAKE_SOURCE_DIR}/sdk/gvfg/include
-)
-
 if (MSVC)
   target_compile_options(gvfg_qt_preview PRIVATE /utf-8)
 endif()

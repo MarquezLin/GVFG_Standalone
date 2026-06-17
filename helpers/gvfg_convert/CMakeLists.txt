@@ -14,7 +14,6 @@ set_target_properties(gvfg_convert PROPERTIES
 target_include_directories(gvfg_convert
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_SOURCE_DIR}/sdk/gvfg/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
@@ -23,7 +22,7 @@ target_compile_definitions(gvfg_convert PRIVATE
     GVFG_CONVERT_BUILD
 )
 
-target_link_libraries(gvfg_convert PRIVATE
+target_link_libraries(gvfg_convert PUBLIC
     gvfg
 )
 

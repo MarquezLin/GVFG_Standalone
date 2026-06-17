@@ -878,14 +878,24 @@ namespace gvfg::internal
         return XDMA_OK;
     }
 
-    xdma_status_t XdmaCaptureSession::release_frame(const xdma_frame_t &)
+    xdma_status_t XdmaCaptureSession::release_frame(const xdma_frame_t &frame)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (active_delivery_slot_ < frame_ring_.size())
-        {
-            frame_ring_[active_delivery_slot_].in_use = false;
-            active_delivery_slot_ = static_cast<size_t>(-1);
-        }
+        if (active_delivery_slot_ >= frame_ring_.size())
+            return XDMA_ESTATE;
+
+        const FrameSlot &slot = frame_ring_[active_delivery_slot_];
+        if (frame.data != slot.data.data() ||
+            frame.data_size_bytes != slot.bytes ||
+            frame.frame_id != delivered_sequence_ ||
+            frame.width != stream_desc_.width ||
+            frame.height != stream_desc_.height ||
+            frame.pixel_format != stream_desc_.pixel_format ||
+            frame.bit_depth != stream_bit_depth_)
+            return XDMA_EINVAL;
+
+        frame_ring_[active_delivery_slot_].in_use = false;
+        active_delivery_slot_ = static_cast<size_t>(-1);
         data_cv_.notify_all();
         return XDMA_OK;
     }

@@ -699,22 +699,34 @@ struct gvfg_handle_t
         return GVFG_OK;
     }
 
-    gvfg_status_t releaseFrame(const gvfg_frame_t &)
+    gvfg_status_t releaseFrame(const gvfg_frame_t &frameToken)
     {
         if (!backend)
             return GVFG_ESTATE;
 
-        xdma_frame_t frame{};
         {
             std::lock_guard<std::mutex> lock(frameMutex);
             if (!frameHeld)
                 return GVFG_ESTATE;
-            frame = heldBackendFrame;
+
+            if (frameToken.data != heldBackendFrame.data ||
+                frameToken.data_size != static_cast<uint64_t>(heldBackendFrame.data_size_bytes) ||
+                frameToken.width != static_cast<int>(heldBackendFrame.width) ||
+                frameToken.height != static_cast<int>(heldBackendFrame.height) ||
+                frameToken.pixel_format != to_gvfg_pixel_format(heldBackendFrame.pixel_format) ||
+                frameToken.bit_depth != static_cast<int>(heldBackendFrame.bit_depth) ||
+                frameToken.frame_id != heldBackendFrame.frame_id)
+                return GVFG_EINVAL;
+
+            const xdma_status_t st = backend->release_frame(heldBackendFrame);
+            if (st != XDMA_OK)
+                return map_status(st);
+
             heldBackendFrame = {};
             frameHeld = false;
         }
 
-        return map_status(backend->release_frame(frame));
+        return GVFG_OK;
     }
 
     void releaseHeldFrameForStop()
