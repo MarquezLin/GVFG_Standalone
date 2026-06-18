@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <sstream>
@@ -157,25 +158,182 @@ namespace
         }
     }
 
+    static bool env_value_enabled(const char *value, bool defaultValue)
+    {
+        if (!value || !*value)
+            return defaultValue;
+
+        std::string s(value);
+        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c)
+                       { return static_cast<char>(std::tolower(c)); });
+        return !(s == "0" || s == "false" || s == "off" || s == "no");
+    }
+
+    static bool xdma_trace_default_enabled()
+    {
 #if defined(GVFG_XDMA_DEBUG_LOG)
-    static void xdma_debug_log(const char *fmt, ...)
-    {
-        char msg[1024] = {};
-        va_list args;
-        va_start(args, fmt);
-        vsnprintf(msg, sizeof(msg), fmt, args);
-        va_end(args);
-
-        char line[1152] = {};
-        snprintf(line, sizeof(line), "[GVFG][XDMA] %s\n", msg);
-        OutputDebugStringA(line);
-    }
-#define XDMA_LOG(...) xdma_debug_log(__VA_ARGS__)
+        return GVFG_XDMA_DEBUG_LOG != 0;
+#elif defined(_DEBUG)
+        return true;
 #else
-#define XDMA_LOG(...) ((void)0)
+        return false;
 #endif
+    }
 
-    static void xdma_hotplug_log(const char *fmt, ...)
+    class XdmaTraceSink
+    {
+    public:
+        XdmaTraceSink()
+            : enabled_(env_value_enabled(std::getenv("GVFG_XDMA_TRACE"), xdma_trace_default_enabled()))
+        {
+        }
+
+        ~XdmaTraceSink()
+        {
+            if (file_)
+                std::fclose(file_);
+        }
+
+        void write(bool forceDebugOutput, const char *tag, const char *message)
+        {
+            SYSTEMTIME st{};
+            GetLocalTime(&st);
+
+            char line[1400] = {};
+            std::snprintf(line,
+                          sizeof(line),
+                          "%04u-%02u-%02u %02u:%02u:%02u.%03u [tid=%lu] [GVFG][XDMA]%s %s\n",
+                          st.wYear,
+                          st.wMonth,
+                          st.wDay,
+                          st.wHour,
+                          st.wMinute,
+                          st.wSecond,
+                          st.wMilliseconds,
+                          GetCurrentThreadId(),
+                          tag ? tag : "",
+                          message ? message : "");
+
+            if (enabled_ || forceDebugOutput)
+                OutputDebugStringA(line);
+
+            if (!enabled_)
+                return;
+
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!open_locked())
+                return;
+
+            const size_t len = std::strlen(line);
+            if (bytes_written_ + len > kMaxTracePartBytes)
+            {
+                rotate_locked();
+                if (!open_locked())
+                    return;
+            }
+
+            std::fwrite(line, 1, len, file_);
+            std::fflush(file_);
+            bytes_written_ += len;
+        }
+
+    private:
+        static constexpr uint64_t kMaxTracePartBytes = 20ull * 1024ull * 1024ull;
+
+        static std::string make_base_path()
+        {
+            std::string dir;
+            if (const char *envDir = std::getenv("GVFG_XDMA_TRACE_DIR"); envDir && *envDir)
+            {
+                dir = envDir;
+            }
+            else
+            {
+                char exePath[MAX_PATH] = {};
+                const DWORD len = GetModuleFileNameA(nullptr, exePath, static_cast<DWORD>(sizeof(exePath)));
+                dir = ".";
+                if (len > 0 && len < sizeof(exePath))
+                {
+                    std::string path(exePath, exePath + len);
+                    const size_t slash = path.find_last_of("\\/");
+                    if (slash != std::string::npos)
+                        dir = path.substr(0, slash);
+                }
+                dir += "\\logs";
+            }
+
+            CreateDirectoryA(dir.c_str(), nullptr);
+
+            SYSTEMTIME st{};
+            GetLocalTime(&st);
+            char stamp[64] = {};
+            std::snprintf(stamp,
+                          sizeof(stamp),
+                          "%04u%02u%02u_%02u%02u%02u_pid%lu",
+                          st.wYear,
+                          st.wMonth,
+                          st.wDay,
+                          st.wHour,
+                          st.wMinute,
+                          st.wSecond,
+                          GetCurrentProcessId());
+
+            return dir + "\\gvfg_xdma_backend_" + stamp;
+        }
+
+        std::string part_path() const
+        {
+            char part[16] = {};
+            std::snprintf(part, sizeof(part), "_part%02u.log", part_index_);
+            return base_path_ + part;
+        }
+
+        bool open_locked()
+        {
+            if (file_)
+                return true;
+
+            if (base_path_.empty())
+                base_path_ = make_base_path();
+
+            const std::string path = part_path();
+            file_ = std::fopen(path.c_str(), "ab");
+            bytes_written_ = 0;
+            if (!file_)
+                return false;
+
+            std::fseek(file_, 0, SEEK_END);
+            const long pos = std::ftell(file_);
+            bytes_written_ = pos > 0 ? static_cast<uint64_t>(pos) : 0;
+            return true;
+        }
+
+        void rotate_locked()
+        {
+            if (file_)
+            {
+                std::fclose(file_);
+                file_ = nullptr;
+            }
+            bytes_written_ = 0;
+            ++part_index_;
+        }
+
+        bool enabled_ = false;
+        std::mutex mutex_;
+        std::FILE *file_ = nullptr;
+        uint64_t bytes_written_ = 0;
+        unsigned part_index_ = 1;
+        std::string base_path_;
+    };
+
+    static XdmaTraceSink &xdma_trace_sink()
+    {
+        static XdmaTraceSink sink;
+        return sink;
+    }
+
+    static void xdma_trace_log(bool forceDebugOutput, const char *tag, const char *fmt, ...)
     {
         char msg[1024] = {};
         va_list args;
@@ -183,11 +341,11 @@ namespace
         vsnprintf(msg, sizeof(msg), fmt, args);
         va_end(args);
 
-        char line[1152] = {};
-        snprintf(line, sizeof(line), "[GVFG][XDMA][hotplug] %s\n", msg);
-        OutputDebugStringA(line);
+        xdma_trace_sink().write(forceDebugOutput, tag, msg);
     }
-#define XDMA_HOTPLUG_LOG(...) xdma_hotplug_log(__VA_ARGS__)
+
+#define XDMA_LOG(...) xdma_trace_log(false, "", __VA_ARGS__)
+#define XDMA_HOTPLUG_LOG(...) xdma_trace_log(true, "[hotplug]", __VA_ARGS__)
 
     static std::string wide_to_utf8(const std::wstring &s)
     {
@@ -668,6 +826,11 @@ namespace gvfg::internal
         }
         save_frames_after_plug_in_.store(0);
         fix_pulsed_after_plug_in_.store(false);
+        last_video_irq_ns_.store(0, std::memory_order_relaxed);
+        last_irq_clear_ns_.store(0, std::memory_order_relaxed);
+        last_irq_enable_ns_.store(0, std::memory_order_relaxed);
+        last_irq_clear_ok_.store(0, std::memory_order_relaxed);
+        last_irq_enable_ok_.store(0, std::memory_order_relaxed);
 
         // Match CaptureDemo's hot-plug-safe startup order: make the event/data
         // workers ready first, then clear stale IRQs, toggle capture, and only
@@ -996,6 +1159,7 @@ namespace gvfg::internal
                 continue;
             }
 
+            last_video_irq_ns_.store(steady_now_ns(), std::memory_order_relaxed);
             uint32_t pending = 0;
             if (capture_active_)
             {
@@ -1035,8 +1199,46 @@ namespace gvfg::internal
             uint32_t pendingAfterPop = 0;
             {
                 std::unique_lock<std::mutex> lock(mutex_);
-                data_cv_.wait(lock, [this]()
-                              { return (capture_active_ && pending_events_ > 0) || !running_ || data_worker_stop_; });
+                while (running_ && !data_worker_stop_ && (!capture_active_ || pending_events_ == 0))
+                {
+                    if (data_cv_.wait_for(lock, std::chrono::seconds(1)) == std::cv_status::timeout)
+                    {
+                        const int active = capture_active_.load(std::memory_order_relaxed) ? 1 : 0;
+                        const uint32_t pending = pending_events_;
+                        const uint64_t latest = latest_sequence_;
+                        const uint64_t delivered = delivered_sequence_;
+                        const uint64_t captured = stats_.frames_captured;
+                        const uint64_t dropped = stats_.frames_dropped;
+                        const uint64_t nowNs = steady_now_ns();
+                        const uint64_t lastIrqNs = last_video_irq_ns_.load(std::memory_order_relaxed);
+                        const uint64_t lastClearNs = last_irq_clear_ns_.load(std::memory_order_relaxed);
+                        const uint64_t lastEnableNs = last_irq_enable_ns_.load(std::memory_order_relaxed);
+                        const int clearOk = last_irq_clear_ok_.load(std::memory_order_relaxed);
+                        const int enableOk = last_irq_enable_ok_.load(std::memory_order_relaxed);
+                        lock.unlock();
+                        uint32_t fpgaStatus = 0;
+                        uint32_t captureEnable = 0;
+                        const bool statusOk = read_user_reg(kFpgaStatusReg, fpgaStatus);
+                        const bool captureEnableOk = read_user_reg(capture_enable_reg(), captureEnable);
+                        XDMA_LOG("data_thread: heartbeat waiting_irq active=%d pending=%u latest=%llu delivered=%llu captured=%llu dropped=%llu irq_age_ms=%llu clear=%d/%llums enable=%d/%llums fpga_status=%d/0x%08x capture_enable=%d/0x%08x",
+                                 active,
+                                 pending,
+                                 static_cast<unsigned long long>(latest),
+                                 static_cast<unsigned long long>(delivered),
+                                 static_cast<unsigned long long>(captured),
+                                 static_cast<unsigned long long>(dropped),
+                                 static_cast<unsigned long long>(lastIrqNs == 0 ? UINT64_MAX : (nowNs - lastIrqNs) / 1000000ull),
+                                 clearOk,
+                                 static_cast<unsigned long long>(lastClearNs == 0 ? UINT64_MAX : (nowNs - lastClearNs) / 1000000ull),
+                                 enableOk,
+                                 static_cast<unsigned long long>(lastEnableNs == 0 ? UINT64_MAX : (nowNs - lastEnableNs) / 1000000ull),
+                                 statusOk ? 1 : 0,
+                                 fpgaStatus,
+                                 captureEnableOk ? 1 : 0,
+                                 captureEnable);
+                        lock.lock();
+                    }
+                }
                 if (!running_ || data_worker_stop_)
                     break;
                 if (!capture_active_)
@@ -1055,9 +1257,13 @@ namespace gvfg::internal
             // A VIDEO_INT means one frame is ready in C2H.  Acknowledge the FPGA
             // interrupt, re-enable XDMA user interrupt delivery, then read the
             // full video frame from c2h_N.
-            write_user_reg(kInterruptClearReg, video_event_mask());
-            write_user_reg(kInterruptClearReg, 0);
-            enable_user_event(video_event_mask());
+            const bool clearHighOk = write_user_reg(kInterruptClearReg, video_event_mask());
+            const bool clearLowOk = write_user_reg(kInterruptClearReg, 0);
+            last_irq_clear_ok_.store(clearHighOk && clearLowOk ? 1 : 0, std::memory_order_relaxed);
+            last_irq_clear_ns_.store(steady_now_ns(), std::memory_order_relaxed);
+            const bool enableOk = enable_user_event(video_event_mask());
+            last_irq_enable_ok_.store(enableOk ? 1 : 0, std::memory_order_relaxed);
+            last_irq_enable_ns_.store(steady_now_ns(), std::memory_order_relaxed);
 
             if (!capture_active_)
                 continue;
@@ -1067,17 +1273,38 @@ namespace gvfg::internal
             uint8_t *slotData = nullptr;
             {
                 std::unique_lock<std::mutex> lock(mutex_);
-                data_cv_.wait(lock, [this]()
-                              {
-                                  if (!running_ || data_worker_stop_)
-                                      return true;
-                                  for (const FrameSlot &slot : frame_ring_)
-                                  {
-                                      if (!slot.in_use)
-                                          return true;
-                                  }
-                                  return false;
-                              });
+                auto hasFreeSlot = [this]()
+                {
+                    for (const FrameSlot &slot : frame_ring_)
+                    {
+                        if (!slot.in_use)
+                            return true;
+                    }
+                    return false;
+                };
+                while (running_ && !data_worker_stop_ && !hasFreeSlot())
+                {
+                    if (data_cv_.wait_for(lock, std::chrono::seconds(1)) == std::cv_status::timeout)
+                    {
+                        const uint64_t activeSlot = active_delivery_slot_ == static_cast<size_t>(-1)
+                                                        ? UINT64_MAX
+                                                        : static_cast<uint64_t>(active_delivery_slot_);
+                        const uint64_t latest = latest_sequence_;
+                        const uint64_t delivered = delivered_sequence_;
+                        const uint64_t captured = stats_.frames_captured;
+                        const uint64_t dropped = stats_.frames_dropped;
+                        const uint64_t ringSize = static_cast<uint64_t>(frame_ring_.size());
+                        lock.unlock();
+                        XDMA_LOG("data_thread: heartbeat waiting_free_slot active_slot=%llu ring=%llu latest=%llu delivered=%llu captured=%llu dropped=%llu",
+                                 static_cast<unsigned long long>(activeSlot),
+                                 static_cast<unsigned long long>(ringSize),
+                                 static_cast<unsigned long long>(latest),
+                                 static_cast<unsigned long long>(delivered),
+                                 static_cast<unsigned long long>(captured),
+                                 static_cast<unsigned long long>(dropped));
+                        lock.lock();
+                    }
+                }
                 if (!running_ || data_worker_stop_)
                     break;
 
@@ -1153,6 +1380,7 @@ namespace gvfg::internal
                                            }
                                            catch (...)
                                            {
+                                               XDMA_LOG("data_thread: unhandled exception");
                                                running_ = false;
                                                capture_active_ = false;
                                                frame_cv_.notify_all();
@@ -1689,11 +1917,25 @@ namespace gvfg::internal
         return last_error_.c_str();
     }
 
-    void XdmaCaptureSession::get_debug_stats(xdma_stream_stats_t &outStats, uint64_t &outWaitTimeouts) const
+    void XdmaCaptureSession::get_debug_stats(xdma_stream_stats_t &outStats,
+                                             uint64_t &outWaitTimeouts,
+                                             xdma_debug_state_t &outDebugState) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
         outStats = stats_;
         outWaitTimeouts = wait_timeout_count_;
+        std::memset(&outDebugState, 0, sizeof(outDebugState));
+        outDebugState.running = running_.load(std::memory_order_relaxed) ? 1 : 0;
+        outDebugState.capture_active = capture_active_.load(std::memory_order_relaxed) ? 1 : 0;
+        outDebugState.data_worker_stop = data_worker_stop_.load(std::memory_order_relaxed) ? 1 : 0;
+        outDebugState.pending_events = pending_events_;
+        outDebugState.latest_sequence = latest_sequence_;
+        outDebugState.delivered_sequence = delivered_sequence_;
+        outDebugState.active_delivery_slot = active_delivery_slot_ == static_cast<size_t>(-1)
+                                                ? UINT64_MAX
+                                                : static_cast<uint64_t>(active_delivery_slot_);
+        outDebugState.next_write_slot = static_cast<uint64_t>(next_write_slot_);
+        outDebugState.ring_size = static_cast<uint64_t>(frame_ring_.size());
     }
 
     uint32_t XdmaCaptureSession::active_input_path() const

@@ -17,6 +17,7 @@ extern "C" {
 
 typedef struct
 {
+    uint32_t struct_size; /* Set to sizeof(gvfg_debug_backend_stats_t) before calling. */
     int sdk_running;
     int frame_held;
     uint32_t event_queue_depth;
@@ -35,6 +36,16 @@ typedef struct
     uint64_t backend_dma_errors;
     uint64_t backend_interrupt_count;
     uint64_t backend_wait_timeouts;
+
+    int backend_running;
+    int backend_capture_active;
+    int backend_data_worker_stop;
+    uint32_t backend_pending_events;
+    uint64_t backend_latest_sequence;
+    uint64_t backend_delivered_sequence;
+    uint64_t backend_active_delivery_slot; /* UINT64_MAX when no frame is held by the caller. */
+    uint64_t backend_next_write_slot;
+    uint64_t backend_ring_size;
 } gvfg_debug_backend_stats_t;
 
 typedef struct

@@ -1389,7 +1389,15 @@ bool D3DPreviewPipeline::ensure_preview_swapchain(int w, int h)
         }
 
         if (FAILED(hr) || !preview_swapchain_)
+        {
+            char err[320] = {};
+            std::snprintf(err, sizeof(err),
+                          "[SharedScene] preview swapchain create failed hr=0x%08X format=%s",
+                          static_cast<unsigned>(hr),
+                          ss_dxgi_format_name(sd.Format));
+            ssp_log_text(err);
             return false;
+        }
 
         preview_swapchain_format_ = sd.Format;
         preview_swapchain_10bit_ = (sd.Format == DXGI_FORMAT_R10G10B10A2_UNORM);
@@ -1417,7 +1425,17 @@ bool D3DPreviewPipeline::ensure_preview_swapchain(int w, int h)
             0);
 
         if (FAILED(hr))
+        {
+            char err[256] = {};
+            std::snprintf(err, sizeof(err),
+                          "[SharedScene] preview swapchain resize failed hr=0x%08X size=%dx%d",
+                          static_cast<unsigned>(hr),
+                          clientW,
+                          clientH);
+            ssp_log_text(err);
+            release_preview_swapchain();
             return false;
+        }
 
         {
             char msg[256] = {};
@@ -1430,14 +1448,32 @@ bool D3DPreviewPipeline::ensure_preview_swapchain(int w, int h)
 
     if (!preview_backbuf_)
     {
-        if (FAILED(preview_swapchain_->GetBuffer(0, IID_PPV_ARGS(&preview_backbuf_))) || !preview_backbuf_)
+        HRESULT hr = preview_swapchain_->GetBuffer(0, IID_PPV_ARGS(&preview_backbuf_));
+        if (FAILED(hr) || !preview_backbuf_)
+        {
+            char err[256] = {};
+            std::snprintf(err, sizeof(err),
+                          "[SharedScene] preview backbuffer get failed hr=0x%08X",
+                          static_cast<unsigned>(hr));
+            ssp_log_text(err);
+            release_preview_swapchain();
             return false;
+        }
     }
 
     if (!preview_rtv_)
     {
-        if (FAILED(d3d_->CreateRenderTargetView(preview_backbuf_.Get(), nullptr, &preview_rtv_)) || !preview_rtv_)
+        HRESULT hr = d3d_->CreateRenderTargetView(preview_backbuf_.Get(), nullptr, &preview_rtv_);
+        if (FAILED(hr) || !preview_rtv_)
+        {
+            char err[256] = {};
+            std::snprintf(err, sizeof(err),
+                          "[SharedScene] preview RTV create failed hr=0x%08X",
+                          static_cast<unsigned>(hr));
+            ssp_log_text(err);
+            release_preview_swapchain();
             return false;
+        }
     }
 
     preview_w_ = clientW;
@@ -1554,8 +1590,32 @@ bool D3DPreviewPipeline::present_preview(int src_w, int src_h)
     ID3D11ShaderResourceView *nullSrv[1] = {nullptr};
     ctx_->PSSetShaderResources(0, 1, nullSrv);
 
-    HRESULT hr = preview_swapchain_->Present(1, 0);
-    return SUCCEEDED(hr);
+    HRESULT hr = preview_swapchain_->Present(0, DXGI_PRESENT_DO_NOT_WAIT);
+    if (hr == DXGI_ERROR_WAS_STILL_DRAWING)
+    {
+        static uint64_t s_presentBusyCount = 0;
+        ++s_presentBusyCount;
+        if (s_presentBusyCount <= 5 || (s_presentBusyCount % 60) == 0)
+        {
+            char warn[256] = {};
+            std::snprintf(warn, sizeof(warn),
+                          "[SharedScene] preview present skipped: swapchain busy count=%llu",
+                          static_cast<unsigned long long>(s_presentBusyCount));
+            ssp_log_text(warn);
+        }
+        return true;
+    }
+    if (FAILED(hr))
+    {
+        char err[256] = {};
+        std::snprintf(err, sizeof(err),
+                      "[SharedScene] preview present failed hr=0x%08X",
+                      static_cast<unsigned>(hr));
+        ssp_log_text(err);
+        release_preview_swapchain();
+        return false;
+    }
+    return true;
 }
 
 DXGI_FORMAT D3DPreviewPipeline::preview_backbuffer_format() const

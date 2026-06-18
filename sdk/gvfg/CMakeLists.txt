@@ -2,7 +2,7 @@ if (NOT DEFINED GVFG_SDK_VERSION)
   set(GVFG_SDK_VERSION "0.1.0" CACHE STRING "GVFG SDK version")
 endif()
 
-option(GVFG_XDMA_DEBUG_LOG "Enable verbose XDMA flow debug logging in GVFG internal XDMA backend" OFF)
+option(GVFG_XDMA_DEBUG_LOG "Write verbose XDMA backend trace logs" OFF)
 
 project(gvfg VERSION ${GVFG_SDK_VERSION} LANGUAGES CXX)
 
@@ -36,6 +36,8 @@ target_compile_definitions(gvfg PRIVATE
 
 if (GVFG_XDMA_DEBUG_LOG)
   target_compile_definitions(gvfg PRIVATE GVFG_XDMA_DEBUG_LOG=1)
+else()
+  target_compile_definitions(gvfg PRIVATE GVFG_XDMA_DEBUG_LOG=0)
 endif()
 
 target_link_libraries(gvfg PRIVATE

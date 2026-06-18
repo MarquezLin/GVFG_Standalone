@@ -3,6 +3,7 @@
 #include "d3d_preview_pipeline.h"
 
 #include <d3d11_4.h>
+#include <atomic>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -37,10 +38,16 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!configured_ || !hwnd_ || !frame.data || frame.width <= 0 || frame.height <= 0)
+        {
+            clearActiveInfo();
             return false;
+        }
 
         if (!ensureDevice() || !ensurePipeline(frame.width, frame.height, frame.bit_depth > 0 ? frame.bit_depth : 8))
+        {
+            clearActiveInfo();
             return false;
+        }
 
         gvfg::internal::gvfg_render_pixfmt_t renderFmt = gvfg::internal::GVFG_RENDER_FMT_YUY2;
         const uint8_t *base = static_cast<const uint8_t *>(frame.data);
@@ -87,19 +94,31 @@ public:
         if (!uploaded ||
             !pipeline_->render_uploaded_yuv_to_fp16(renderFmt, frame.width, frame.height) ||
             !pipeline_->copy_fp16_to_scene())
+        {
+            clearActiveInfo();
             return false;
+        }
 
         bool ok = true;
         if (!pipeline_->preview_swapchain_10bit())
             ok = pipeline_->blit_fp16_to_rgba8(frame.width, frame.height);
         if (!ok)
+        {
+            clearActiveInfo();
             return false;
+        }
 
-        pipeline_->present_preview(frame.width, frame.height);
-        width_ = pipeline_->preview_w_;
-        height_ = pipeline_->preview_h_;
-        bitDepth_ = pipeline_->preview_swapchain_10bit() ? 10 : 8;
-        swapchain10Bit_ = pipeline_->preview_swapchain_10bit();
+        if (!pipeline_->present_preview(frame.width, frame.height))
+        {
+            clearActiveInfo();
+            return false;
+        }
+
+        width_.store(pipeline_->preview_w_, std::memory_order_relaxed);
+        height_.store(pipeline_->preview_h_, std::memory_order_relaxed);
+        bitDepth_.store(pipeline_->preview_swapchain_10bit() ? 10 : 8, std::memory_order_relaxed);
+        swapchain10Bit_.store(pipeline_->preview_swapchain_10bit(), std::memory_order_relaxed);
+        active_.store(true, std::memory_order_relaxed);
         return true;
     }
 
@@ -112,40 +131,32 @@ public:
         d3d_.reset();
         configured_ = false;
         hwnd_ = nullptr;
-        width_ = 0;
-        height_ = 0;
-        bitDepth_ = 0;
-        swapchain10Bit_ = false;
+        clearActiveInfo();
     }
 
     bool active() const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return configured_ && pipeline_ && width_ > 0 && height_ > 0;
+        return active_.load(std::memory_order_relaxed);
     }
 
     int width() const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return width_;
+        return width_.load(std::memory_order_relaxed);
     }
 
     int height() const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return height_;
+        return height_.load(std::memory_order_relaxed);
     }
 
     int bitDepth() const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return bitDepth_;
+        return bitDepth_.load(std::memory_order_relaxed);
     }
 
     const char *pixelFormat() const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return swapchain10Bit_ ? "RGB10A2" : "BGRA8";
+        return swapchain10Bit_.load(std::memory_order_relaxed) ? "RGB10A2" : "BGRA8";
     }
 
 private:
@@ -154,6 +165,15 @@ private:
         ComPtr<ID3D11Device> device;
         ComPtr<ID3D11DeviceContext> context;
     };
+
+    void clearActiveInfo()
+    {
+        width_.store(0, std::memory_order_relaxed);
+        height_.store(0, std::memory_order_relaxed);
+        bitDepth_.store(0, std::memory_order_relaxed);
+        swapchain10Bit_.store(false, std::memory_order_relaxed);
+        active_.store(false, std::memory_order_relaxed);
+    }
 
     bool ensureDevice()
     {
@@ -226,10 +246,11 @@ private:
     mutable std::mutex mutex_;
     void *hwnd_ = nullptr;
     bool configured_ = false;
-    int width_ = 0;
-    int height_ = 0;
-    int bitDepth_ = 0;
-    bool swapchain10Bit_ = false;
+    std::atomic<int> width_{0};
+    std::atomic<int> height_{0};
+    std::atomic<int> bitDepth_{0};
+    std::atomic<bool> swapchain10Bit_{false};
+    std::atomic<bool> active_{false};
     std::unique_ptr<D3DState> d3d_;
     std::unique_ptr<gvfg::internal::D3DPreviewPipeline> pipeline_;
 };

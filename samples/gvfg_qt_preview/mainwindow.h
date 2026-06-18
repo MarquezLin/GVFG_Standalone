@@ -3,12 +3,14 @@
 #include <gvfg_capture.h>
 #include <gvfg_preview.h>
 
+#include <QFile>
 #include <QString>
 #include <QWidget>
 
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <thread>
 
 class QCloseEvent;
@@ -47,9 +49,15 @@ private:
     void updateSignalStatus(bool writeLog);
     void updateUiState();
     void showError(const QString &apiName, gvfg_status_t status);
+    void openLogFile();
+    bool openLogFilePart();
+    void rotateLogFileIfNeeded();
+    void writeLogFileLine(const QString &line);
     void appendLog(const QString &message);
     void captureReadLoop();
     void joinCaptureThread();
+
+    static constexpr qint64 kMaxLogFileBytes = 20ll * 1024ll * 1024ll;
 
     Ui::MainWindow *ui_ = nullptr;
     PreviewWindow *previewWindow_ = nullptr;
@@ -57,10 +65,19 @@ private:
     int deviceCount_ = 0;
     gvfg_handle handle_ = nullptr;
     gvfg_preview_handle previewHandle_ = nullptr;
-    bool captureRunning_ = false;
+    std::atomic<bool> captureRunning_{false};
     std::atomic<bool> captureStop_{false};
     std::thread captureThread_;
     std::atomic<uint64_t> frameCount_{0};
+    uint64_t previewFailureCount_ = 0;
     QTimer *signalStatusTimer_ = nullptr;
     QString lastSignalStatusText_;
+    QFile logFile_;
+    std::mutex logFileMutex_;
+    QString logDirPath_;
+    QString logFilePath_;
+    QString logSessionStamp_;
+    int logPartIndex_ = 1;
 };
+
+QWidget *createMainWindow();

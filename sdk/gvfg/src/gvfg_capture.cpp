@@ -797,8 +797,9 @@ struct gvfg_handle_t
         if (backend)
         {
             xdma_stream_stats_t stats{};
+            xdma_debug_state_t debugState{};
             uint64_t waitTimeouts = 0;
-            backend->get_debug_stats(stats, waitTimeouts);
+            backend->get_debug_stats(stats, waitTimeouts, debugState);
             out.backend_state = static_cast<int>(stats.state);
             out.backend_frames_captured = stats.frames_captured;
             out.backend_frames_delivered = stats.frames_delivered;
@@ -806,6 +807,15 @@ struct gvfg_handle_t
             out.backend_dma_errors = stats.dma_errors;
             out.backend_interrupt_count = stats.interrupt_count;
             out.backend_wait_timeouts = waitTimeouts;
+            out.backend_running = debugState.running;
+            out.backend_capture_active = debugState.capture_active;
+            out.backend_data_worker_stop = debugState.data_worker_stop;
+            out.backend_pending_events = debugState.pending_events;
+            out.backend_latest_sequence = debugState.latest_sequence;
+            out.backend_delivered_sequence = debugState.delivered_sequence;
+            out.backend_active_delivery_slot = debugState.active_delivery_slot;
+            out.backend_next_write_slot = debugState.next_write_slot;
+            out.backend_ring_size = debugState.ring_size;
         }
 
         return GVFG_OK;
@@ -1063,7 +1073,20 @@ extern "C"
     {
         if (!handle || !out_stats)
             return GVFG_EINVAL;
-        return handle->getDebugBackendStats(*out_stats);
+
+        const uint32_t callerSize = out_stats->struct_size;
+        if (callerSize < sizeof(uint32_t) || callerSize > sizeof(gvfg_debug_backend_stats_t))
+            return GVFG_EINVAL;
+
+        gvfg_debug_backend_stats_t stats{};
+        const gvfg_status_t status = handle->getDebugBackendStats(stats);
+        if (status != GVFG_OK)
+            return status;
+
+        stats.struct_size = sizeof(stats);
+        std::memcpy(out_stats, &stats, callerSize);
+        out_stats->struct_size = callerSize;
+        return GVFG_OK;
     }
 
     gvfg_status_t gvfg_debug_get_fpga_signal_raw(gvfg_handle handle,

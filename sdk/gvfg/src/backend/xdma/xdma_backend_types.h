@@ -93,6 +93,19 @@ typedef struct xdma_stream_stats_t
     uint64_t interrupt_count;
 } xdma_stream_stats_t;
 
+typedef struct xdma_debug_state_t
+{
+    int running;
+    int capture_active;
+    int data_worker_stop;
+    uint32_t pending_events;
+    uint64_t latest_sequence;
+    uint64_t delivered_sequence;
+    uint64_t active_delivery_slot;
+    uint64_t next_write_slot;
+    uint64_t ring_size;
+} xdma_debug_state_t;
+
 typedef enum xdma_event_type_t
 {
     XDMA_EVENT_VIDEO_IRQ = 1,

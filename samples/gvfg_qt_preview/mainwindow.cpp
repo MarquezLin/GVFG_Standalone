@@ -5,7 +5,10 @@
 #include <gvfg_debug.h>
 
 #include <QCloseEvent>
+#include <QCoreApplication>
 #include <QDateTime>
+#include <QDir>
+#include <QIODevice>
 #include <QMetaObject>
 #include <QTimer>
 
@@ -44,6 +47,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui_->statusLabel->setWordWrap(true);
     signalStatusTimer_ = new QTimer(this);
     signalStatusTimer_->setInterval(1000);
+    openLogFile();
 
     connect(ui_->refreshButton, &QPushButton::clicked, this, [this]() { refreshDevices(); });
     connect(ui_->openButton, &QPushButton::clicked, this, [this]()
@@ -60,6 +64,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(signalStatusTimer_, &QTimer::timeout, this, [this]() { updateSignalStatus(true); });
 
     updateUiState();
+    appendLog(logFile_.isOpen()
+                  ? QStringLiteral("Log file | %1").arg(logFilePath_)
+                  : QStringLiteral("Log file unavailable | %1").arg(logFilePath_));
     refreshDevices();
 }
 
@@ -68,6 +75,11 @@ MainWindow::~MainWindow()
     closeDevice();
     delete previewWindow_;
     delete ui_;
+}
+
+QWidget *createMainWindow()
+{
+    return new MainWindow();
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -213,6 +225,7 @@ void MainWindow::startCapture()
     }
 
     frameCount_ = 0;
+    previewFailureCount_ = 0;
     captureStop_.store(false, std::memory_order_release);
     captureRunning_ = true;
     captureThread_ = std::thread([this]()
@@ -299,6 +312,9 @@ void MainWindow::updateSignalStatus(bool writeLog)
     const auto &readFrame = info.last_frame;
     gvfg_debug_fpga_signal_raw_t fpgaRaw{};
     const bool haveRaw = gvfg_debug_get_fpga_signal_raw(handle_, &fpgaRaw) == GVFG_OK;
+    gvfg_debug_backend_stats_t backendStats{};
+    backendStats.struct_size = sizeof(backendStats);
+    const bool haveBackendStats = gvfg_debug_get_backend_stats(handle_, &backendStats) == GVFG_OK;
     if (previewWindow_->isVisible())
         updatePreviewSourceSize(info);
 
@@ -348,8 +364,23 @@ void MainWindow::updateSignalStatus(bool writeLog)
                               .arg(info.capture_fps > 0.0 ? QString::number(info.capture_fps, 'f', 2)
                                                           : QStringLiteral("--"))
                               .arg(static_cast<qulonglong>(info.delivered_frames));
+    const QString line6 = haveBackendStats
+                              ? QStringLiteral("Backend debug | run=%1 active=%2 worker_stop=%3 pending=%4 latest=%5 delivered=%6 captured=%7 dropped=%8 held_slot=%9 ring=%10")
+                                    .arg(backendStats.backend_running)
+                                    .arg(backendStats.backend_capture_active)
+                                    .arg(backendStats.backend_data_worker_stop)
+                                    .arg(backendStats.backend_pending_events)
+                                    .arg(static_cast<qulonglong>(backendStats.backend_latest_sequence))
+                                    .arg(static_cast<qulonglong>(backendStats.backend_delivered_sequence))
+                                    .arg(static_cast<qulonglong>(backendStats.backend_frames_captured))
+                                    .arg(static_cast<qulonglong>(backendStats.backend_frames_dropped))
+                                    .arg(backendStats.backend_active_delivery_slot == UINT64_MAX
+                                             ? QStringLiteral("--")
+                                             : QString::number(static_cast<qulonglong>(backendStats.backend_active_delivery_slot)))
+                                    .arg(static_cast<qulonglong>(backendStats.backend_ring_size))
+                              : QStringLiteral("Backend debug | unavailable");
 
-    const QString statusText = line0 + QLatin1Char('\n') + line2 + QLatin1Char('\n') + lineRaw + QLatin1Char('\n') + line3 + QLatin1Char('\n') + line4 + QLatin1Char('\n') + line5;
+    const QString statusText = line0 + QLatin1Char('\n') + line2 + QLatin1Char('\n') + lineRaw + QLatin1Char('\n') + line3 + QLatin1Char('\n') + line4 + QLatin1Char('\n') + line5 + QLatin1Char('\n') + line6;
     const bool changed = lastSignalStatusText_ != statusText;
     if (changed)
     {
@@ -378,12 +409,97 @@ void MainWindow::showError(const QString &apiName, gvfg_status_t status)
     appendLog(QStringLiteral("%1 failed: %2").arg(apiName, QString::fromUtf8(gvfg_strerror(status))));
 }
 
+void MainWindow::openLogFile()
+{
+    logSessionStamp_ = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+    logPartIndex_ = 1;
+    logDirPath_ = QCoreApplication::applicationDirPath() + QStringLiteral("/logs");
+    if (!QDir().mkpath(logDirPath_))
+    {
+        logFilePath_ = logDirPath_;
+        return;
+    }
+
+    openLogFilePart();
+}
+
+bool MainWindow::openLogFilePart()
+{
+    std::lock_guard<std::mutex> lock(logFileMutex_);
+    if (logFile_.isOpen())
+        logFile_.close();
+
+    logFilePath_ = QStringLiteral("%1/gvfg_qt_preview_%2_part%3.log")
+                       .arg(logDirPath_, logSessionStamp_)
+                       .arg(logPartIndex_, 2, 10, QLatin1Char('0'));
+    logFile_.setFileName(logFilePath_);
+    if (!logFile_.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+        return false;
+
+    const QString header = QStringLiteral("\n==== gvfg_qt_preview session %1 part %2 ====\n")
+                               .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")))
+                               .arg(logPartIndex_);
+    logFile_.write(header.toUtf8());
+    logFile_.flush();
+    return true;
+}
+
+void MainWindow::rotateLogFileIfNeeded()
+{
+    if (!logFile_.isOpen() || logFile_.size() < kMaxLogFileBytes)
+        return;
+
+    const QString footer = QStringLiteral("==== log rotated at %1 ====\n")
+                               .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")));
+    logFile_.write(footer.toUtf8());
+    logFile_.flush();
+    ++logPartIndex_;
+    openLogFilePart();
+}
+
+void MainWindow::writeLogFileLine(const QString &line)
+{
+    std::lock_guard<std::mutex> lock(logFileMutex_);
+    if (!logFile_.isOpen())
+        return;
+
+    if (logFile_.size() >= kMaxLogFileBytes)
+    {
+        const QString footer = QStringLiteral("==== log rotated at %1 ====\n")
+                                   .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")));
+        logFile_.write(footer.toUtf8());
+        logFile_.flush();
+        ++logPartIndex_;
+        if (logFile_.isOpen())
+            logFile_.close();
+        logFilePath_ = QStringLiteral("%1/gvfg_qt_preview_%2_part%3.log")
+                           .arg(logDirPath_, logSessionStamp_)
+                           .arg(logPartIndex_, 2, 10, QLatin1Char('0'));
+        logFile_.setFileName(logFilePath_);
+        if (logFile_.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+        {
+            const QString header = QStringLiteral("\n==== gvfg_qt_preview session %1 part %2 ====\n")
+                                       .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")))
+                                       .arg(logPartIndex_);
+            logFile_.write(header.toUtf8());
+        }
+    }
+
+    if (!logFile_.isOpen())
+        return;
+
+    logFile_.write(line.toUtf8());
+    logFile_.write("\n");
+    logFile_.flush();
+}
+
 void MainWindow::appendLog(const QString &message)
 {
     const QString line = QStringLiteral("[%1] %2")
                              .arg(QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz")))
                              .arg(message);
     ui_->logEdit->appendPlainText(line);
+    writeLogFileLine(line);
 }
 
 void MainWindow::captureReadLoop()
@@ -414,7 +530,36 @@ void MainWindow::captureReadLoop()
             const int height = frame.height;
             const uint64_t frameId = frame.frame_id;
             if (previewHandle_)
-                gvfg_preview_render_frame(previewHandle_, &frame);
+            {
+                const gvfg_preview_status_t previewStatus = gvfg_preview_render_frame(previewHandle_, &frame);
+                if (previewStatus != GVFG_PREVIEW_OK)
+                {
+                    const uint64_t failures = ++previewFailureCount_;
+                    if (failures <= 5 || (failures % 60) == 0)
+                    {
+                        QMetaObject::invokeMethod(this,
+                                                  [this, failures, previewStatus]()
+                                                  {
+                                                      appendLog(QStringLiteral("preview render failed #%1: %2")
+                                                                    .arg(static_cast<qulonglong>(failures))
+                                                                    .arg(QString::fromUtf8(gvfg_preview_strerror(previewStatus))));
+                                                  },
+                                                  Qt::QueuedConnection);
+                    }
+                }
+                else if (previewFailureCount_ != 0)
+                {
+                    const uint64_t failures = previewFailureCount_;
+                    previewFailureCount_ = 0;
+                    QMetaObject::invokeMethod(this,
+                                              [this, failures]()
+                                              {
+                                                  appendLog(QStringLiteral("preview render recovered after %1 failure(s)")
+                                                                .arg(static_cast<qulonglong>(failures)));
+                                              },
+                                              Qt::QueuedConnection);
+                }
+            }
             gvfg_release_frame(handle_, &frame);
 
             if (count <= 5 || (count % 60) == 0)

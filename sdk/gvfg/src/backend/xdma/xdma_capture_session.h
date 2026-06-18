@@ -45,7 +45,9 @@ namespace gvfg::internal
         xdma_status_t release_frame(const xdma_frame_t &frame);
 
         const char *last_error() const;
-        void get_debug_stats(xdma_stream_stats_t &outStats, uint64_t &outWaitTimeouts) const;
+        void get_debug_stats(xdma_stream_stats_t &outStats,
+                             uint64_t &outWaitTimeouts,
+                             xdma_debug_state_t &outDebugState) const;
 
     private:
         xdma_status_t open_device(const XdmaDevice &device);
@@ -110,6 +112,11 @@ namespace gvfg::internal
         std::atomic<bool> data_worker_stop_{false};
         std::atomic<int> save_frames_after_plug_in_{0};
         std::atomic<bool> fix_pulsed_after_plug_in_{false};
+        std::atomic<uint64_t> last_video_irq_ns_{0};
+        std::atomic<uint64_t> last_irq_clear_ns_{0};
+        std::atomic<uint64_t> last_irq_enable_ns_{0};
+        std::atomic<int> last_irq_clear_ok_{0};
+        std::atomic<int> last_irq_enable_ok_{0};
         std::thread event_thread_[4];
         std::thread data_thread_;
 

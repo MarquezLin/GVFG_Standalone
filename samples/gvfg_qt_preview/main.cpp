@@ -6,8 +6,10 @@ int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
 
-    MainWindow window;
-    window.show();
+    QWidget *window = createMainWindow();
+    window->show();
 
-    return app.exec();
+    const int result = app.exec();
+    delete window;
+    return result;
 }
