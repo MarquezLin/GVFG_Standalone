@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace gvfg::internal;
@@ -377,6 +378,8 @@ struct gvfg_handle_t
     {
         if (index < 0)
             return GVFG_EINVAL;
+        if (callbackModeActive.load(std::memory_order_acquire) || isInCallbackThread())
+            return GVFG_ESTATE;
 
         close();
 
@@ -409,6 +412,8 @@ struct gvfg_handle_t
     {
         if (!backend)
             return GVFG_ESTATE;
+        if (callbackModeActive.load(std::memory_order_acquire))
+            return GVFG_ESTATE;
         if (running)
             return GVFG_OK;
 
@@ -417,6 +422,11 @@ struct gvfg_handle_t
             return cfg;
 
         resetRuntimeCounters();
+        {
+            std::lock_guard<std::mutex> lock(eventMutex);
+            eventQueue.clear();
+        }
+
         const xdma_status_t st = backend->start_stream();
         if (st != XDMA_OK)
         {
@@ -430,6 +440,8 @@ struct gvfg_handle_t
 
     gvfg_status_t stop()
     {
+        if (callbackModeActive.load(std::memory_order_acquire))
+            return stopCallbackMode();
         running = false;
         releaseHeldFrameForStop();
         if (backend)
@@ -647,10 +659,12 @@ struct gvfg_handle_t
         return GVFG_OK;
     }
 
-    gvfg_status_t readFrame(gvfg_frame_t &out, uint32_t timeoutMs)
+    gvfg_status_t readFrame(gvfg_frame_t &out, uint32_t timeoutMs, bool allowCallbackMode = false)
     {
         std::memset(&out, 0, sizeof(out));
         if (!backend || !running)
+            return GVFG_ESTATE;
+        if (callbackModeActive.load(std::memory_order_acquire) && !allowCallbackMode)
             return GVFG_ESTATE;
 
         {
@@ -753,6 +767,9 @@ struct gvfg_handle_t
 
     gvfg_status_t pollEvent(gvfg_event_t &out, uint32_t timeoutMs)
     {
+        if (callbackModeActive.load(std::memory_order_acquire))
+            return GVFG_ESTATE;
+
         std::unique_lock<std::mutex> lock(eventMutex);
         const auto hasEvent = [this]()
         {
@@ -772,6 +789,168 @@ struct gvfg_handle_t
         out = eventQueue.front();
         eventQueue.pop_front();
         return GVFG_OK;
+    }
+
+    gvfg_status_t setFrameCallback(gvfg_frame_callback_t callback, void *userData)
+    {
+        if (callbackModeActive.load(std::memory_order_acquire))
+            return GVFG_ESTATE;
+
+        std::lock_guard<std::mutex> lock(callbackMutex);
+        frameCallback = callback;
+        frameCallbackUserData = userData;
+        return GVFG_OK;
+    }
+
+    gvfg_status_t setEventCallback(gvfg_event_callback_t callback, void *userData)
+    {
+        std::lock_guard<std::mutex> lock(callbackMutex);
+        eventCallback = callback;
+        eventCallbackUserData = userData;
+        return GVFG_OK;
+    }
+
+    gvfg_status_t startCallbackMode()
+    {
+        if (!backend)
+            return GVFG_ESTATE;
+        if (callbackModeActive.load(std::memory_order_acquire))
+            return GVFG_OK;
+        if (running.load(std::memory_order_acquire))
+            return GVFG_ESTATE;
+
+        gvfg_frame_callback_t callback = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(callbackMutex);
+            callback = frameCallback;
+        }
+        if (!callback)
+            return GVFG_EINVAL;
+
+        const gvfg_status_t cfg = configureStream();
+        if (cfg != GVFG_OK)
+            return cfg;
+
+        resetRuntimeCounters();
+        const xdma_status_t st = backend->start_stream();
+        if (st != XDMA_OK)
+        {
+            recordError(xdma_error_text(st, backend.get()));
+            return map_status(st);
+        }
+
+        callbackStop.store(false, std::memory_order_release);
+        callbackModeActive.store(true, std::memory_order_release);
+        running.store(true, std::memory_order_release);
+
+        try
+        {
+            callbackThread = std::thread(&gvfg_handle_t::callbackThreadProc, this);
+            callbackEventThread = std::thread(&gvfg_handle_t::callbackEventThreadProc, this);
+        }
+        catch (...)
+        {
+            callbackModeActive.store(false, std::memory_order_release);
+            callbackStop.store(true, std::memory_order_release);
+            running.store(false, std::memory_order_release);
+            backend->stop_stream();
+            eventCv.notify_all();
+            if (callbackThread.joinable())
+                callbackThread.join();
+            if (callbackEventThread.joinable())
+                callbackEventThread.join();
+            return GVFG_EIO;
+        }
+
+        return GVFG_OK;
+    }
+
+    gvfg_status_t stopCallbackMode()
+    {
+        if ((callbackThread.joinable() && std::this_thread::get_id() == callbackThread.get_id()) ||
+            (callbackEventThread.joinable() && std::this_thread::get_id() == callbackEventThread.get_id()))
+            return GVFG_ESTATE;
+
+        if (!callbackModeActive.load(std::memory_order_acquire))
+            return GVFG_OK;
+
+        callbackStop.store(true, std::memory_order_release);
+        running.store(false, std::memory_order_release);
+        eventCv.notify_all();
+        if (backend)
+            backend->stop_stream();
+
+        if (callbackThread.joinable())
+            callbackThread.join();
+        if (callbackEventThread.joinable())
+            callbackEventThread.join();
+        callbackModeActive.store(false, std::memory_order_release);
+        releaseHeldFrameForStop();
+        return GVFG_OK;
+    }
+
+    bool isInCallbackThread() const
+    {
+        return (callbackThread.joinable() && std::this_thread::get_id() == callbackThread.get_id()) ||
+               (callbackEventThread.joinable() && std::this_thread::get_id() == callbackEventThread.get_id());
+    }
+
+    void callbackThreadProc()
+    {
+        while (!callbackStop.load(std::memory_order_acquire))
+        {
+            gvfg_frame_t frame{};
+            const gvfg_status_t st = readFrame(frame, 100, true);
+            if (st == GVFG_ETIMEOUT)
+                continue;
+            if (st != GVFG_OK)
+            {
+                if (!callbackStop.load(std::memory_order_acquire))
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+
+            gvfg_frame_callback_t callback = nullptr;
+            void *userData = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(callbackMutex);
+                callback = frameCallback;
+                userData = frameCallbackUserData;
+            }
+
+            if (callback)
+                callback(this, &frame, userData);
+
+            releaseFrame(frame);
+        }
+    }
+
+    void callbackEventThreadProc()
+    {
+        while (!callbackStop.load(std::memory_order_acquire))
+        {
+            gvfg_event_t event{};
+            {
+                std::unique_lock<std::mutex> lock(eventMutex);
+                eventCv.wait(lock, [this]()
+                             { return callbackStop.load(std::memory_order_acquire) || !eventQueue.empty(); });
+                if (callbackStop.load(std::memory_order_acquire))
+                    break;
+                event = eventQueue.front();
+                eventQueue.pop_front();
+            }
+
+            gvfg_event_callback_t callback = nullptr;
+            void *userData = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(callbackMutex);
+                callback = eventCallback;
+                userData = eventCallbackUserData;
+            }
+
+            if (callback)
+                callback(this, &event, userData);
+        }
     }
 
     gvfg_status_t getDebugBackendStats(gvfg_debug_backend_stats_t &out)
@@ -929,6 +1108,15 @@ struct gvfg_handle_t
     std::mutex eventMutex;
     std::condition_variable eventCv;
     std::deque<gvfg_event_t> eventQueue;
+    std::mutex callbackMutex;
+    gvfg_frame_callback_t frameCallback = nullptr;
+    void *frameCallbackUserData = nullptr;
+    gvfg_event_callback_t eventCallback = nullptr;
+    void *eventCallbackUserData = nullptr;
+    std::atomic<bool> callbackModeActive{false};
+    std::atomic<bool> callbackStop{false};
+    std::thread callbackThread;
+    std::thread callbackEventThread;
 
 };
 
@@ -971,6 +1159,8 @@ extern "C"
 
     gvfg_status_t gvfg_destroy(gvfg_handle handle)
     {
+        if (handle && handle->isInCallbackThread())
+            return GVFG_ESTATE;
         delete handle;
         return GVFG_OK;
     }
@@ -987,6 +1177,38 @@ extern "C"
         if (!handle)
             return GVFG_EINVAL;
         return handle->start();
+    }
+
+    gvfg_status_t gvfg_set_frame_callback(gvfg_handle handle,
+                                          gvfg_frame_callback_t callback,
+                                          void *user_data)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        return handle->setFrameCallback(callback, user_data);
+    }
+
+    gvfg_status_t gvfg_set_event_callback(gvfg_handle handle,
+                                          gvfg_event_callback_t callback,
+                                          void *user_data)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        return handle->setEventCallback(callback, user_data);
+    }
+
+    gvfg_status_t gvfg_start_callback_mode(gvfg_handle handle)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        return handle->startCallbackMode();
+    }
+
+    gvfg_status_t gvfg_stop_callback_mode(gvfg_handle handle)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        return handle->stopCallbackMode();
     }
 
     gvfg_status_t gvfg_read_frame(gvfg_handle handle, gvfg_frame_t *out_frame, uint32_t timeout_ms)

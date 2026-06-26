@@ -187,6 +187,29 @@ typedef struct
 typedef struct gvfg_handle_t *gvfg_handle;
 
 /*
+ * Optional callback-mode frame delivery.
+ *
+ * The frame pointer is valid only for the duration of the callback. The SDK
+ * releases the frame automatically after the callback returns. Copy the data if
+ * it must outlive the callback.
+ */
+typedef void (*gvfg_frame_callback_t)(
+    _In_ gvfg_handle handle,
+    _In_ const gvfg_frame_t *frame,
+    _In_opt_ void *user_data);
+
+/*
+ * Optional callback-mode event delivery.
+ *
+ * Event callbacks may be invoked from a different SDK-owned thread than frame
+ * callbacks. Do not assume ordering between frame and event callbacks.
+ */
+typedef void (*gvfg_event_callback_t)(
+    _In_ gvfg_handle handle,
+    _In_ const gvfg_event_t *event,
+    _In_opt_ void *user_data);
+
+/*
  * Enumerate GVFG capture devices.
  *
  * Parameters:
@@ -271,6 +294,41 @@ GVFG_API gvfg_status_t gvfg_open(
  * to receive capture events.
  */
 GVFG_API gvfg_status_t gvfg_start(
+    _In_ gvfg_handle handle);
+
+/*
+ * Set the optional frame callback used by gvfg_start_callback_mode().
+ *
+ * Callback mode and pull mode are mutually exclusive for the same handle.
+ */
+GVFG_API gvfg_status_t gvfg_set_frame_callback(
+    _In_ gvfg_handle handle,
+    _In_opt_ gvfg_frame_callback_t callback,
+    _In_opt_ void *user_data);
+
+/*
+ * Set the optional event callback used while callback mode is active.
+ */
+GVFG_API gvfg_status_t gvfg_set_event_callback(
+    _In_ gvfg_handle handle,
+    _In_opt_ gvfg_event_callback_t callback,
+    _In_opt_ void *user_data);
+
+/*
+ * Start capture in callback mode.
+ *
+ * The SDK creates one frame worker thread for this handle. The frame callback
+ * is not invoked concurrently for the same handle.
+ */
+GVFG_API gvfg_status_t gvfg_start_callback_mode(
+    _In_ gvfg_handle handle);
+
+/*
+ * Stop callback mode and wait for the frame worker thread to exit.
+ *
+ * Do not call this from inside the frame callback.
+ */
+GVFG_API gvfg_status_t gvfg_stop_callback_mode(
     _In_ gvfg_handle handle);
 
 /*

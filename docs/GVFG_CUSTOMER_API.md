@@ -254,6 +254,59 @@ gvfg_status_t gvfg_stop(gvfg_handle handle);
 
 開始或停止 capture。`gvfg_start()` 成功後，用 `gvfg_read_frame()` 取 frame。
 
+### Callback mode
+
+```c
+typedef void (*gvfg_frame_callback_t)(
+    gvfg_handle handle,
+    const gvfg_frame_t *frame,
+    void *user_data);
+
+typedef void (*gvfg_event_callback_t)(
+    gvfg_handle handle,
+    const gvfg_event_t *event,
+    void *user_data);
+
+gvfg_status_t gvfg_set_frame_callback(gvfg_handle handle,
+                                      gvfg_frame_callback_t callback,
+                                      void *user_data);
+gvfg_status_t gvfg_set_event_callback(gvfg_handle handle,
+                                      gvfg_event_callback_t callback,
+                                      void *user_data);
+gvfg_status_t gvfg_start_callback_mode(gvfg_handle handle);
+gvfg_status_t gvfg_stop_callback_mode(gvfg_handle handle);
+```
+
+Callback mode 是 optional。它適合想讓 SDK 管理 frame/event worker thread 的 application。
+同一個 handle 只能使用 pull mode 或 callback mode 其中一種；callback mode active
+時，`gvfg_read_frame()` 和 `gvfg_poll_event()` 會回 `GVFG_ESTATE`。
+
+Callback mode 規則：
+
+- `gvfg_start_callback_mode()` 前必須先設定 frame callback。
+- Frame callback 由 SDK-owned worker thread 呼叫。
+- 同一個 handle 的 frame callback 不會併發呼叫。
+- Frame pointer 只在 callback 期間有效；callback return 後 SDK 會自動 release。
+- Callback 內不要呼叫 `gvfg_destroy()`；`gvfg_stop_callback_mode()` 也應由其他 thread 呼叫。
+- Event callback 由 SDK-owned event worker thread 呼叫，可能和 frame callback 不同 thread。
+- 不要假設 event callback 和 frame callback 的順序完全同步。
+- Heavy work 應 copy/queue 到 application 自己的 worker thread。
+
+最小 callback flow：
+
+```c
+static void on_frame(gvfg_handle h, const gvfg_frame_t *frame, void *user)
+{
+    /* frame is valid only inside this callback. Copy if needed. */
+}
+
+gvfg_set_frame_callback(h, on_frame, user);
+gvfg_start_callback_mode(h);
+
+/* later, from another thread */
+gvfg_stop_callback_mode(h);
+```
+
 ### `gvfg_read_frame`
 
 ```c

@@ -77,7 +77,7 @@ flowchart TD
 
 ## Capture 流程
 
-Capture API 採 FFmpeg-style pull model：
+Core capture API 的基本模式是 FFmpeg-style pull model：
 
 ```text
 gvfg_enumerate_devices
@@ -93,8 +93,24 @@ gvfg_enumerate_devices
 -> gvfg_destroy
 ```
 
-`gvfg.dll` 不擁有 application 的 public read thread。UI app 應該自己建立 worker
-thread，並在那個 thread 呼叫 `gvfg_read_frame()`。
+Pull mode 下，`gvfg.dll` 不擁有 application 的 public read thread。UI app 應該
+自己建立 worker thread，並在那個 thread 呼叫 `gvfg_read_frame()`。
+
+另外提供 optional callback mode，給想讓 SDK 管理 frame/event worker thread 的
+application：
+
+```text
+gvfg_set_frame_callback
+gvfg_set_event_callback optional
+gvfg_start_callback_mode
+-> SDK-owned frame worker invokes frame callback
+-> SDK-owned event worker invokes event callback when configured
+-> callback return 後 SDK auto-release frame
+gvfg_stop_callback_mode
+```
+
+同一個 handle 只能 pull mode 或 callback mode 二選一。Callback mode active 時，
+`gvfg_read_frame()` 與 `gvfg_poll_event()` 必須回 `GVFG_ESTATE`。
 
 ## Frame 所有權
 
@@ -112,6 +128,12 @@ thread，並在那個 thread 呼叫 `gvfg_read_frame()`。
 - 同一個 handle 一次最多 hold 一個 frame。
 - Application 如果 release 後還要用 data，必須自己 copy frame。
 - `gvfg_preview_render_frame()` 是 synchronous，應該在 `gvfg_release_frame()` 前呼叫。
+- Callback mode 下，frame pointer 只在 frame callback 期間有效；callback return
+  後由 SDK 自動 release。
+- 同一個 handle 的 frame callback 不併發；event callback 由 SDK-owned event worker
+  thread 呼叫，不保證和 frame callback 完全排序。
+- 不要在 callback 內呼叫 `gvfg_destroy()`；stop callback mode 應由其他 thread
+  呼叫。
 
 Typical two-way use：
 
