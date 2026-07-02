@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QIODevice>
 #include <QMetaObject>
+#include <QStringList>
 #include <QTimer>
 
 namespace
@@ -17,6 +18,72 @@ namespace
     QString hex32(uint32_t value)
     {
         return QStringLiteral("0x") + QString::number(value, 16).rightJustified(8, QLatin1Char('0')).toUpper();
+    }
+
+    QString boolText(int value)
+    {
+        return value ? QStringLiteral("yes") : QStringLiteral("no");
+    }
+
+    QString valueOrDash(uint64_t value)
+    {
+        return QString::number(static_cast<qulonglong>(value));
+    }
+
+    QString captureStatusText(const gvfg_debug_backend_stats_t &stats)
+    {
+        if (!stats.backend_running)
+            return QStringLiteral("stopped");
+        if (stats.backend_data_worker_stop)
+            return QStringLiteral("stopping");
+        if (!stats.backend_capture_active)
+            return QStringLiteral("paused");
+        return QStringLiteral("streaming");
+    }
+
+    QString workerText(const gvfg_debug_backend_stats_t &stats)
+    {
+        return stats.backend_data_worker_stop ? QStringLiteral("stopping") : QStringLiteral("running");
+    }
+
+    QString appHoldingText(uint64_t value)
+    {
+        return value == UINT64_MAX ? QStringLiteral("none") : QStringLiteral("slot %1").arg(valueOrDash(value));
+    }
+
+    QString frameText(bool valid, int width, int height, const char *pixelFormat, int bitDepth)
+    {
+        if (!valid || width <= 0 || height <= 0)
+            return QStringLiteral("--");
+
+        const QString format = pixelFormat && pixelFormat[0] != '\0'
+                                   ? QString::fromUtf8(pixelFormat)
+                                   : QStringLiteral("--");
+        const QString bit = bitDepth > 0 ? QString::number(bitDepth) : QStringLiteral("--");
+        return QStringLiteral("%1x%2 %3 %4-bit").arg(width).arg(height).arg(format, bit);
+    }
+
+    QString signalFrameText(const gvfg_signal_status_t &signal)
+    {
+        const QString resolution = (signal.width > 0 && signal.height > 0)
+                                       ? QStringLiteral("%1x%2").arg(signal.width).arg(signal.height)
+                                       : QStringLiteral("--");
+        const QString fps = signal.frame_rate_name[0] != '\0'
+                                ? QString::fromLatin1(signal.frame_rate_name)
+                                : QStringLiteral("--");
+        const QString format = signal.video_format[0] != '\0'
+                                   ? QString::fromLatin1(signal.video_format)
+                                   : QStringLiteral("--");
+        const QString bit = signal.bit_depth > 0 ? QString::number(signal.bit_depth) : QStringLiteral("--");
+        return QStringLiteral("%1 %2 %3 %4-bit").arg(resolution, fps, format, bit);
+    }
+
+    QString backendLastError(gvfg_handle handle)
+    {
+        char message[512] = {};
+        if (gvfg_debug_get_last_error_detail(handle, message, sizeof(message)) != GVFG_OK || message[0] == '\0')
+            return {};
+        return QString::fromUtf8(message);
     }
 
     QString eventTypeText(gvfg_event_type_t type)
@@ -49,19 +116,24 @@ MainWindow::MainWindow(QWidget *parent)
     signalStatusTimer_->setInterval(1000);
     openLogFile();
 
-    connect(ui_->refreshButton, &QPushButton::clicked, this, [this]() { refreshDevices(); });
+    connect(ui_->refreshButton, &QPushButton::clicked, this, [this]()
+            { refreshDevices(); });
     connect(ui_->openButton, &QPushButton::clicked, this, [this]()
             {
                 if (handle_)
                     closeDevice();
                 else
-                    openDevice();
-            });
-    connect(ui_->showPreviewButton, &QPushButton::clicked, this, [this]() { showPreviewWindow(); });
-    connect(ui_->fullscreenPreviewButton, &QPushButton::clicked, this, [this]() { showFullscreenPreviewWindow(); });
-    connect(ui_->startButton, &QPushButton::clicked, this, [this]() { startCapture(); });
-    connect(ui_->stopButton, &QPushButton::clicked, this, [this]() { stopCapture(); });
-    connect(signalStatusTimer_, &QTimer::timeout, this, [this]() { updateSignalStatus(true); });
+                    openDevice(); });
+    connect(ui_->showPreviewButton, &QPushButton::clicked, this, [this]()
+            { showPreviewWindow(); });
+    connect(ui_->fullscreenPreviewButton, &QPushButton::clicked, this, [this]()
+            { showFullscreenPreviewWindow(); });
+    connect(ui_->startButton, &QPushButton::clicked, this, [this]()
+            { startCapture(); });
+    connect(ui_->stopButton, &QPushButton::clicked, this, [this]()
+            { stopCapture(); });
+    connect(signalStatusTimer_, &QTimer::timeout, this, [this]()
+            { updateSignalStatus(true); });
 
     updateUiState();
     appendLog(logFile_.isOpen()
@@ -318,69 +390,68 @@ void MainWindow::updateSignalStatus(bool writeLog)
     if (previewWindow_->isVisible())
         updatePreviewSourceSize(info);
 
-    const QString fpgaResolution = (signal.width > 0 && signal.height > 0)
-                                       ? QStringLiteral("%1x%2").arg(signal.width).arg(signal.height)
-                                       : QStringLiteral("--");
-    const QString frameRateText = QString::fromLatin1(signal.frame_rate_name);
-    const QString formatText = QString::fromLatin1(signal.video_format);
-    const QString bitDepthText = signal.bit_depth > 0 ? QString::number(signal.bit_depth) : QStringLiteral("--");
-    const QString line0 = QStringLiteral("FPGA reported | signal=%1 fps=%2 format=%3 bitdepth=%4")
-                              .arg(fpgaResolution)
-                              .arg(frameRateText)
-                              .arg(formatText)
-                              .arg(bitDepthText);
-    const QString line2 = QStringLiteral("Signal lock | SDI=%1 HDMI=%2")
-                              .arg(signal.sdi_locked)
-                              .arg(signal.hdmi_locked);
-    const QString lineRaw = haveRaw
-                                ? QStringLiteral("FPGA raw | valid=%1 size=%2x%3 fmt=%4 fps=%5 bit=%6 status=%7")
-                                      .arg(hex32(fpgaRaw.valid_mask))
-                                      .arg(fpgaRaw.width_raw)
-                                      .arg(fpgaRaw.height_raw)
-                                      .arg(hex32(fpgaRaw.video_format_raw))
-                                      .arg(hex32(fpgaRaw.frame_rate_raw))
-                                      .arg(fpgaRaw.bit_depth_raw)
-                                      .arg(hex32(fpgaRaw.status_raw))
-                                : QStringLiteral("FPGA raw | unavailable");
     gvfg_preview_info_t previewInfo{};
     const bool previewInfoOk = previewHandle_ &&
                                gvfg_preview_get_info(previewHandle_, &previewInfo) == GVFG_PREVIEW_OK &&
                                previewInfo.active;
-    const QString line3 = previewInfoOk
-                              ? QStringLiteral("Preview output | frame=%1x%2 format=%3 bitdepth=%4")
-                                    .arg(previewInfo.width)
-                                    .arg(previewInfo.height)
-                                    .arg(QString::fromUtf8(previewInfo.pixel_format))
-                                    .arg(previewInfo.bit_depth)
-                              : QStringLiteral("Preview output | app renderer inactive");
-    const QString line4 = readFrame.valid
-                              ? QStringLiteral("Read frame | frame=%1x%2 format=%3 bitdepth=%4")
-                                    .arg(readFrame.width)
-                                    .arg(readFrame.height)
-                                    .arg(QString::fromUtf8(readFrame.pixel_format))
-                                    .arg(readFrame.bit_depth)
-                              : QStringLiteral("Read frame | --");
-    const QString line5 = QStringLiteral("App runtime | capture=%1 fps delivered=%2")
-                              .arg(info.capture_fps > 0.0 ? QString::number(info.capture_fps, 'f', 2)
-                                                          : QStringLiteral("--"))
-                              .arg(static_cast<qulonglong>(info.delivered_frames));
-    const QString line6 = haveBackendStats
-                              ? QStringLiteral("Backend debug | run=%1 active=%2 worker_stop=%3 pending=%4 latest=%5 delivered=%6 captured=%7 dropped=%8 held_slot=%9 ring=%10")
-                                    .arg(backendStats.backend_running)
-                                    .arg(backendStats.backend_capture_active)
-                                    .arg(backendStats.backend_data_worker_stop)
-                                    .arg(backendStats.backend_pending_events)
-                                    .arg(static_cast<qulonglong>(backendStats.backend_latest_sequence))
-                                    .arg(static_cast<qulonglong>(backendStats.backend_delivered_sequence))
-                                    .arg(static_cast<qulonglong>(backendStats.backend_frames_captured))
-                                    .arg(static_cast<qulonglong>(backendStats.backend_frames_dropped))
-                                    .arg(backendStats.backend_active_delivery_slot == UINT64_MAX
-                                             ? QStringLiteral("--")
-                                             : QString::number(static_cast<qulonglong>(backendStats.backend_active_delivery_slot)))
-                                    .arg(static_cast<qulonglong>(backendStats.backend_ring_size))
-                              : QStringLiteral("Backend debug | unavailable");
+    const QString previewFrame = previewInfoOk
+                                     ? frameText(true,
+                                                 previewInfo.width,
+                                                 previewInfo.height,
+                                                 previewInfo.pixel_format,
+                                                 previewInfo.bit_depth)
+                                     : QStringLiteral("--");
+    const QString lastFrame = frameText(readFrame.valid != 0,
+                                        readFrame.width,
+                                        readFrame.height,
+                                        readFrame.pixel_format,
+                                        readFrame.bit_depth);
 
-    const QString statusText = line0 + QLatin1Char('\n') + line2 + QLatin1Char('\n') + lineRaw + QLatin1Char('\n') + line3 + QLatin1Char('\n') + line4 + QLatin1Char('\n') + line5 + QLatin1Char('\n') + line6;
+    QStringList statusLines;
+    statusLines << QStringLiteral("Input   | SDI lock=%1 HDMI lock=%2 signal=%3")
+                       .arg(boolText(signal.sdi_locked), boolText(signal.hdmi_locked), signalFrameText(signal));
+    statusLines << (haveRaw
+                        ? QStringLiteral("FPGA Raw| valid=%1 size_reg=%2x%3 format=%4 fps=%5 bit_depth=%6 status=%7")
+                              .arg(hex32(fpgaRaw.valid_mask))
+                              .arg(fpgaRaw.width_raw)
+                              .arg(fpgaRaw.height_raw)
+                              .arg(hex32(fpgaRaw.video_format_raw))
+                              .arg(hex32(fpgaRaw.frame_rate_raw))
+                              .arg(fpgaRaw.bit_depth_raw)
+                              .arg(hex32(fpgaRaw.status_raw))
+                        : QStringLiteral("FPGA Raw| unavailable"));
+    statusLines << QStringLiteral("App     | reader_fps=%1 last_frame=%2 preview_active=%3 preview_output=%4")
+                       .arg(info.capture_fps > 0.0 ? QString::number(info.capture_fps, 'f', 2) : QStringLiteral("--"))
+                       .arg(lastFrame)
+                       .arg(boolText(previewInfoOk ? 1 : 0))
+                       .arg(previewFrame);
+    statusLines << (haveBackendStats
+                        ? QStringLiteral("Capture| status=%1 worker=%2 pending_irqs=%3 dma_errors=%4 no_frame_waits=%5")
+                              .arg(captureStatusText(backendStats))
+                              .arg(workerText(backendStats))
+                              .arg(backendStats.backend_pending_events)
+                              .arg(static_cast<qulonglong>(backendStats.backend_dma_errors))
+                              .arg(static_cast<qulonglong>(backendStats.backend_wait_timeouts))
+                        : QStringLiteral("Capture| unavailable"));
+    if (haveBackendStats)
+    {
+        statusLines << QStringLiteral("Flow    | irqs=%1 captured=%2 app_read=%3 dropped=%4")
+                           .arg(static_cast<qulonglong>(backendStats.backend_interrupt_count))
+                           .arg(valueOrDash(backendStats.backend_frames_captured))
+                           .arg(valueOrDash(backendStats.backend_frames_delivered))
+                           .arg(valueOrDash(backendStats.backend_frames_dropped));
+        statusLines << QStringLiteral("Buffer  | app_holding=%1 slots=%2 next_write=%3 frame_id newest/read=%4/%5")
+                           .arg(appHoldingText(backendStats.backend_active_delivery_slot),
+                                valueOrDash(backendStats.backend_ring_size),
+                                valueOrDash(backendStats.backend_next_write_slot),
+                                valueOrDash(backendStats.backend_latest_sequence),
+                                valueOrDash(backendStats.backend_delivered_sequence));
+    }
+    const QString lastError = backendLastError(handle_);
+    if (!lastError.isEmpty())
+        statusLines << QStringLiteral("Error   | %1").arg(lastError);
+
+    const QString statusText = statusLines.join(QLatin1Char('\n'));
     const bool changed = lastSignalStatusText_ != statusText;
     if (changed)
     {
@@ -495,11 +566,17 @@ void MainWindow::writeLogFileLine(const QString &line)
 
 void MainWindow::appendLog(const QString &message)
 {
-    const QString line = QStringLiteral("[%1] %2")
-                             .arg(QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz")))
-                             .arg(message);
-    ui_->logEdit->appendPlainText(line);
-    writeLogFileLine(line);
+    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));
+    const QStringList lines = message.split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i)
+    {
+        const QString line = QStringLiteral("[%1] %2%3")
+                                 .arg(timestamp,
+                                      i == 0 ? QString() : QStringLiteral("  "),
+                                      lines.at(i));
+        ui_->logEdit->appendPlainText(line);
+        writeLogFileLine(line);
+    }
 }
 
 void MainWindow::captureReadLoop()
@@ -511,14 +588,10 @@ void MainWindow::captureReadLoop()
         {
             const QString type = eventTypeText(event.type);
             const uint64_t timestampNs = event.timestamp_ns;
-            QMetaObject::invokeMethod(this,
-                                      [this, type, timestampNs]()
-                                      {
-                                          appendLog(QStringLiteral("event %1 ts=%2")
-                                                        .arg(type)
-                                                        .arg(static_cast<qulonglong>(timestampNs)));
-                                      },
-                                      Qt::QueuedConnection);
+            QMetaObject::invokeMethod(this, [this, type, timestampNs]()
+                                      { appendLog(QStringLiteral("event %1 ts=%2")
+                                                      .arg(type)
+                                                      .arg(static_cast<qulonglong>(timestampNs))); }, Qt::QueuedConnection);
         }
 
         gvfg_frame_t frame{};
@@ -537,43 +610,31 @@ void MainWindow::captureReadLoop()
                     const uint64_t failures = ++previewFailureCount_;
                     if (failures <= 5 || (failures % 60) == 0)
                     {
-                        QMetaObject::invokeMethod(this,
-                                                  [this, failures, previewStatus]()
-                                                  {
-                                                      appendLog(QStringLiteral("preview render failed #%1: %2")
-                                                                    .arg(static_cast<qulonglong>(failures))
-                                                                    .arg(QString::fromUtf8(gvfg_preview_strerror(previewStatus))));
-                                                  },
-                                                  Qt::QueuedConnection);
+                        QMetaObject::invokeMethod(this, [this, failures, previewStatus]()
+                                                  { appendLog(QStringLiteral("preview render failed #%1: %2")
+                                                                  .arg(static_cast<qulonglong>(failures))
+                                                                  .arg(QString::fromUtf8(gvfg_preview_strerror(previewStatus)))); }, Qt::QueuedConnection);
                     }
                 }
                 else if (previewFailureCount_ != 0)
                 {
                     const uint64_t failures = previewFailureCount_;
                     previewFailureCount_ = 0;
-                    QMetaObject::invokeMethod(this,
-                                              [this, failures]()
-                                              {
-                                                  appendLog(QStringLiteral("preview render recovered after %1 failure(s)")
-                                                                .arg(static_cast<qulonglong>(failures)));
-                                              },
-                                              Qt::QueuedConnection);
+                    QMetaObject::invokeMethod(this, [this, failures]()
+                                              { appendLog(QStringLiteral("preview render recovered after %1 failure(s)")
+                                                              .arg(static_cast<qulonglong>(failures))); }, Qt::QueuedConnection);
                 }
             }
             gvfg_release_frame(handle_, &frame);
 
             if (count <= 5 || (count % 60) == 0)
             {
-                QMetaObject::invokeMethod(this,
-                                          [this, count, frameId, width, height]()
-                                          {
-                                              appendLog(QStringLiteral("read_frame #%1 source id=%2 %3x%4")
-                                                            .arg(static_cast<qulonglong>(count))
-                                                            .arg(static_cast<qulonglong>(frameId))
-                                                            .arg(width)
-                                                            .arg(height));
-                                          },
-                                          Qt::QueuedConnection);
+                QMetaObject::invokeMethod(this, [this, count, frameId, width, height]()
+                                          { appendLog(QStringLiteral("read_frame #%1 source id=%2 %3x%4")
+                                                          .arg(static_cast<qulonglong>(count))
+                                                          .arg(static_cast<qulonglong>(frameId))
+                                                          .arg(width)
+                                                          .arg(height)); }, Qt::QueuedConnection);
             }
             continue;
         }
@@ -583,13 +644,9 @@ void MainWindow::captureReadLoop()
         if (captureStop_.load(std::memory_order_acquire) || st == GVFG_ESTATE)
             break;
 
-        QMetaObject::invokeMethod(this,
-                                  [this, st]()
-                                  {
-                                      appendLog(QStringLiteral("gvfg_read_frame failed: %1")
-                                                    .arg(QString::fromUtf8(gvfg_strerror(st))));
-                                  },
-                                  Qt::QueuedConnection);
+        QMetaObject::invokeMethod(this, [this, st]()
+                                  { appendLog(QStringLiteral("gvfg_read_frame failed: %1")
+                                                  .arg(QString::fromUtf8(gvfg_strerror(st)))); }, Qt::QueuedConnection);
         break;
     }
 }
