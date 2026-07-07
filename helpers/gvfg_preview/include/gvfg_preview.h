@@ -44,6 +44,8 @@ typedef struct
     int height;
     int bit_depth;
     char pixel_format[32];
+    char adapter_name[160];
+    int adapter_index;
 } gvfg_preview_info_t;
 
 GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_create(

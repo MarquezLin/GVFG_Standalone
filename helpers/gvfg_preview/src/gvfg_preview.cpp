@@ -3,6 +3,7 @@
 #include "d3d_preview_pipeline.h"
 
 #include <d3d11_4.h>
+#include <dxgi1_2.h>
 #include <atomic>
 #include <cstring>
 #include <memory>
@@ -159,6 +160,16 @@ public:
         return swapchain10Bit_.load(std::memory_order_relaxed) ? "RGB10A2" : "BGRA8";
     }
 
+    const char *adapterName() const
+    {
+        return adapterName_;
+    }
+
+    int adapterIndex() const
+    {
+        return adapterIndex_;
+    }
+
 private:
     struct D3DState
     {
@@ -173,6 +184,57 @@ private:
         bitDepth_.store(0, std::memory_order_relaxed);
         swapchain10Bit_.store(false, std::memory_order_relaxed);
         active_.store(false, std::memory_order_relaxed);
+    }
+
+    static bool sameLuid(const LUID &a, const LUID &b)
+    {
+        return a.LowPart == b.LowPart && a.HighPart == b.HighPart;
+    }
+
+    static int dxgiAdapterIndexForLuid(const LUID &luid)
+    {
+        ComPtr<IDXGIFactory1> factory;
+        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) || !factory)
+            return -1;
+
+        for (UINT i = 0;; ++i)
+        {
+            ComPtr<IDXGIAdapter1> adapter;
+            const HRESULT hr = factory->EnumAdapters1(i, &adapter);
+            if (hr == DXGI_ERROR_NOT_FOUND)
+                break;
+            if (FAILED(hr) || !adapter)
+                continue;
+
+            DXGI_ADAPTER_DESC1 desc{};
+            if (SUCCEEDED(adapter->GetDesc1(&desc)) && sameLuid(desc.AdapterLuid, luid))
+                return static_cast<int>(i);
+        }
+        return -1;
+    }
+
+    void updateAdapterInfo(ID3D11Device *device)
+    {
+        adapterName_[0] = '\0';
+        adapterIndex_ = -1;
+        if (!device)
+            return;
+
+        ComPtr<IDXGIDevice> dxgiDevice;
+        if (FAILED(device->QueryInterface(IID_PPV_ARGS(&dxgiDevice))) || !dxgiDevice)
+            return;
+
+        ComPtr<IDXGIAdapter> adapter;
+        if (FAILED(dxgiDevice->GetAdapter(&adapter)) || !adapter)
+            return;
+
+        DXGI_ADAPTER_DESC desc{};
+        if (FAILED(adapter->GetDesc(&desc)))
+            return;
+
+        WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1,
+                            adapterName_, static_cast<int>(sizeof(adapterName_)), nullptr, nullptr);
+        adapterIndex_ = dxgiAdapterIndexForLuid(desc.AdapterLuid);
     }
 
     bool ensureDevice()
@@ -220,6 +282,7 @@ private:
         if (SUCCEEDED(state->device.As(&mt)) && mt)
             mt->SetMultithreadProtected(TRUE);
 
+        updateAdapterInfo(state->device.Get());
         d3d_ = std::move(state);
         return true;
     }
@@ -251,6 +314,8 @@ private:
     std::atomic<int> bitDepth_{0};
     std::atomic<bool> swapchain10Bit_{false};
     std::atomic<bool> active_{false};
+    char adapterName_[160] = {};
+    int adapterIndex_ = -1;
     std::unique_ptr<D3DState> d3d_;
     std::unique_ptr<gvfg::internal::D3DPreviewPipeline> pipeline_;
 };
@@ -330,6 +395,10 @@ extern "C"
         copy_cstr(out_info->pixel_format,
                   sizeof(out_info->pixel_format),
                   handle->renderer.pixelFormat());
+        copy_cstr(out_info->adapter_name,
+                  sizeof(out_info->adapter_name),
+                  handle->renderer.adapterName());
+        out_info->adapter_index = handle->renderer.adapterIndex();
         return GVFG_PREVIEW_OK;
     }
 
