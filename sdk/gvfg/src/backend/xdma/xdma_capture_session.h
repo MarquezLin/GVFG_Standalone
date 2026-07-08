@@ -53,36 +53,27 @@ namespace gvfg::internal
         xdma_status_t open_device(const XdmaDevice &device);
         void close_handles();
 
-        HANDLE open_subdevice(const wchar_t *name) const;
-        int read_device(HANDLE device, long address, DWORD size, uint8_t *buffer) const;
-        int write_device(HANDLE device, long address, DWORD size, const uint8_t *buffer) const;
-        bool read_user_reg(long address, uint32_t &out) const;
-        bool write_user_reg(long address, uint32_t value) const;
-        bool enable_user_event(uint32_t mask);
-        bool disable_user_event(uint32_t mask);
+        bool read_reg(uint32_t offset, uint32_t &out) const;
+        bool write_reg(uint32_t offset, uint32_t value) const;
+        bool read_reg_bar1(uint32_t offset, uint32_t &out) const;
+        bool write_reg_bar1(uint32_t offset, uint32_t value) const;
+        bool register_event(uint32_t channelIndex);
+        void unregister_event(uint32_t channelIndex);
+        bool get_video_done_index(uint32_t channelIndex, uint32_t &doneIndex) const;
+        int get_frame(uint32_t channelIndex, uint32_t frameIndex, uint8_t *buffer, DWORD bufferSize) const;
 
-        void event_thread_proc(uint32_t role, uint32_t irqBit);
-        void data_thread_proc();
-        bool start_data_worker();
-        void stop_data_worker();
+        void capture_thread_proc();
         void publish_frame(size_t slotIndex, size_t bytes);
-        void pause_capture_for_plug_out();
-        void resume_capture_after_plug_in();
-        void handle_plug_in_frame_fix(const uint8_t *data, size_t bytes);
-        void pulse_plug_in_frame_fix();
         void emit_event(xdma_event_type_t type, uint32_t irqBit, uint32_t irqMask) const;
 
         xdma_status_t fail(xdma_status_t status, const char *where, DWORD winerr = GetLastError()) const;
         void set_last_error(const std::string &message) const;
         void clear_last_error() const;
 
-        uint32_t active_input_path() const;
-        uint32_t event_mask(uint32_t role) const;
+        uint32_t active_channel() const;
         uint32_t video_event_mask() const;
-        uint32_t plug_in_event_mask() const;
-        uint32_t plug_out_event_mask() const;
-        uint32_t active_event_mask() const;
-        long capture_enable_reg() const;
+        uint32_t video_base() const;
+        uint32_t video_irq_mask_bit() const;
         size_t frame_size_bytes() const;
 
         struct FrameSlot
@@ -97,9 +88,8 @@ namespace gvfg::internal
         std::wstring base_path_;
         std::wstring friendly_name_;
 
-        HANDLE user_device_ = INVALID_HANDLE_VALUE;
-        HANDLE c2h_device_[2] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE};
-        HANDLE event_device_[4] = {INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE};
+        HANDLE device_ = INVALID_HANDLE_VALUE;
+        HANDLE interrupt_event_ = nullptr;
 
         xdma_stream_desc_t stream_desc_{};
         uint32_t stream_bit_depth_ = 8;
@@ -109,19 +99,9 @@ namespace gvfg::internal
 
         std::atomic<bool> running_{false};
         std::atomic<bool> capture_active_{false};
-        std::atomic<bool> data_worker_stop_{false};
-        std::atomic<int> save_frames_after_plug_in_{0};
-        std::atomic<bool> fix_pulsed_after_plug_in_{false};
-        std::atomic<uint64_t> last_video_irq_ns_{0};
-        std::atomic<uint64_t> last_irq_clear_ns_{0};
-        std::atomic<uint64_t> last_irq_enable_ns_{0};
-        std::atomic<int> last_irq_clear_ok_{0};
-        std::atomic<int> last_irq_enable_ok_{0};
-        std::thread event_thread_[4];
-        std::thread data_thread_;
+        std::thread capture_thread_;
 
         mutable std::mutex mutex_;
-        std::mutex worker_mutex_;
         mutable std::mutex event_callback_mutex_;
         std::condition_variable frame_cv_;
         std::condition_variable data_cv_;
