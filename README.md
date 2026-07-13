@@ -7,7 +7,7 @@ import library、runtime DLL 來使用 GVFG，不要直接把 GVFG source 編進
 
 ## 內容
 
-- `sdk/gvfg`：GVFG customer C API、internal debug API、XDMA backend。
+- `sdk/gvfg`：GVFG customer C API、internal debug API、PCIES2MM backend。
 - `helpers/gvfg_preview`：可選的 preview helper DLL，在 `gvfg_read_frame()` 後使用。
 - `helpers/gvfg_convert`：可選的 snapshot/export conversion helper DLL。
 - `samples/gvfg_qt_preview`：內部 debug Qt preview tool。
@@ -32,7 +32,7 @@ cmake --build build --target gvfg_qt_preview --config Release
 
 ```text
 BUILD_GVFG_SAMPLES=ON
-GVFG_XDMA_DEBUG_LOG=OFF
+GVFG_PCIES2MM_DEBUG_LOG=OFF
 ```
 
 Build 產物：
@@ -73,6 +73,6 @@ lib/gvfg_convert.lib
 bin/gvfg_convert.dll
 ```
 
-Customer/demo package 不應包含 `gvfg_debug.h`、SDK source、XDMA backend
+Customer/demo package 不應包含 `gvfg_debug.h`、SDK source、PCIES2MM backend
 headers、IRQ details、raw FPGA values 或 helper source。這些只屬於 internal
 debug/full application package。

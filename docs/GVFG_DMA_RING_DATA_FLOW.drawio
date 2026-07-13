@@ -8,7 +8,7 @@
           <mxGeometry x="360" y="30" width="880" height="40" as="geometry"/>
         </mxCell>
 
-        <mxCell id="hw" value="FPGA / XDMA hardware&#xa;VIDEO IRQ" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=14;fontStyle=1" vertex="1" parent="1">
+        <mxCell id="hw" value="FPGA / PCIES2MM hardware&#xa;VIDEO IRQ" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=14;fontStyle=1" vertex="1" parent="1">
           <mxGeometry x="80" y="130" width="210" height="80" as="geometry"/>
         </mxCell>
         <mxCell id="event" value="event_thread_proc()&#xa;ReadFile(event_N) returns" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1" vertex="1" parent="1">

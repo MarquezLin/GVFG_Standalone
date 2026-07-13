@@ -1,7 +1,7 @@
 #include "gvfg_capture.h"
 
 #include "gvfg_debug.h"
-#include "xdma_capture_session.h"
+#include "pcies2mm_capture_session.h"
 
 #include <algorithm>
 #include <atomic>
@@ -36,57 +36,57 @@ namespace
         return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
     }
 
-    gvfg_status_t map_status(xdma_status_t st)
+    gvfg_status_t map_status(pcies2mm_status_t st)
     {
         switch (st)
         {
-        case XDMA_OK:
+        case PCIES2MM_OK:
             return GVFG_OK;
-        case XDMA_EINVAL:
+        case PCIES2MM_EINVAL:
             return GVFG_EINVAL;
-        case XDMA_ENODEV:
+        case PCIES2MM_ENODEV:
             return GVFG_ENODEV;
-        case XDMA_ESTATE:
+        case PCIES2MM_ESTATE:
             return GVFG_ESTATE;
-        case XDMA_ETIMEOUT:
+        case PCIES2MM_ETIMEOUT:
             return GVFG_ETIMEOUT;
-        case XDMA_ENOTSUP:
+        case PCIES2MM_ENOTSUP:
             return GVFG_ENOTSUP;
-        case XDMA_EIO:
+        case PCIES2MM_EIO:
         default:
             return GVFG_EIO;
         }
     }
 
-    const char *xdma_status_text(xdma_status_t st)
+    const char *pcies2mm_status_text(pcies2mm_status_t st)
     {
         switch (st)
         {
-        case XDMA_OK:
+        case PCIES2MM_OK:
             return "ok";
-        case XDMA_EINVAL:
+        case PCIES2MM_EINVAL:
             return "invalid argument";
-        case XDMA_ENODEV:
+        case PCIES2MM_ENODEV:
             return "device not found";
-        case XDMA_ESTATE:
+        case PCIES2MM_ESTATE:
             return "invalid state";
-        case XDMA_ENOTSUP:
+        case PCIES2MM_ENOTSUP:
             return "not supported";
-        case XDMA_ETIMEOUT:
+        case PCIES2MM_ETIMEOUT:
             return "timeout";
-        case XDMA_EIO:
+        case PCIES2MM_EIO:
             return "i/o error";
         default:
             return "unknown";
         }
     }
 
-    const char *xdma_error_text(xdma_status_t st, const gvfg::internal::XdmaCaptureSession *session)
+    const char *pcies2mm_error_text(pcies2mm_status_t st, const gvfg::internal::PcieS2mmCaptureSession *session)
     {
         const char *detail = session ? session->last_error() : nullptr;
         if (detail && detail[0])
             return detail;
-        return xdma_status_text(st);
+        return pcies2mm_status_text(st);
     }
 
     void copy_wide_to_utf8(const std::wstring &src, char *dst, size_t dstSize)
@@ -100,17 +100,17 @@ namespace
         dst[dstSize - 1] = '\0';
     }
 
-    gvfg_event_type_t map_event_type(xdma_event_type_t type)
+    gvfg_event_type_t map_event_type(pcies2mm_event_type_t type)
     {
         switch (type)
         {
-        case XDMA_EVENT_PLUG_IN:
+        case PCIES2MM_EVENT_PLUG_IN:
             return GVFG_EVENT_PLUG_IN;
-        case XDMA_EVENT_PLUG_OUT:
+        case PCIES2MM_EVENT_PLUG_OUT:
             return GVFG_EVENT_PLUG_OUT;
-        case XDMA_EVENT_CAPTURE_PAUSED:
+        case PCIES2MM_EVENT_CAPTURE_PAUSED:
             return GVFG_EVENT_CAPTURE_PAUSED;
-        case XDMA_EVENT_CAPTURE_RESUMED:
+        case PCIES2MM_EVENT_CAPTURE_RESUMED:
             return GVFG_EVENT_CAPTURE_RESUMED;
         default:
             return GVFG_EVENT_UNKNOWN;
@@ -122,25 +122,25 @@ namespace
         return (mask & (1u << bit)) != 0;
     }
 
-    int to_gvfg_pixel_format(xdma_pixel_format_t fmt)
+    int to_gvfg_pixel_format(pcies2mm_pixel_format_t fmt)
     {
         switch (fmt)
         {
-        case XDMA_PIXFMT_YUY2:
+        case PCIES2MM_PIXFMT_YUY2:
             return GVFG_PIXFMT_YUY2;
-        case XDMA_PIXFMT_UYVY:
+        case PCIES2MM_PIXFMT_UYVY:
             return GVFG_PIXFMT_UYVY;
-        case XDMA_PIXFMT_RGB24:
+        case PCIES2MM_PIXFMT_RGB24:
             return GVFG_PIXFMT_RGB24;
-        case XDMA_PIXFMT_BGRX32:
+        case PCIES2MM_PIXFMT_BGRX32:
             return GVFG_PIXFMT_BGRX32;
-        case XDMA_PIXFMT_NV12:
+        case PCIES2MM_PIXFMT_NV12:
             return GVFG_PIXFMT_NV12;
-        case XDMA_PIXFMT_P010:
+        case PCIES2MM_PIXFMT_P010:
             return GVFG_PIXFMT_P010;
-        case XDMA_PIXFMT_Y210:
+        case PCIES2MM_PIXFMT_Y210:
             return GVFG_PIXFMT_Y210;
-        case XDMA_PIXFMT_YUV444:
+        case PCIES2MM_PIXFMT_YUV444:
             return GVFG_PIXFMT_YUV444;
         default:
             return GVFG_PIXFMT_UNKNOWN;
@@ -383,23 +383,23 @@ struct gvfg_handle_t
 
         close();
 
-        backend = std::make_unique<gvfg::internal::XdmaCaptureSession>();
-        const xdma_status_t stOpen = backend->open_device_index(static_cast<size_t>(index));
-        if (stOpen != XDMA_OK)
+        backend = std::make_unique<gvfg::internal::PcieS2mmCaptureSession>();
+        const pcies2mm_status_t stOpen = backend->open_device_index(static_cast<size_t>(index));
+        if (stOpen != PCIES2MM_OK)
         {
-            recordError(xdma_error_text(stOpen, backend.get()));
+            recordError(pcies2mm_error_text(stOpen, backend.get()));
             backend.reset();
             return map_status(stOpen);
         }
 
         currentIndex = index;
         syncBackendEventCallback();
-        selectedInput = XDMA_INPUT_SDI;
+        selectedInput = PCIES2MM_INPUT_SDI;
         resetRuntimeCounters();
-        const xdma_status_t stInput = backend->set_input(selectedInput);
-        if (stInput != XDMA_OK)
+        const pcies2mm_status_t stInput = backend->set_input(selectedInput);
+        if (stInput != PCIES2MM_OK)
         {
-            recordError(xdma_error_text(stInput, backend.get()));
+            recordError(pcies2mm_error_text(stInput, backend.get()));
             close();
             return map_status(stInput);
         }
@@ -427,10 +427,10 @@ struct gvfg_handle_t
             eventQueue.clear();
         }
 
-        const xdma_status_t st = backend->start_stream();
-        if (st != XDMA_OK)
+        const pcies2mm_status_t st = backend->start_stream();
+        if (st != PCIES2MM_OK)
         {
-            recordError(xdma_error_text(st, backend.get()));
+            recordError(pcies2mm_error_text(st, backend.get()));
             return map_status(st);
         }
 
@@ -516,10 +516,10 @@ struct gvfg_handle_t
             return;
         backend->set_event_callback(&gvfg_handle_t::onBackendEvent,
                                     this,
-                                    XDMA_EVENT_MASK_DEFAULT);
+                                    PCIES2MM_EVENT_MASK_DEFAULT);
     }
 
-    static void onBackendEvent(const xdma_event_t *event, void *user)
+    static void onBackendEvent(const pcies2mm_event_t *event, void *user)
     {
         auto *self = static_cast<gvfg_handle_t *>(user);
         if (!self || !event)
@@ -527,7 +527,7 @@ struct gvfg_handle_t
         self->emitEvent(*event);
     }
 
-    void emitEvent(const xdma_event_t &event)
+    void emitEvent(const pcies2mm_event_t &event)
     {
         gvfg_event_t out{};
         out.type = map_event_type(event.type);
@@ -547,8 +547,8 @@ struct gvfg_handle_t
         if (!backend)
             return;
 
-        xdma_signal_status_t sig{};
-        if (backend->get_signal_status(sig) != XDMA_OK)
+        pcies2mm_signal_status_t sig{};
+        if (backend->get_signal_status(sig) != PCIES2MM_OK)
             return;
 
         std::lock_guard<std::mutex> lock(stateMutex);
@@ -558,7 +558,7 @@ struct gvfg_handle_t
             height = sig.height;
         if (sig.bit_depth > 0)
             bitDepth = sig.bit_depth;
-        pixelFormat = sig.pixel_format != XDMA_PIXFMT_UNKNOWN ? sig.pixel_format : XDMA_PIXFMT_YUY2;
+        pixelFormat = sig.pixel_format != PCIES2MM_PIXFMT_UNKNOWN ? sig.pixel_format : PCIES2MM_PIXFMT_YUY2;
         fpgaValidMask = sig.fpga_valid_mask;
         fpgaWidthValid = sig.fpga_width_valid != 0;
         fpgaHeightValid = sig.fpga_height_valid != 0;
@@ -570,13 +570,13 @@ struct gvfg_handle_t
         fpgaStatusRaw = sig.fpga_status_raw;
     }
 
-    static const char *inputName(xdma_input_t input)
+    static const char *inputName(pcies2mm_input_t input)
     {
         switch (input)
         {
-        case XDMA_INPUT_HDMI:
+        case PCIES2MM_INPUT_HDMI:
             return "HDMI";
-        case XDMA_INPUT_SDI:
+        case PCIES2MM_INPUT_SDI:
             return "SDI";
         default:
             return "unknown";
@@ -590,7 +590,7 @@ struct gvfg_handle_t
         const bool sdiDdrOk = (fpgaStatusRaw & (1u << 1)) != 0;
         const bool hdmiLocked = (fpgaStatusRaw & (1u << 2)) != 0;
         const bool hdmiDdrOk = (fpgaStatusRaw & (1u << 3)) != 0;
-        const bool selectedReady = (selectedInput == XDMA_INPUT_HDMI) ? (hdmiLocked && hdmiDdrOk)
+        const bool selectedReady = (selectedInput == PCIES2MM_INPUT_HDMI) ? (hdmiLocked && hdmiDdrOk)
                                                                          : (sdiLocked && sdiDdrOk);
 
         if (!statusValid || !selectedReady)
@@ -643,17 +643,17 @@ struct gvfg_handle_t
         if (height == 0)
             height = 1080;
 
-        xdma_stream_desc_t desc{};
+        pcies2mm_stream_desc_t desc{};
         desc.input = selectedInput;
         desc.width = width;
         desc.height = height;
         desc.pixel_format = pixelFormat;
         desc.buffer_count = 3;
 
-        const xdma_status_t st = backend->configure_stream(desc);
-        if (st != XDMA_OK)
+        const pcies2mm_status_t st = backend->configure_stream(desc);
+        if (st != PCIES2MM_OK)
         {
-            recordError(xdma_error_text(st, backend.get()));
+            recordError(pcies2mm_error_text(st, backend.get()));
             return map_status(st);
         }
         return GVFG_OK;
@@ -674,16 +674,16 @@ struct gvfg_handle_t
             readInProgress = true;
         }
 
-        xdma_frame_t frame{};
-        const xdma_status_t st = backend->wait_frame(timeoutMs, frame);
-        if (st != XDMA_OK)
+        pcies2mm_frame_t frame{};
+        const pcies2mm_status_t st = backend->wait_frame(timeoutMs, frame);
+        if (st != PCIES2MM_OK)
         {
             {
                 std::lock_guard<std::mutex> lock(frameMutex);
                 readInProgress = false;
             }
-            if (st != XDMA_ETIMEOUT && st != XDMA_ESTATE)
-                recordError(xdma_error_text(st, backend.get()));
+            if (st != PCIES2MM_ETIMEOUT && st != PCIES2MM_ESTATE)
+                recordError(pcies2mm_error_text(st, backend.get()));
             return map_status(st);
         }
 
@@ -732,8 +732,8 @@ struct gvfg_handle_t
                 frameToken.frame_id != heldBackendFrame.frame_id)
                 return GVFG_EINVAL;
 
-            const xdma_status_t st = backend->release_frame(heldBackendFrame);
-            if (st != XDMA_OK)
+            const pcies2mm_status_t st = backend->release_frame(heldBackendFrame);
+            if (st != PCIES2MM_OK)
                 return map_status(st);
 
             heldBackendFrame = {};
@@ -748,7 +748,7 @@ struct gvfg_handle_t
         if (!backend)
             return;
 
-        xdma_frame_t frame{};
+        pcies2mm_frame_t frame{};
         bool shouldRelease = false;
         {
             std::lock_guard<std::mutex> lock(frameMutex);
@@ -832,10 +832,10 @@ struct gvfg_handle_t
             return cfg;
 
         resetRuntimeCounters();
-        const xdma_status_t st = backend->start_stream();
-        if (st != XDMA_OK)
+        const pcies2mm_status_t st = backend->start_stream();
+        if (st != PCIES2MM_OK)
         {
-            recordError(xdma_error_text(st, backend.get()));
+            recordError(pcies2mm_error_text(st, backend.get()));
             return map_status(st);
         }
 
@@ -975,8 +975,8 @@ struct gvfg_handle_t
 
         if (backend)
         {
-            xdma_stream_stats_t stats{};
-            xdma_debug_state_t debugState{};
+            pcies2mm_stream_stats_t stats{};
+            pcies2mm_debug_state_t debugState{};
             uint64_t waitTimeouts = 0;
             backend->get_debug_stats(stats, waitTimeouts, debugState);
             out.backend_state = static_cast<int>(stats.state);
@@ -1072,14 +1072,14 @@ struct gvfg_handle_t
         deliveredFrames.fetch_add(1, std::memory_order_relaxed);
     }
 
-    std::unique_ptr<gvfg::internal::XdmaCaptureSession> backend;
+    std::unique_ptr<gvfg::internal::PcieS2mmCaptureSession> backend;
     int currentIndex = -1;
-    xdma_input_t selectedInput = XDMA_INPUT_SDI;
+    pcies2mm_input_t selectedInput = PCIES2MM_INPUT_SDI;
 
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t bitDepth = 8;
-    xdma_pixel_format_t pixelFormat = XDMA_PIXFMT_YUY2;
+    pcies2mm_pixel_format_t pixelFormat = PCIES2MM_PIXFMT_YUY2;
     mutable std::mutex stateMutex;
     uint32_t fpgaValidMask = 0;
     bool fpgaWidthValid = false;
@@ -1104,7 +1104,7 @@ struct gvfg_handle_t
     std::mutex frameMutex;
     bool readInProgress = false;
     bool frameHeld = false;
-    xdma_frame_t heldBackendFrame{};
+    pcies2mm_frame_t heldBackendFrame{};
     std::mutex eventMutex;
     std::condition_variable eventCv;
     std::deque<gvfg_event_t> eventQueue;
@@ -1124,7 +1124,7 @@ extern "C"
 {
     int gvfg_enumerate_devices(gvfg_device_info_t *out_devices, int max_devices)
     {
-        const std::vector<gvfg::internal::XdmaDevice> devices = gvfg::internal::enumerate_xdma_devices();
+        const std::vector<gvfg::internal::PcieS2mmDevice> devices = gvfg::internal::enumerate_pcies2mm_devices();
         const int n = static_cast<int>(devices.size());
         if (n <= 0)
             return n;

@@ -27,19 +27,19 @@
             <mxRectangle height="34" width="240" x="50" y="515" as="alternateBounds" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="backendTypes" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="xdma_backend_types.h&lt;br&gt;internal frame/event/status types" vertex="1">
+        <mxCell id="backendTypes" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="pcies2mm_backend_types.h&lt;br&gt;internal frame/event/status types" vertex="1">
           <mxGeometry height="58" width="285" x="30" y="95" as="geometry" />
         </mxCell>
         <mxCell id="workers" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="event worker + data worker&lt;br&gt;publish frames and events" vertex="1">
           <mxGeometry height="52" width="280" x="510" y="173" as="geometry" />
         </mxCell>
-        <mxCell id="xdmaSession" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="sdk/gvfg/src/backend/xdma/xdma_capture_session.cpp&lt;br&gt;internal session / workers / frame ring" vertex="1">
+        <mxCell id="pcies2mmSession" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="sdk/gvfg/src/backend/pcies2mm/pcies2mm_capture_session.cpp&lt;br&gt;internal session / workers / frame ring" vertex="1">
           <mxGeometry height="58" width="340" x="420" y="65" as="geometry" />
         </mxCell>
-        <mxCell id="e6" edge="1" parent="backendLayer" source="xdmaSession" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="backendTypes" value="uses">
+        <mxCell id="e6" edge="1" parent="backendLayer" source="pcies2mmSession" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="backendTypes" value="uses">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e7" edge="1" parent="backendLayer" source="xdmaSession" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="workers" value="owns">
+        <mxCell id="e7" edge="1" parent="backendLayer" source="pcies2mmSession" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="workers" value="owns">
           <mxGeometry relative="1" x="-0.004" as="geometry">
             <mxPoint as="offset" />
           </mxGeometry>
@@ -68,13 +68,13 @@
         <mxCell id="e4" edge="1" parent="1" source="qtSample" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="render" value="private preview">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e5" edge="1" parent="1" source="facade" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="xdmaSession" value="backend API calls">
+        <mxCell id="e5" edge="1" parent="1" source="facade" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="pcies2mmSession" value="backend API calls">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="e8" edge="1" parent="1" source="workers" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="ring" value="">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e9" edge="1" parent="1" source="xdmaSession" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;dashed=1;" target="facade" value="frames / events / status">
+        <mxCell id="e9" edge="1" parent="1" source="pcies2mmSession" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;dashed=1;" target="facade" value="frames / events / status">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
               <mxPoint x="420" y="589" />
@@ -82,7 +82,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="e10" edge="1" parent="1" source="externalBoundary" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;dashed=1;" target="xdmaSession" value="input boundary">
+        <mxCell id="e10" edge="1" parent="1" source="externalBoundary" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;dashed=1;" target="pcies2mmSession" value="input boundary">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
               <mxPoint x="550" y="780" />

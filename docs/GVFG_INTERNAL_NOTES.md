@@ -25,7 +25,7 @@ samples/gvfg_qt_preview/
   uses gvfg.dll + gvfg_preview.dll + gvfg_debug.h
 ```
 
-從 customer 角度看，core SDK 必須維持 driver-neutral。XDMA、IRQ、DMA counters、
+從 customer 角度看，core SDK 必須維持 driver-neutral。PCIES2MM、IRQ、DMA counters、
 raw FPGA values、backend details 都是 internal。
 
 ## 架構
@@ -54,7 +54,7 @@ flowchart TD
     end
 
     subgraph Backend["Internal Backend"]
-        Xdma["sdk/gvfg/src/backend/xdma"]
+        PcieS2mm["sdk/gvfg/src/backend/pcies2mm"]
         Ring["frame_ring_"]
         Workers["event worker + data worker"]
     end
@@ -70,8 +70,8 @@ flowchart TD
     ConvertApi --> CaptureApi
     CaptureApi --> Facade
     DebugApi --> Facade
-    Facade --> Xdma
-    Xdma --> Workers
+    Facade --> PcieS2mm
+    PcieS2mm --> Workers
     Workers --> Ring
 ```
 
@@ -118,7 +118,7 @@ gvfg_stop_callback_mode
 - `frame.data` 在 `gvfg_release_frame()` 前有效。
 - `gvfg_frame_t` 要保持 ABI-stable；不要為了 layout 直接 append fields。
 - `gvfg_get_frame_layout()` 回傳 SDK-filled layout metadata：`plane_data`、
-  `plane_stride`、`plane_size`、`plane_offset`。目前 XDMA backend 先用
+  `plane_stride`、`plane_size`、`plane_offset`。目前 PCIES2MM backend 先用
   width/height/format 推導 tightly packed layout；未來 driver 如果能回報真實
   pitch 或 plane offsets，應該更新 layout query path，而不是改既有 frame struct。
 - `gvfg_preview.dll` 應優先吃 `gvfg_get_frame_layout()`；layout query 不可用時才
@@ -155,7 +155,7 @@ GVFG_EVENT_CAPTURE_PAUSED
 GVFG_EVENT_CAPTURE_RESUMED
 ```
 
-Video IRQ handling 是 `sdk/gvfg/src/backend/xdma` 內部細節。IRQ bit numbers、
+Video IRQ handling 是 `sdk/gvfg/src/backend/pcies2mm` 內部細節。IRQ bit numbers、
 IRQ masks、DMA counters、raw FPGA register-like values 不應出現在
 `gvfg_capture.h`。
 
@@ -208,7 +208,7 @@ Do not include：
 include/gvfg_debug.h
 SDK source
 helper source
-XDMA backend headers
+PCIES2MM backend headers
 PDB symbols
 register / DMA / IRQ debug docs
 internal diagnostic tools
@@ -246,7 +246,7 @@ Top-level CMake 會 build core SDK、helpers 和 optional sample：
 
 ```text
 BUILD_GVFG_SAMPLES=ON
-GVFG_XDMA_DEBUG_LOG=OFF
+GVFG_PCIES2MM_DEBUG_LOG=OFF
 ```
 
 輸出產物：
@@ -261,7 +261,7 @@ lib/gvfg_convert.lib
 bin/gvfg_qt_preview.exe
 ```
 
-`GVFG_XDMA_DEBUG_LOG=ON` 會打開 internal backend 的 verbose XDMA flow logging。
+`GVFG_PCIES2MM_DEBUG_LOG=ON` 會打開 internal backend 的 verbose PCIES2MM flow logging。
 
 ## Draw.io Files
 

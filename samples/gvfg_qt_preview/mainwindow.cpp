@@ -187,7 +187,7 @@ void MainWindow::refreshDevices()
     }
     else
     {
-        appendLog(QStringLiteral("Found %1 XDMA device(s)").arg(deviceCount_));
+        appendLog(QStringLiteral("Found %1 PCIES2MM device(s)").arg(deviceCount_));
     }
 }
 

@@ -2,6 +2,8 @@ build*/
 out/
 packages/
 demosrc/
+CaptureDemo_new/
+CaptureDemo/
 .vs/
 .vscode/
 .qtcreator/

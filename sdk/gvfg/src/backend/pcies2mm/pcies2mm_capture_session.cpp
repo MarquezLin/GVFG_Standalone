@@ -1,4 +1,4 @@
-#include "xdma_capture_session.h"
+#include "pcies2mm_capture_session.h"
 
 #include <setupapi.h>
 
@@ -28,6 +28,9 @@ namespace
     constexpr DWORD kIoctlGetVideoDoneIndex = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS);
 
     constexpr uint32_t kEventTypeVideoDma = 0;
+    constexpr uint32_t kEventTypeVideoFormatChange = 1;
+    constexpr uint32_t kEventTypeVideoPlugin = 2;
+    constexpr uint32_t kEventTypeVideoUnplug = 3;
     constexpr uint32_t kDmaBufferCount = 16;
     constexpr uint32_t kMaxChannels = 2;
     constexpr uint32_t kDefaultWidth = 1920;
@@ -127,7 +130,7 @@ namespace
 
     static void trace_log(bool forceDebugOutput, const char *tag, const char *fmt, ...)
     {
-#if GVFG_XDMA_DEBUG_LOG
+#if GVFG_PCIES2MM_DEBUG_LOG
         (void)forceDebugOutput;
 #else
         if (!forceDebugOutput)
@@ -151,20 +154,20 @@ namespace
 #define PCIES2MM_LOG(...) trace_log(false, "", __VA_ARGS__)
 #define PCIES2MM_ERROR_LOG(...) trace_log(true, "[error]", __VA_ARGS__)
 
-    static xdma_pixel_format_t decode_pixel_format(uint32_t raw)
+    static pcies2mm_pixel_format_t decode_pixel_format(uint32_t raw)
     {
         switch (raw)
         {
         case fourcc('Y', 'U', 'Y', '2'):
-            return XDMA_PIXFMT_YUY2;
+            return PCIES2MM_PIXFMT_YUY2;
         case fourcc('U', 'Y', 'V', 'Y'):
-            return XDMA_PIXFMT_UYVY;
+            return PCIES2MM_PIXFMT_UYVY;
         case fourcc('N', 'V', '1', '2'):
-            return XDMA_PIXFMT_NV12;
+            return PCIES2MM_PIXFMT_NV12;
         case fourcc('Y', '2', '1', '0'):
-            return XDMA_PIXFMT_Y210;
+            return PCIES2MM_PIXFMT_Y210;
         case fourcc('P', '0', '1', '0'):
-            return XDMA_PIXFMT_P010;
+            return PCIES2MM_PIXFMT_P010;
         default:
             break;
         }
@@ -172,90 +175,90 @@ namespace
         switch (raw & 0x3u)
         {
         case 0:
-            return XDMA_PIXFMT_YUY2;
+            return PCIES2MM_PIXFMT_YUY2;
         case 1:
-            return XDMA_PIXFMT_RGB24;
+            return PCIES2MM_PIXFMT_RGB24;
         case 2:
-            return XDMA_PIXFMT_YUV444;
+            return PCIES2MM_PIXFMT_YUV444;
         case 3:
-            return XDMA_PIXFMT_NV12;
+            return PCIES2MM_PIXFMT_NV12;
         default:
-            return XDMA_PIXFMT_UNKNOWN;
+            return PCIES2MM_PIXFMT_UNKNOWN;
         }
     }
 
-    static uint32_t old_style_format_code(xdma_pixel_format_t fmt)
+    static uint32_t old_style_format_code(pcies2mm_pixel_format_t fmt)
     {
         switch (fmt)
         {
-        case XDMA_PIXFMT_RGB24:
+        case PCIES2MM_PIXFMT_RGB24:
             return 1;
-        case XDMA_PIXFMT_YUV444:
+        case PCIES2MM_PIXFMT_YUV444:
             return 2;
-        case XDMA_PIXFMT_NV12:
-        case XDMA_PIXFMT_P010:
+        case PCIES2MM_PIXFMT_NV12:
+        case PCIES2MM_PIXFMT_P010:
             return 3;
-        case XDMA_PIXFMT_YUY2:
-        case XDMA_PIXFMT_UYVY:
-        case XDMA_PIXFMT_Y210:
+        case PCIES2MM_PIXFMT_YUY2:
+        case PCIES2MM_PIXFMT_UYVY:
+        case PCIES2MM_PIXFMT_Y210:
         default:
             return 0;
         }
     }
 
-    static uint32_t bit_depth_for_pixfmt(xdma_pixel_format_t fmt)
+    static uint32_t bit_depth_for_pixfmt(pcies2mm_pixel_format_t fmt)
     {
         switch (fmt)
         {
-        case XDMA_PIXFMT_P010:
-        case XDMA_PIXFMT_Y210:
+        case PCIES2MM_PIXFMT_P010:
+        case PCIES2MM_PIXFMT_Y210:
             return 10;
         default:
             return 8;
         }
     }
 
-    static size_t bytes_per_frame(uint32_t width, uint32_t height, xdma_pixel_format_t fmt, uint32_t bitDepth)
+    static size_t bytes_per_frame(uint32_t width, uint32_t height, pcies2mm_pixel_format_t fmt, uint32_t bitDepth)
     {
         const size_t pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
         switch (fmt)
         {
-        case XDMA_PIXFMT_NV12:
+        case PCIES2MM_PIXFMT_NV12:
             return pixels * 3u / 2u;
-        case XDMA_PIXFMT_P010:
+        case PCIES2MM_PIXFMT_P010:
             return pixels * 3u;
-        case XDMA_PIXFMT_RGB24:
-        case XDMA_PIXFMT_YUV444:
+        case PCIES2MM_PIXFMT_RGB24:
+        case PCIES2MM_PIXFMT_YUV444:
             return bitDepth > 8u ? pixels * 6u : pixels * 3u;
-        case XDMA_PIXFMT_Y210:
+        case PCIES2MM_PIXFMT_Y210:
             return pixels * 4u;
-        case XDMA_PIXFMT_YUY2:
-        case XDMA_PIXFMT_UYVY:
+        case PCIES2MM_PIXFMT_YUY2:
+        case PCIES2MM_PIXFMT_UYVY:
         default:
             return pixels * 2u;
         }
     }
 
-    static uint32_t event_mask_for_type(xdma_event_type_t type)
+    static uint32_t event_mask_for_type(pcies2mm_event_type_t type)
     {
         switch (type)
         {
-        case XDMA_EVENT_VIDEO_IRQ:
-            return XDMA_EVENT_MASK_VIDEO_IRQ;
-        case XDMA_EVENT_PLUG_IN:
-            return XDMA_EVENT_MASK_PLUG_IN;
-        case XDMA_EVENT_PLUG_OUT:
-            return XDMA_EVENT_MASK_PLUG_OUT;
-        case XDMA_EVENT_CAPTURE_PAUSED:
-            return XDMA_EVENT_MASK_CAPTURE_PAUSED;
-        case XDMA_EVENT_CAPTURE_RESUMED:
-            return XDMA_EVENT_MASK_CAPTURE_RESUMED;
+        case PCIES2MM_EVENT_VIDEO_IRQ:
+            return PCIES2MM_EVENT_MASK_VIDEO_IRQ;
+        case PCIES2MM_EVENT_PLUG_IN:
+            return PCIES2MM_EVENT_MASK_PLUG_IN;
+        case PCIES2MM_EVENT_PLUG_OUT:
+            return PCIES2MM_EVENT_MASK_PLUG_OUT;
+        case PCIES2MM_EVENT_CAPTURE_PAUSED:
+            return PCIES2MM_EVENT_MASK_CAPTURE_PAUSED;
+        case PCIES2MM_EVENT_CAPTURE_RESUMED:
+            return PCIES2MM_EVENT_MASK_CAPTURE_RESUMED;
         default:
             return 0;
         }
     }
 
-    static void reset_stats(xdma_stream_stats_t &stats, xdma_stream_state_t state)
+    static void reset_stats(pcies2mm_stream_stats_t &stats, pcies2mm_stream_state_t state)
     {
         std::memset(&stats, 0, sizeof(stats));
         stats.state = state;
@@ -264,9 +267,9 @@ namespace
 
 namespace gvfg::internal
 {
-    std::vector<XdmaDevice> enumerate_xdma_devices()
+    std::vector<PcieS2mmDevice> enumerate_pcies2mm_devices()
     {
-        std::vector<XdmaDevice> devices;
+        std::vector<PcieS2mmDevice> devices;
         HDEVINFO info = SetupDiGetClassDevsW(&GUID_DEVINTERFACE_PcieS2mm, nullptr, nullptr,
                                              DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
         if (info == INVALID_HANDLE_VALUE)
@@ -287,7 +290,7 @@ namespace gvfg::internal
             if (!SetupDiGetDeviceInterfaceDetailW(info, &iface, detail, required, nullptr, nullptr))
                 continue;
 
-            XdmaDevice device;
+            PcieS2mmDevice device;
             device.interface_path = detail->DevicePath;
             device.friendly_name = L"PcieS2mm Capture Device " + std::to_wstring(devices.size());
             devices.push_back(device);
@@ -297,31 +300,31 @@ namespace gvfg::internal
         return devices;
     }
 
-    XdmaCaptureSession::XdmaCaptureSession()
+    PcieS2mmCaptureSession::PcieS2mmCaptureSession()
     {
-        stream_desc_.input = XDMA_INPUT_SDI;
+        stream_desc_.input = PCIES2MM_INPUT_SDI;
         stream_desc_.width = kDefaultWidth;
         stream_desc_.height = kDefaultHeight;
-        stream_desc_.pixel_format = XDMA_PIXFMT_YUY2;
+        stream_desc_.pixel_format = PCIES2MM_PIXFMT_YUY2;
         stream_desc_.buffer_count = kDefaultRingBufferCount;
         stream_bit_depth_ = 8;
-        reset_stats(stats_, XDMA_STREAM_STOPPED);
+        reset_stats(stats_, PCIES2MM_STREAM_STOPPED);
     }
 
-    XdmaCaptureSession::~XdmaCaptureSession()
+    PcieS2mmCaptureSession::~PcieS2mmCaptureSession()
     {
         close();
     }
 
-    xdma_status_t XdmaCaptureSession::open_device_index(size_t deviceIndex)
+    pcies2mm_status_t PcieS2mmCaptureSession::open_device_index(size_t deviceIndex)
     {
-        const auto devices = enumerate_xdma_devices();
+        const auto devices = enumerate_pcies2mm_devices();
         if (deviceIndex >= devices.size())
-            return fail(XDMA_ENODEV, "enumerate_pcies2mm_devices", ERROR_NOT_FOUND);
+            return fail(PCIES2MM_ENODEV, "enumerate_pcies2mm_devices", ERROR_NOT_FOUND);
         return open_device(devices[deviceIndex]);
     }
 
-    xdma_status_t XdmaCaptureSession::open_device(const XdmaDevice &device)
+    pcies2mm_status_t PcieS2mmCaptureSession::open_device(const PcieS2mmDevice &device)
     {
         close();
         base_path_ = device.interface_path;
@@ -338,17 +341,17 @@ namespace gvfg::internal
         {
             const DWORD err = GetLastError();
             close_handles();
-            return fail(XDMA_EIO, "CreateFile(PcieS2mm)", err);
+            return fail(PCIES2MM_EIO, "CreateFile(PcieS2mm)", err);
         }
 
         opened_ = true;
         configured_ = false;
         clear_last_error();
         PCIES2MM_LOG("open_device: %s", wide_to_utf8(base_path_).c_str());
-        return XDMA_OK;
+        return PCIES2MM_OK;
     }
 
-    xdma_status_t XdmaCaptureSession::close()
+    pcies2mm_status_t PcieS2mmCaptureSession::close()
     {
         stop_stream();
         close_handles();
@@ -356,17 +359,13 @@ namespace gvfg::internal
         configured_ = false;
         base_path_.clear();
         friendly_name_.clear();
-        reset_stats(stats_, XDMA_STREAM_STOPPED);
-        return XDMA_OK;
+        reset_stats(stats_, PCIES2MM_STREAM_STOPPED);
+        return PCIES2MM_OK;
     }
 
-    void XdmaCaptureSession::close_handles()
+    void PcieS2mmCaptureSession::close_handles()
     {
-        if (interrupt_event_)
-        {
-            CloseHandle(interrupt_event_);
-            interrupt_event_ = nullptr;
-        }
+        close_event_handles();
         if (device_ != INVALID_HANDLE_VALUE)
         {
             CloseHandle(device_);
@@ -374,19 +373,19 @@ namespace gvfg::internal
         }
     }
 
-    xdma_status_t XdmaCaptureSession::set_input(xdma_input_t input)
+    pcies2mm_status_t PcieS2mmCaptureSession::set_input(pcies2mm_input_t input)
     {
         if (!opened_)
-            return XDMA_ESTATE;
-        input_ = input == XDMA_INPUT_HDMI ? XDMA_INPUT_HDMI : XDMA_INPUT_SDI;
+            return PCIES2MM_ESTATE;
+        input_ = input == PCIES2MM_INPUT_HDMI ? PCIES2MM_INPUT_HDMI : PCIES2MM_INPUT_SDI;
         stream_desc_.input = input_;
-        return XDMA_OK;
+        return PCIES2MM_OK;
     }
 
-    xdma_status_t XdmaCaptureSession::get_signal_status(xdma_signal_status_t &out) const
+    pcies2mm_status_t PcieS2mmCaptureSession::get_signal_status(pcies2mm_signal_status_t &out) const
     {
         if (!opened_)
-            return XDMA_ESTATE;
+            return PCIES2MM_ESTATE;
 
         std::memset(&out, 0, sizeof(out));
         uint32_t rawWidth = 0;
@@ -396,9 +395,9 @@ namespace gvfg::internal
         const bool heightOk = read_reg(video_base() + kVideoVSizeOffset, rawHeight);
         const bool formatOk = read_reg(video_base() + kVideoFormatOffset, rawFormat);
 
-        xdma_pixel_format_t fmt = formatOk ? decode_pixel_format(rawFormat) : stream_desc_.pixel_format;
-        if (fmt == XDMA_PIXFMT_UNKNOWN)
-            fmt = stream_desc_.pixel_format == XDMA_PIXFMT_UNKNOWN ? XDMA_PIXFMT_YUY2 : stream_desc_.pixel_format;
+        pcies2mm_pixel_format_t fmt = formatOk ? decode_pixel_format(rawFormat) : stream_desc_.pixel_format;
+        if (fmt == PCIES2MM_PIXFMT_UNKNOWN)
+            fmt = stream_desc_.pixel_format == PCIES2MM_PIXFMT_UNKNOWN ? PCIES2MM_PIXFMT_YUY2 : stream_desc_.pixel_format;
 
         const uint32_t width = (widthOk && rawWidth != 0) ? rawWidth : stream_desc_.width;
         const uint32_t height = (heightOk && rawHeight != 0) ? rawHeight : stream_desc_.height;
@@ -425,35 +424,35 @@ namespace gvfg::internal
         out.fpga_status_raw = active_channel() == 0 ? ((1u << 0) | (1u << 1))
                                                     : ((1u << 2) | (1u << 3));
         out.fpga_valid_mask = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3);
-        return haveSize ? XDMA_OK : XDMA_ENODEV;
+        return haveSize ? PCIES2MM_OK : PCIES2MM_ENODEV;
     }
 
-    xdma_status_t XdmaCaptureSession::set_event_callback(xdma_event_callback_t callback, void *user, uint32_t eventMask)
+    pcies2mm_status_t PcieS2mmCaptureSession::set_event_callback(pcies2mm_event_callback_t callback, void *user, uint32_t eventMask)
     {
         std::lock_guard<std::mutex> lock(event_callback_mutex_);
         event_callback_ = callback;
         event_callback_user_ = user;
-        event_mask_filter_ = eventMask ? eventMask : XDMA_EVENT_MASK_DEFAULT;
-        return XDMA_OK;
+        event_mask_filter_ = eventMask ? eventMask : PCIES2MM_EVENT_MASK_DEFAULT;
+        return PCIES2MM_OK;
     }
 
-    xdma_status_t XdmaCaptureSession::configure_stream(const xdma_stream_desc_t &desc)
+    pcies2mm_status_t PcieS2mmCaptureSession::configure_stream(const pcies2mm_stream_desc_t &desc)
     {
         if (!opened_)
-            return XDMA_ESTATE;
+            return PCIES2MM_ESTATE;
         if (running_)
-            return XDMA_ESTATE;
+            return PCIES2MM_ESTATE;
         if (desc.width == 0 || desc.height == 0)
-            return XDMA_EINVAL;
+            return PCIES2MM_EINVAL;
 
-        xdma_pixel_format_t fmt = desc.pixel_format == XDMA_PIXFMT_UNKNOWN ? XDMA_PIXFMT_YUY2 : desc.pixel_format;
+        pcies2mm_pixel_format_t fmt = desc.pixel_format == PCIES2MM_PIXFMT_UNKNOWN ? PCIES2MM_PIXFMT_YUY2 : desc.pixel_format;
         switch (fmt)
         {
-        case XDMA_PIXFMT_YUY2:
-        case XDMA_PIXFMT_UYVY:
+        case PCIES2MM_PIXFMT_YUY2:
+        case PCIES2MM_PIXFMT_UYVY:
             break;
         default:
-            return fail(XDMA_ENOTSUP, "configure_stream(pixel_format)", ERROR_NOT_SUPPORTED);
+            return fail(PCIES2MM_ENOTSUP, "configure_stream(pixel_format)", ERROR_NOT_SUPPORTED);
         }
 
         stream_desc_ = desc;
@@ -464,21 +463,21 @@ namespace gvfg::internal
                                                kMaxRingBufferCount);
         stream_bit_depth_ = bit_depth_for_pixfmt(fmt);
         configured_ = true;
-        reset_stats(stats_, XDMA_STREAM_CONFIGURED);
+        reset_stats(stats_, PCIES2MM_STREAM_CONFIGURED);
         clear_last_error();
-        return XDMA_OK;
+        return PCIES2MM_OK;
     }
 
-    xdma_status_t XdmaCaptureSession::start_stream()
+    pcies2mm_status_t PcieS2mmCaptureSession::start_stream()
     {
         if (!opened_ || !configured_)
-            return XDMA_ESTATE;
+            return PCIES2MM_ESTATE;
         if (running_)
-            return XDMA_OK;
+            return PCIES2MM_OK;
 
         const size_t bytes = frame_size_bytes();
         if (bytes == 0 || bytes > (std::numeric_limits<DWORD>::max)())
-            return fail(XDMA_EINVAL, "frame_size_bytes", ERROR_INVALID_PARAMETER);
+            return fail(PCIES2MM_EINVAL, "frame_size_bytes", ERROR_INVALID_PARAMETER);
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -492,36 +491,31 @@ namespace gvfg::internal
             delivered_sequence_ = 0;
             wait_timeout_count_ = 0;
             stream_error_ = false;
-            reset_stats(stats_, XDMA_STREAM_RUNNING);
+            reset_stats(stats_, PCIES2MM_STREAM_RUNNING);
         }
 
-        interrupt_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!interrupt_event_)
-            return fail(XDMA_EIO, "CreateEvent");
-
         const uint32_t channel = active_channel();
-        if (!register_event(channel))
+        if (!create_and_register_events(channel))
         {
             const DWORD err = GetLastError();
-            CloseHandle(interrupt_event_);
-            interrupt_event_ = nullptr;
-            return fail(XDMA_EIO, "REGISTER_EVENT", err);
+            unregister_events(channel);
+            close_event_handles();
+            return fail(PCIES2MM_EIO, "REGISTER_EVENT", err);
         }
 
         running_ = true;
         capture_active_ = true;
         try
         {
-            capture_thread_ = std::thread(&XdmaCaptureSession::capture_thread_proc, this);
+            capture_thread_ = std::thread(&PcieS2mmCaptureSession::capture_thread_proc, this);
         }
         catch (...)
         {
             running_ = false;
             capture_active_ = false;
-            unregister_event(channel);
-            CloseHandle(interrupt_event_);
-            interrupt_event_ = nullptr;
-            return fail(XDMA_EIO, "capture_thread", ERROR_NOT_ENOUGH_MEMORY);
+            unregister_events(channel);
+            close_event_handles();
+            return fail(PCIES2MM_EIO, "capture_thread", ERROR_NOT_ENOUGH_MEMORY);
         }
 
         const bool dmaEnableOk = write_reg(video_base() + kVideoDmaEnOffset, 1);
@@ -530,17 +524,17 @@ namespace gvfg::internal
         {
             const DWORD err = GetLastError();
             stop_stream();
-            return fail(XDMA_EIO, "enable video capture", err);
+            return fail(PCIES2MM_EIO, "enable video capture", err);
         }
 
         PCIES2MM_LOG("start: channel=%u base=0x%x bytes=%zu", channel, video_base(), bytes);
-        return XDMA_OK;
+        return PCIES2MM_OK;
     }
 
-    xdma_status_t XdmaCaptureSession::stop_stream()
+    pcies2mm_status_t PcieS2mmCaptureSession::stop_stream()
     {
         if (!running_ && !capture_thread_.joinable())
-            return XDMA_OK;
+            return PCIES2MM_OK;
 
         const uint32_t channel = active_channel();
         running_ = false;
@@ -553,20 +547,16 @@ namespace gvfg::internal
             write_reg(kInterruptBase + kIrqMaskW1cOffset, video_irq_mask_bit());
         }
 
-        if (interrupt_event_)
-            SetEvent(interrupt_event_);
+        if (dma_event_)
+            SetEvent(dma_event_);
 
         if (capture_thread_.joinable())
             capture_thread_.join();
 
-        if (device_ != INVALID_HANDLE_VALUE && interrupt_event_)
-            unregister_event(channel);
+        if (device_ != INVALID_HANDLE_VALUE)
+            unregister_events(channel);
 
-        if (interrupt_event_)
-        {
-            CloseHandle(interrupt_event_);
-            interrupt_event_ = nullptr;
-        }
+        close_event_handles();
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -574,19 +564,19 @@ namespace gvfg::internal
             active_delivery_slot_ = static_cast<size_t>(-1);
             for (FrameSlot &slot : frame_ring_)
                 slot.in_use = false;
-            stats_.state = configured_ ? XDMA_STREAM_CONFIGURED : XDMA_STREAM_STOPPED;
+            stats_.state = configured_ ? PCIES2MM_STREAM_CONFIGURED : PCIES2MM_STREAM_STOPPED;
         }
         frame_cv_.notify_all();
         data_cv_.notify_all();
-        return XDMA_OK;
+        return PCIES2MM_OK;
     }
 
-    xdma_status_t XdmaCaptureSession::wait_frame(uint32_t timeoutMs, xdma_frame_t &out)
+    pcies2mm_status_t PcieS2mmCaptureSession::wait_frame(uint32_t timeoutMs, pcies2mm_frame_t &out)
     {
         std::unique_lock<std::mutex> lock(mutex_);
         std::memset(&out, 0, sizeof(out));
         if (!running_)
-            return XDMA_ESTATE;
+            return PCIES2MM_ESTATE;
 
         const auto hasFrame = [this]()
         {
@@ -595,7 +585,7 @@ namespace gvfg::internal
                 if (slot.ready && slot.sequence > delivered_sequence_)
                     return true;
             }
-            return stream_error_ || !running_;
+            return stream_error_ || !running_ || !capture_active_.load(std::memory_order_acquire);
         };
 
         if (timeoutMs == 0)
@@ -605,7 +595,7 @@ namespace gvfg::internal
         else if (!frame_cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), hasFrame))
         {
             ++wait_timeout_count_;
-            return XDMA_ETIMEOUT;
+            return PCIES2MM_ETIMEOUT;
         }
 
         size_t readySlot = frame_ring_.size();
@@ -621,11 +611,13 @@ namespace gvfg::internal
         }
 
         if (!running_ && readySlot == frame_ring_.size())
-            return XDMA_ESTATE;
+            return PCIES2MM_ESTATE;
+        if (!capture_active_.load(std::memory_order_acquire) && readySlot == frame_ring_.size())
+            return PCIES2MM_ESTATE;
         if (stream_error_ && readySlot == frame_ring_.size())
-            return XDMA_EIO;
+            return PCIES2MM_EIO;
         if (readySlot == frame_ring_.size())
-            return XDMA_ETIMEOUT;
+            return PCIES2MM_ETIMEOUT;
 
         FrameSlot &slot = frame_ring_[readySlot];
         slot.ready = false;
@@ -641,14 +633,14 @@ namespace gvfg::internal
         out.height = stream_desc_.height;
         out.pixel_format = stream_desc_.pixel_format;
         out.bit_depth = stream_bit_depth_;
-        return XDMA_OK;
+        return PCIES2MM_OK;
     }
 
-    xdma_status_t XdmaCaptureSession::release_frame(const xdma_frame_t &frame)
+    pcies2mm_status_t PcieS2mmCaptureSession::release_frame(const pcies2mm_frame_t &frame)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (active_delivery_slot_ >= frame_ring_.size())
-            return XDMA_ESTATE;
+            return PCIES2MM_ESTATE;
 
         const FrameSlot &slot = frame_ring_[active_delivery_slot_];
         if (frame.data != slot.data.data() ||
@@ -658,23 +650,23 @@ namespace gvfg::internal
             frame.height != stream_desc_.height ||
             frame.pixel_format != stream_desc_.pixel_format ||
             frame.bit_depth != stream_bit_depth_)
-            return XDMA_EINVAL;
+            return PCIES2MM_EINVAL;
 
         frame_ring_[active_delivery_slot_].in_use = false;
         active_delivery_slot_ = static_cast<size_t>(-1);
         data_cv_.notify_all();
-        return XDMA_OK;
+        return PCIES2MM_OK;
     }
 
-    const char *XdmaCaptureSession::last_error() const
+    const char *PcieS2mmCaptureSession::last_error() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
         return last_error_.c_str();
     }
 
-    void XdmaCaptureSession::get_debug_stats(xdma_stream_stats_t &outStats,
+    void PcieS2mmCaptureSession::get_debug_stats(pcies2mm_stream_stats_t &outStats,
                                              uint64_t &outWaitTimeouts,
-                                             xdma_debug_state_t &outDebugState) const
+                                             pcies2mm_debug_state_t &outDebugState) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
         outStats = stats_;
@@ -693,7 +685,7 @@ namespace gvfg::internal
         outDebugState.ring_size = static_cast<uint64_t>(frame_ring_.size());
     }
 
-    bool XdmaCaptureSession::read_reg(uint32_t offset, uint32_t &out) const
+    bool PcieS2mmCaptureSession::read_reg(uint32_t offset, uint32_t &out) const
     {
         PCIES2MM_REG_ACCESS reg{};
         reg.Offset = offset;
@@ -712,7 +704,7 @@ namespace gvfg::internal
         return true;
     }
 
-    bool XdmaCaptureSession::write_reg(uint32_t offset, uint32_t value) const
+    bool PcieS2mmCaptureSession::write_reg(uint32_t offset, uint32_t value) const
     {
         PCIES2MM_REG_ACCESS reg{};
         reg.Offset = offset;
@@ -728,7 +720,7 @@ namespace gvfg::internal
                                nullptr) != FALSE;
     }
 
-    bool XdmaCaptureSession::read_reg_bar1(uint32_t offset, uint32_t &out) const
+    bool PcieS2mmCaptureSession::read_reg_bar1(uint32_t offset, uint32_t &out) const
     {
         PCIES2MM_REG_ACCESS reg{};
         reg.Offset = offset;
@@ -747,7 +739,7 @@ namespace gvfg::internal
         return true;
     }
 
-    bool XdmaCaptureSession::write_reg_bar1(uint32_t offset, uint32_t value) const
+    bool PcieS2mmCaptureSession::write_reg_bar1(uint32_t offset, uint32_t value) const
     {
         PCIES2MM_REG_ACCESS reg{};
         reg.Offset = offset;
@@ -763,12 +755,12 @@ namespace gvfg::internal
                                nullptr) != FALSE;
     }
 
-    bool XdmaCaptureSession::register_event(uint32_t channelIndex)
+    bool PcieS2mmCaptureSession::register_event(uint32_t channelIndex, uint32_t eventType, HANDLE eventHandle)
     {
         PCIES2MM_EVENT_REG eventReg{};
-        eventReg.Type = kEventTypeVideoDma;
+        eventReg.Type = eventType;
         eventReg.ChannelIndex = channelIndex;
-        eventReg.EventHandle = interrupt_event_;
+        eventReg.EventHandle = eventHandle;
         DWORD bytesReturned = 0;
         return DeviceIoControl(device_,
                                kIoctlRegisterEvent,
@@ -780,10 +772,10 @@ namespace gvfg::internal
                                nullptr) != FALSE;
     }
 
-    void XdmaCaptureSession::unregister_event(uint32_t channelIndex)
+    void PcieS2mmCaptureSession::unregister_event(uint32_t channelIndex, uint32_t eventType)
     {
         PCIES2MM_EVENT_REG eventReg{};
-        eventReg.Type = kEventTypeVideoDma;
+        eventReg.Type = eventType;
         eventReg.ChannelIndex = channelIndex;
         eventReg.EventHandle = nullptr;
         DWORD bytesReturned = 0;
@@ -797,7 +789,59 @@ namespace gvfg::internal
                         nullptr);
     }
 
-    bool XdmaCaptureSession::get_video_done_index(uint32_t channelIndex, uint32_t &doneIndex) const
+    bool PcieS2mmCaptureSession::create_and_register_events(uint32_t channelIndex)
+    {
+        dma_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        format_change_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        plug_in_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        plug_out_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (!dma_event_ || !format_change_event_ || !plug_in_event_ || !plug_out_event_)
+            return false;
+
+        if (!register_event(channelIndex, kEventTypeVideoDma, dma_event_))
+            return false;
+        if (!register_event(channelIndex, kEventTypeVideoFormatChange, format_change_event_))
+            return false;
+        if (!register_event(channelIndex, kEventTypeVideoPlugin, plug_in_event_))
+            return false;
+        if (!register_event(channelIndex, kEventTypeVideoUnplug, plug_out_event_))
+            return false;
+        return true;
+    }
+
+    void PcieS2mmCaptureSession::unregister_events(uint32_t channelIndex)
+    {
+        unregister_event(channelIndex, kEventTypeVideoDma);
+        unregister_event(channelIndex, kEventTypeVideoFormatChange);
+        unregister_event(channelIndex, kEventTypeVideoPlugin);
+        unregister_event(channelIndex, kEventTypeVideoUnplug);
+    }
+
+    void PcieS2mmCaptureSession::close_event_handles()
+    {
+        if (dma_event_)
+        {
+            CloseHandle(dma_event_);
+            dma_event_ = nullptr;
+        }
+        if (format_change_event_)
+        {
+            CloseHandle(format_change_event_);
+            format_change_event_ = nullptr;
+        }
+        if (plug_in_event_)
+        {
+            CloseHandle(plug_in_event_);
+            plug_in_event_ = nullptr;
+        }
+        if (plug_out_event_)
+        {
+            CloseHandle(plug_out_event_);
+            plug_out_event_ = nullptr;
+        }
+    }
+
+    bool PcieS2mmCaptureSession::get_video_done_index(uint32_t channelIndex, uint32_t &doneIndex) const
     {
         ULONG input = channelIndex;
         ULONG value = 0;
@@ -816,7 +860,7 @@ namespace gvfg::internal
         return true;
     }
 
-    int XdmaCaptureSession::get_frame(uint32_t channelIndex, uint32_t frameIndex, uint8_t *buffer, DWORD bufferSize) const
+    int PcieS2mmCaptureSession::get_frame(uint32_t channelIndex, uint32_t frameIndex, uint8_t *buffer, DWORD bufferSize) const
     {
         ULONG input[2] = {channelIndex, frameIndex};
         DWORD bytesReturned = 0;
@@ -833,19 +877,29 @@ namespace gvfg::internal
         return static_cast<int>(bytesReturned);
     }
 
-    void XdmaCaptureSession::capture_thread_proc()
+    void PcieS2mmCaptureSession::capture_thread_proc()
     {
         const uint32_t channel = active_channel();
         write_reg(kInterruptBase + kIrqMaskW1sOffset, video_irq_mask_bit());
+        HANDLE waitHandles[] = {
+            dma_event_,
+            format_change_event_,
+            plug_in_event_,
+            plug_out_event_,
+        };
+        constexpr DWORD waitHandleCount = 4;
 
         while (running_)
         {
-            const DWORD waitResult = WaitForSingleObject(interrupt_event_, 1000);
+            const DWORD waitResult = WaitForMultipleObjects(waitHandleCount,
+                                                            waitHandles,
+                                                            FALSE,
+                                                            1000);
             if (!running_)
                 break;
             if (waitResult == WAIT_TIMEOUT)
                 continue;
-            if (waitResult != WAIT_OBJECT_0)
+            if (waitResult < WAIT_OBJECT_0 || waitResult >= WAIT_OBJECT_0 + waitHandleCount)
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 stream_error_ = true;
@@ -854,97 +908,219 @@ namespace gvfg::internal
                 break;
             }
 
-            uint32_t doneIndex = 0;
-            if (!get_video_done_index(channel, doneIndex))
+            switch (waitResult - WAIT_OBJECT_0)
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                stream_error_ = true;
-                ++stats_.dma_errors;
-                frame_cv_.notify_all();
+            case 0:
+                handle_dma_event(channel);
                 break;
-            }
-
-            emit_event(XDMA_EVENT_VIDEO_IRQ, channel == 0 ? 0 : 4, video_irq_mask_bit());
-
-            const DWORD bytes = static_cast<DWORD>(frame_size_bytes());
-            size_t slotIndex = frame_ring_.size();
-            uint8_t *slotData = nullptr;
-            {
-                std::unique_lock<std::mutex> lock(mutex_);
-                ++pending_events_;
-                ++stats_.interrupt_count;
-
-                auto hasFreeSlot = [this]()
-                {
-                    for (const FrameSlot &slot : frame_ring_)
-                    {
-                        if (!slot.in_use)
-                            return true;
-                    }
-                    return false;
-                };
-
-                while (running_ && !hasFreeSlot())
-                    data_cv_.wait_for(lock, std::chrono::seconds(1));
-                if (!running_)
-                    break;
-
-                for (size_t attempt = 0; attempt < frame_ring_.size(); ++attempt)
-                {
-                    const size_t candidate = (next_write_slot_ + attempt) % frame_ring_.size();
-                    if (!frame_ring_[candidate].in_use)
-                    {
-                        slotIndex = candidate;
-                        break;
-                    }
-                }
-                if (slotIndex == frame_ring_.size())
-                    continue;
-
-                FrameSlot &slot = frame_ring_[slotIndex];
-                if (slot.ready && slot.sequence > delivered_sequence_)
-                    ++stats_.frames_dropped;
-                slot.ready = false;
-                slot.in_use = true;
-                if (slot.data.size() < bytes)
-                    slot.data.resize(bytes);
-                slotData = slot.data.data();
-                next_write_slot_ = (slotIndex + 1) % frame_ring_.size();
-            }
-
-            const uint32_t frameIndex = doneIndex % kDmaBufferCount;
-            const int ret = get_frame(channel, frameIndex, slotData, bytes);
-            if (!running_)
+            case 1:
+                handle_format_change_event(channel);
                 break;
-            if (ret < 0 || static_cast<DWORD>(ret) != bytes)
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (slotIndex < frame_ring_.size())
-                    frame_ring_[slotIndex].in_use = false;
-                stream_error_ = true;
-                ++stats_.dma_errors;
-                frame_cv_.notify_all();
-                data_cv_.notify_all();
-                PCIES2MM_ERROR_LOG("get_frame failed channel=%u frame=%u ret=%d expected=%lu",
-                                   channel,
-                                   frameIndex,
-                                   ret,
-                                   bytes);
+            case 2:
+                handle_plugin_event(channel);
                 break;
-            }
-
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (pending_events_ > 0)
-                    --pending_events_;
-                publish_frame(slotIndex, static_cast<size_t>(ret));
+            case 3:
+                handle_unplug_event(channel);
+                break;
+            default:
+                break;
             }
         }
 
         write_reg(kInterruptBase + kIrqMaskW1cOffset, video_irq_mask_bit());
     }
 
-    void XdmaCaptureSession::publish_frame(size_t slotIndex, size_t bytes)
+    void PcieS2mmCaptureSession::handle_dma_event(uint32_t channel)
+    {
+        if (!capture_active_.load(std::memory_order_acquire))
+            return;
+
+        uint32_t doneIndex = 0;
+        if (!get_video_done_index(channel, doneIndex))
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ++stats_.dma_errors;
+            frame_cv_.notify_all();
+            return;
+        }
+
+        emit_event(PCIES2MM_EVENT_VIDEO_IRQ, channel == 0 ? 0 : 4, video_irq_mask_bit());
+
+        const DWORD bytes = static_cast<DWORD>(frame_size_bytes());
+        size_t slotIndex = frame_ring_.size();
+        uint8_t *slotData = nullptr;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            ++pending_events_;
+            ++stats_.interrupt_count;
+
+            auto hasFreeSlot = [this]()
+            {
+                for (const FrameSlot &slot : frame_ring_)
+                {
+                    if (!slot.in_use)
+                        return true;
+                }
+                return false;
+            };
+
+            while (running_ && !hasFreeSlot())
+                data_cv_.wait_for(lock, std::chrono::seconds(1));
+            if (!running_)
+                return;
+
+            for (size_t attempt = 0; attempt < frame_ring_.size(); ++attempt)
+            {
+                const size_t candidate = (next_write_slot_ + attempt) % frame_ring_.size();
+                if (!frame_ring_[candidate].in_use)
+                {
+                    slotIndex = candidate;
+                    break;
+                }
+            }
+            if (slotIndex == frame_ring_.size())
+                return;
+
+            FrameSlot &slot = frame_ring_[slotIndex];
+            if (slot.ready && slot.sequence > delivered_sequence_)
+                ++stats_.frames_dropped;
+            slot.ready = false;
+            slot.in_use = true;
+            if (slot.data.size() < bytes)
+                slot.data.resize(bytes);
+            slotData = slot.data.data();
+            next_write_slot_ = (slotIndex + 1) % frame_ring_.size();
+        }
+
+        const uint32_t frameIndex = doneIndex % kDmaBufferCount;
+        const int ret = get_frame(channel, frameIndex, slotData, bytes);
+        if (!running_)
+            return;
+        if (ret < 0 || static_cast<DWORD>(ret) != bytes)
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (slotIndex < frame_ring_.size())
+                frame_ring_[slotIndex].in_use = false;
+            if (pending_events_ > 0)
+                --pending_events_;
+            ++stats_.dma_errors;
+            frame_cv_.notify_all();
+            data_cv_.notify_all();
+            PCIES2MM_ERROR_LOG("get_frame failed channel=%u frame=%u ret=%d expected=%lu",
+                               channel,
+                               frameIndex,
+                               ret,
+                               bytes);
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (pending_events_ > 0)
+                --pending_events_;
+            publish_frame(slotIndex, static_cast<size_t>(ret));
+        }
+    }
+
+    void PcieS2mmCaptureSession::handle_format_change_event(uint32_t channel)
+    {
+        write_reg(video_base() + kVideoDmaEnOffset, 0);
+        write_reg(video_base() + kVideoEnOffset, 0);
+        capture_active_ = false;
+        emit_event(PCIES2MM_EVENT_CAPTURE_PAUSED, channel == 0 ? 0 : 4, video_irq_mask_bit());
+
+        if (refresh_stream_from_signal(true))
+        {
+            write_reg(video_base() + kVideoDmaEnOffset, 1);
+            write_reg(video_base() + kVideoEnOffset, 1);
+            capture_active_ = true;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                stream_error_ = false;
+                stats_.state = PCIES2MM_STREAM_RUNNING;
+            }
+            emit_event(PCIES2MM_EVENT_CAPTURE_RESUMED, channel == 0 ? 0 : 4, video_irq_mask_bit());
+        }
+
+        frame_cv_.notify_all();
+        data_cv_.notify_all();
+    }
+
+    void PcieS2mmCaptureSession::handle_plugin_event(uint32_t channel)
+    {
+        refresh_stream_from_signal(true);
+        write_reg(video_base() + kVideoDmaEnOffset, 1);
+        write_reg(video_base() + kVideoEnOffset, 1);
+        capture_active_ = true;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stream_error_ = false;
+            stats_.state = PCIES2MM_STREAM_RUNNING;
+        }
+        emit_event(PCIES2MM_EVENT_PLUG_IN, channel == 0 ? 0 : 4, video_irq_mask_bit());
+        emit_event(PCIES2MM_EVENT_CAPTURE_RESUMED, channel == 0 ? 0 : 4, video_irq_mask_bit());
+        frame_cv_.notify_all();
+        data_cv_.notify_all();
+    }
+
+    void PcieS2mmCaptureSession::handle_unplug_event(uint32_t channel)
+    {
+        write_reg(video_base() + kVideoDmaEnOffset, 0);
+        write_reg(video_base() + kVideoEnOffset, 0);
+        capture_active_ = false;
+        emit_event(PCIES2MM_EVENT_PLUG_OUT, channel == 0 ? 0 : 4, video_irq_mask_bit());
+        emit_event(PCIES2MM_EVENT_CAPTURE_PAUSED, channel == 0 ? 0 : 4, video_irq_mask_bit());
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            pending_events_ = 0;
+            stats_.state = PCIES2MM_STREAM_CONFIGURED;
+        }
+        frame_cv_.notify_all();
+        data_cv_.notify_all();
+    }
+
+    bool PcieS2mmCaptureSession::refresh_stream_from_signal(bool resizeRing)
+    {
+        pcies2mm_signal_status_t signal{};
+        if (get_signal_status(signal) != PCIES2MM_OK ||
+            signal.width == 0 ||
+            signal.height == 0 ||
+            signal.pixel_format == PCIES2MM_PIXFMT_UNKNOWN)
+        {
+            PCIES2MM_ERROR_LOG("refresh_stream_from_signal failed");
+            return false;
+        }
+
+        const uint32_t bitDepth = bit_depth_for_pixfmt(signal.pixel_format);
+        const size_t bytes = bytes_per_frame(signal.width, signal.height, signal.pixel_format, bitDepth);
+        if (bytes == 0 || bytes > (std::numeric_limits<DWORD>::max)())
+        {
+            PCIES2MM_ERROR_LOG("refresh_stream_from_signal invalid frame size width=%u height=%u bytes=%zu",
+                               signal.width,
+                               signal.height,
+                               bytes);
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        stream_desc_.width = signal.width;
+        stream_desc_.height = signal.height;
+        stream_desc_.pixel_format = signal.pixel_format;
+        stream_bit_depth_ = bitDepth;
+        if (resizeRing)
+        {
+            frame_ring_.assign(stream_desc_.buffer_count, FrameSlot{});
+            for (FrameSlot &slot : frame_ring_)
+                slot.data.assign(bytes, 0);
+            next_write_slot_ = 0;
+            active_delivery_slot_ = static_cast<size_t>(-1);
+            pending_events_ = 0;
+        }
+        return true;
+    }
+
+    void PcieS2mmCaptureSession::publish_frame(size_t slotIndex, size_t bytes)
     {
         if (slotIndex >= frame_ring_.size())
             return;
@@ -956,7 +1132,7 @@ namespace gvfg::internal
         slot.in_use = false;
         ++latest_sequence_;
         ++stats_.frames_captured;
-        stats_.state = XDMA_STREAM_RUNNING;
+        stats_.state = PCIES2MM_STREAM_RUNNING;
         if (should_log_counter(latest_sequence_))
         {
             PCIES2MM_LOG("publish_frame: id=%llu slot=%zu bytes=%zu",
@@ -968,9 +1144,9 @@ namespace gvfg::internal
         data_cv_.notify_all();
     }
 
-    void XdmaCaptureSession::emit_event(xdma_event_type_t type, uint32_t irqBit, uint32_t irqMask) const
+    void PcieS2mmCaptureSession::emit_event(pcies2mm_event_type_t type, uint32_t irqBit, uint32_t irqMask) const
     {
-        xdma_event_callback_t callback = nullptr;
+        pcies2mm_event_callback_t callback = nullptr;
         void *user = nullptr;
         {
             std::lock_guard<std::mutex> lock(event_callback_mutex_);
@@ -981,7 +1157,7 @@ namespace gvfg::internal
             user = event_callback_user_;
         }
 
-        xdma_event_t event{};
+        pcies2mm_event_t event{};
         event.type = type;
         event.irq_bit = irqBit;
         event.irq_mask = irqMask;
@@ -989,7 +1165,7 @@ namespace gvfg::internal
         callback(&event, user);
     }
 
-    xdma_status_t XdmaCaptureSession::fail(xdma_status_t status, const char *where, DWORD winerr) const
+    pcies2mm_status_t PcieS2mmCaptureSession::fail(pcies2mm_status_t status, const char *where, DWORD winerr) const
     {
         std::ostringstream oss;
         oss << (where ? where : "PcieS2mm") << " failed";
@@ -1000,39 +1176,39 @@ namespace gvfg::internal
         return status;
     }
 
-    void XdmaCaptureSession::set_last_error(const std::string &message) const
+    void PcieS2mmCaptureSession::set_last_error(const std::string &message) const
     {
         std::lock_guard<std::mutex> lock(mutex_);
         last_error_ = message;
     }
 
-    void XdmaCaptureSession::clear_last_error() const
+    void PcieS2mmCaptureSession::clear_last_error() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
         last_error_.clear();
     }
 
-    uint32_t XdmaCaptureSession::active_channel() const
+    uint32_t PcieS2mmCaptureSession::active_channel() const
     {
-        return input_ == XDMA_INPUT_HDMI ? 1u : 0u;
+        return input_ == PCIES2MM_INPUT_HDMI ? 1u : 0u;
     }
 
-    uint32_t XdmaCaptureSession::video_event_mask() const
+    uint32_t PcieS2mmCaptureSession::video_event_mask() const
     {
         return video_irq_mask_bit();
     }
 
-    uint32_t XdmaCaptureSession::video_base() const
+    uint32_t PcieS2mmCaptureSession::video_base() const
     {
         return active_channel() == 0 ? kCh0VideoBase : kCh1VideoBase;
     }
 
-    uint32_t XdmaCaptureSession::video_irq_mask_bit() const
+    uint32_t PcieS2mmCaptureSession::video_irq_mask_bit() const
     {
         return active_channel() == 0 ? kCh0VideoDmaIrqMask : kCh1VideoDmaIrqMask;
     }
 
-    size_t XdmaCaptureSession::frame_size_bytes() const
+    size_t PcieS2mmCaptureSession::frame_size_bytes() const
     {
         return bytes_per_frame(stream_desc_.width, stream_desc_.height, stream_desc_.pixel_format, stream_bit_depth_);
     }
