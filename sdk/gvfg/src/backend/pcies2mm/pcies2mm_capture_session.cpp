@@ -164,6 +164,8 @@ namespace
             return PCIES2MM_PIXFMT_UYVY;
         case fourcc('N', 'V', '1', '2'):
             return PCIES2MM_PIXFMT_NV12;
+        case fourcc('v', '2', '1', '0'):
+            return PCIES2MM_PIXFMT_V210;
         case fourcc('Y', '2', '1', '0'):
             return PCIES2MM_PIXFMT_Y210;
         case fourcc('P', '0', '1', '0'):
@@ -201,6 +203,7 @@ namespace
         case PCIES2MM_PIXFMT_YUY2:
         case PCIES2MM_PIXFMT_UYVY:
         case PCIES2MM_PIXFMT_Y210:
+        case PCIES2MM_PIXFMT_V210:
         default:
             return 0;
         }
@@ -212,6 +215,7 @@ namespace
         {
         case PCIES2MM_PIXFMT_P010:
         case PCIES2MM_PIXFMT_Y210:
+        case PCIES2MM_PIXFMT_V210:
             return 10;
         default:
             return 8;
@@ -232,6 +236,8 @@ namespace
             return bitDepth > 8u ? pixels * 6u : pixels * 3u;
         case PCIES2MM_PIXFMT_Y210:
             return pixels * 4u;
+        case PCIES2MM_PIXFMT_V210:
+            return ((static_cast<size_t>(width) + 5u) / 6u) * 16u * static_cast<size_t>(height);
         case PCIES2MM_PIXFMT_YUY2:
         case PCIES2MM_PIXFMT_UYVY:
         default:
@@ -450,6 +456,7 @@ namespace gvfg::internal
         {
         case PCIES2MM_PIXFMT_YUY2:
         case PCIES2MM_PIXFMT_UYVY:
+        case PCIES2MM_PIXFMT_V210:
             break;
         default:
             return fail(PCIES2MM_ENOTSUP, "configure_stream(pixel_format)", ERROR_NOT_SUPPORTED);

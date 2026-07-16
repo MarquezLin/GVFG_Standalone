@@ -142,6 +142,8 @@ namespace
             return GVFG_PIXFMT_Y210;
         case PCIES2MM_PIXFMT_YUV444:
             return GVFG_PIXFMT_YUV444;
+        case PCIES2MM_PIXFMT_V210:
+            return GVFG_PIXFMT_V210;
         default:
             return GVFG_PIXFMT_UNKNOWN;
         }
@@ -167,6 +169,8 @@ namespace
             return "Y210";
         case GVFG_PIXFMT_YUV444:
             return "YUV444";
+        case GVFG_PIXFMT_V210:
+            return "V210";
         case GVFG_PIXFMT_BGRA8:
             return "BGRA8";
         default:
@@ -278,6 +282,12 @@ namespace
         case GVFG_PIXFMT_YUV444:
             if (!checked_mul_u64(width, frame.bit_depth > 8 ? 6u : 3u, row) ||
                 !checked_mul_u64(row, height, size0))
+                break;
+            if (row <= static_cast<uint64_t>(INT_MAX) && set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)))
+                layout.plane_count = 1;
+            break;
+        case GVFG_PIXFMT_V210:
+            if (!checked_mul_u64((width + 5u) / 6u, 16u, row) || !checked_mul_u64(row, height, size0))
                 break;
             if (row <= static_cast<uint64_t>(INT_MAX) && set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)))
                 layout.plane_count = 1;

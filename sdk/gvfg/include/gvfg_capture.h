@@ -101,6 +101,7 @@ typedef enum
     GVFG_PIXFMT_P010 = 6,
     GVFG_PIXFMT_Y210 = 7,
     GVFG_PIXFMT_YUV444 = 8,
+    GVFG_PIXFMT_V210 = 9,
     GVFG_PIXFMT_BGRA8 = 100
 } gvfg_pixel_format_t;
 
@@ -132,7 +133,7 @@ typedef struct
     int width;              /* Width of the most recent frame returned by gvfg_read_frame(). */
     int height;             /* Height of the most recent frame returned by gvfg_read_frame(). */
     int bit_depth;          /* Bits per color channel of the frame buffer. */
-    char pixel_format[32];  /* Native frame buffer format, for example YUY2, Y210, NV12, or P010. */
+    char pixel_format[32];  /* Native frame buffer format, for example YUY2, Y210, V210, NV12, or P010. */
     int valid;              /* Non-zero while capture is running after at least one frame read. */
 } gvfg_last_frame_info_t;
 

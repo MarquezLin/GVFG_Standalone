@@ -33,7 +33,8 @@ typedef enum pcies2mm_pixel_format_t
     PCIES2MM_PIXFMT_NV12 = 5,
     PCIES2MM_PIXFMT_P010 = 6,
     PCIES2MM_PIXFMT_Y210 = 7,
-    PCIES2MM_PIXFMT_YUV444 = 8
+    PCIES2MM_PIXFMT_YUV444 = 8,
+    PCIES2MM_PIXFMT_V210 = 9
 } pcies2mm_pixel_format_t;
 
 typedef enum pcies2mm_stream_state_t
