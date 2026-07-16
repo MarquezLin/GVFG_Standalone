@@ -1,0 +1,98 @@
+;
+; pcie_s2mm_driver.inf
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=Sample ; TODO: edit Class
+ClassGuid={78A1C341-4539-11d3-B88D-00C04FAD5171} ; TODO: edit ClassGuid
+Provider=%ManufacturerName%
+CatalogFile=pcie_s2mm_driver.cat
+DriverVer = 07/14/2026,14.48.21.148
+
+[DestinationDirs]
+DefaultDestDir = 12
+pcie_s2mm_driver_Device_CoInstaller_CopyFiles = 11
+
+; ================= Class section =====================
+
+[ClassInstall32]
+Addreg=SampleClassReg
+
+[SampleClassReg]
+HKR,,,0,%ClassName%
+HKR,,Icon,,-5
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+pcie_s2mm_driver.sys  = 1,,
+;
+
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName%=Standard,NTamd64
+
+[Standard.NTamd64]
+%pcie_s2mm_driver.DeviceDesc%=pcie_s2mm_driver_Device, PCI\VEN_10EE&DEV_7024 ; PCIe device match
+
+[pcie_s2mm_driver_Device.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+pcie_s2mm_driver.sys
+
+[pcie_s2mm_driver_Device.NT.HW]
+AddReg = AddInterruptReg
+
+[AddInterruptReg]
+HKR,"Interrupt Management",,0x00000010
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",,0x00000010
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",MSISupported,0x00010001,1
+HKR,"Interrupt Management\MessageSignaledInterruptPropperties",MessageNumberLimit,0x00010001,24
+
+;-------------- Service installation
+[pcie_s2mm_driver_Device.NT.Services]
+AddService = pcie_s2mm_driver,%SPSVCINST_ASSOCSERVICE%, pcie_s2mm_driver_Service_Inst
+
+; -------------- pcie_s2mm_driver driver install sections
+[pcie_s2mm_driver_Service_Inst]
+DisplayName    = %pcie_s2mm_driver.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\pcie_s2mm_driver.sys
+
+;
+;--- pcie_s2mm_driver_Device Coinstaller installation ------
+;
+
+[pcie_s2mm_driver_Device.NT.CoInstallers]
+AddReg=pcie_s2mm_driver_Device_CoInstaller_AddReg
+CopyFiles=pcie_s2mm_driver_Device_CoInstaller_CopyFiles
+
+[pcie_s2mm_driver_Device_CoInstaller_AddReg]
+;
+
+
+[pcie_s2mm_driver_Device_CoInstaller_CopyFiles]
+;
+
+
+[pcie_s2mm_driver_Device.NT.Wdf]
+KmdfService =  pcie_s2mm_driver, pcie_s2mm_driver_wdfsect
+[pcie_s2mm_driver_wdfsect]
+KmdfLibraryVersion = 1.15
+
+[Strings]
+SPSVCINST_ASSOCSERVICE= 0x00000002
+ManufacturerName="<Your manufacturer name>" ;TODO: Replace with your manufacturer name
+ClassName="Samples" ; TODO: edit ClassName
+DiskName = "pcie_s2mm_driver Installation Disk"
+pcie_s2mm_driver.DeviceDesc = "pcie_s2mm_driver Device"
+pcie_s2mm_driver.SVCDESC = "pcie_s2mm_driver Service"

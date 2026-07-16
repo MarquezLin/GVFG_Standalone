@@ -3,7 +3,6 @@ out/
 packages/
 demosrc/
 CaptureDemo_new/
-CaptureDemo/
 .vs/
 .vscode/
 .qtcreator/
@@ -17,3 +16,11 @@ CMakeUserPresets.json
 *.lib
 *.dll
 *.exe
+
+CaptureDemo/CaptureDemo/.qtcreator/
+CaptureDemo/CaptureDemo/build/
+CaptureDemo/CaptureDemo/debug/
+CaptureDemo/CaptureDemo/release/
+CaptureDemo/CaptureDemo/*.yuv
+CaptureDemo/CaptureDemo/*.raw
+CaptureDemo/CaptureDemo/*.rgb
