@@ -1094,10 +1094,12 @@ bool D3DPreviewPipeline::upload_y210_frame(const uint8_t *data, int src_stride, 
         for (int x = 0; x < w2; ++x)
         {
             const int srcX = x * 4;
+            // Standard Y210 is Y0, Cb(U), Y1, Cr(V). The current FPGA DMA
+            // payload arrives as Y0, Cr(V), Y1, Cb(U), so normalize it here.
             const uint16_t Y0 = normalize_y210_word_for_upload(src16[srcX + 0]);
-            const uint16_t U = normalize_y210_word_for_upload(src16[srcX + 1]);
+            const uint16_t V = normalize_y210_word_for_upload(src16[srcX + 1]);
             const uint16_t Y1 = (srcX + 2 < rowWords) ? normalize_y210_word_for_upload(src16[srcX + 2]) : Y0;
-            const uint16_t V = (srcX + 3 < rowWords) ? normalize_y210_word_for_upload(src16[srcX + 3]) : U;
+            const uint16_t U = (srcX + 3 < rowWords) ? normalize_y210_word_for_upload(src16[srcX + 3]) : V;
 
             uint16_t *d4 = dst16 + x * 4;
             d4[0] = Y0;

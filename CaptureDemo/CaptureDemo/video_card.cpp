@@ -31,7 +31,13 @@ int calcFrameBytes(int width, int height, UINT32 fourcc)
     }
     else if (fourcc == 0x76323130) // v210
     {
-        return ((width + 5) / 6) * 16 * height;
+        // Temporary FPGA contract: the format register still reports v210,
+        // but the DMA payload uses Y210 (16 bits per component) layout.
+        return width * height * 4;
+    }
+    else if (fourcc == 0x59323130) // Y210
+    {
+        return width * height * 4;
     }
     return 0;
 }
@@ -429,6 +435,7 @@ void VideoCard::captureThread(ULONG channelIndex)
                 ULONG irq_mask = 0;
                 ULONG video_en = 0;
                 ULONG dma_en = 0;
+                ULONG dma_bytes = 0;
                 ULONG done_ptr = 0;
                 ULONG lost_frame = 0;
                 ULONG video_irq = 0;
@@ -438,6 +445,7 @@ void VideoCard::captureThread(ULONG channelIndex)
                 readReg(INTERRUPT_BASE + IRQ_MASK_STATUS_OFFSET, irq_mask);
                 readReg(ch.video_base + VIDEO_EN_OFFSET, video_en);
                 readReg(ch.video_base + VIDEO_DMA_EN_OFFSET, dma_en);
+                readReg(ch.video_base + VIDEO_DMA_BYTES_OFFSET, dma_bytes);
                 readReg(ch.video_base + VIDEO_DMA_DONE_PTR_OFFSET, done_ptr);
                 readReg(ch.video_base + VIDEO_LOST_FRAME_CNT_OFFSET, lost_frame);
                 readReg(ch.video_base + VIDEO_IRQ_STATUS_OFFSET, video_irq);
@@ -449,7 +457,8 @@ void VideoCard::captureThread(ULONG channelIndex)
                          << "irq_mask=0x" << irq_mask
                          << "video_en=0x" << video_en
                          << "dma_en=0x" << dma_en
-                         << "done_ptr=0x" << done_ptr
+                         << "dma_bytes=" << Qt::dec << dma_bytes
+                         << "done_ptr=0x" << Qt::hex << done_ptr
                          << "lost=0x" << lost_frame
                          << "video_irq=0x" << video_irq
                          << "video_dma_irq=0x" << video_dma_irq
@@ -521,7 +530,7 @@ void VideoCard::captureThread(ULONG channelIndex)
             if (ch.frame_count == 10)
             {
                 std::ofstream of("./v210.yuv", std::ios::out | std::ios::binary);
-                of.write((const char*)ch.frame_buffer, frame_size);
+                of.write((const char *)ch.frame_buffer, frame_size);
                 of.close();
                 qDebug() << "save v210.yuv done";
             }
@@ -568,10 +577,18 @@ void VideoCard::videoModuleThread(ULONG channelIndex)
             writeReg(ch.video_base + VIDEO_EN_OFFSET, 0);
             readReg(ch.video_base + VIDEO_HSIZE_OFFSET, ch.video_width);
             readReg(ch.video_base + VIDEO_VSIZE_OFFSET, ch.video_height);
-            ULONG frame_size = ch.video_width * ch.video_height * 2;
-            ch.frame_buffer = new unsigned char[ch.video_width * ch.video_height * 2];
+            ULONG detected_fourcc = 0;
+            readReg(ch.video_base + VIDEO_FORMAT_OFFSET, detected_fourcc);
+            ch.fourcc = detected_fourcc;
+            const ULONG frame_size = calcFrameBytes(ch.video_width, ch.video_height, ch.fourcc);
+            delete[] ch.frame_buffer;
+            ch.frame_buffer = new unsigned char[frame_size];
             memset(ch.frame_buffer, 0, frame_size);
-            qDebug() << "ch" << channelIndex << "video format change event received, new resolution:" << ch.video_width << "x" << ch.video_height;
+            qDebug() << "ch" << channelIndex
+                     << "video format change event received, new resolution:"
+                     << ch.video_width << "x" << ch.video_height
+                     << "fourcc=0x" << Qt::hex << ch.fourcc << Qt::dec
+                     << "frame_size:" << frame_size;
             continue;
         }
 
@@ -581,10 +598,18 @@ void VideoCard::videoModuleThread(ULONG channelIndex)
             writeReg(ch.video_base + VIDEO_EN_OFFSET, 0);
             readReg(ch.video_base + VIDEO_HSIZE_OFFSET, ch.video_width);
             readReg(ch.video_base + VIDEO_VSIZE_OFFSET, ch.video_height);
-            ULONG frame_size = ch.video_width * ch.video_height * 2;
-            ch.frame_buffer = new unsigned char[ch.video_width * ch.video_height * 2];
+            ULONG detected_fourcc = 0;
+            readReg(ch.video_base + VIDEO_FORMAT_OFFSET, detected_fourcc);
+            ch.fourcc = detected_fourcc;
+            const ULONG frame_size = calcFrameBytes(ch.video_width, ch.video_height, ch.fourcc);
+            delete[] ch.frame_buffer;
+            ch.frame_buffer = new unsigned char[frame_size];
             memset(ch.frame_buffer, 0, frame_size);
-            qDebug() << "ch" << channelIndex << "video plugin event received, width:" << ch.video_width << ", height:" << ch.video_height;
+            qDebug() << "ch" << channelIndex
+                     << "video plugin event received, width:" << ch.video_width
+                     << ", height:" << ch.video_height
+                     << ", fourcc=0x" << Qt::hex << ch.fourcc << Qt::dec
+                     << "frame_size:" << frame_size;
             writeReg(ch.video_base + VIDEO_DMA_EN_OFFSET, 1);
             writeReg(ch.video_base + VIDEO_EN_OFFSET, 1);
             continue;

@@ -275,10 +275,13 @@ namespace
             for (int x = 0; x < src.width; x += 2)
             {
                 const int sx = x * 2;
+                // Standard Y210 is Y0, Cb(U), Y1, Cr(V).  Normalize the
+                // current FPGA DMA order Y0, Cr(V), Y1, Cb(U) before RGB
+                // conversion so snapshots match the preview path.
                 const uint16_t y0 = y210_word_to_10bit(srcRow[sx + 0]);
-                const uint16_t u = y210_word_to_10bit(srcRow[sx + 1]);
+                const uint16_t v = y210_word_to_10bit(srcRow[sx + 1]);
                 const uint16_t y1 = (x + 1 < src.width) ? y210_word_to_10bit(srcRow[sx + 2]) : y0;
-                const uint16_t v = (x + 1 < src.width) ? y210_word_to_10bit(srcRow[sx + 3]) : u;
+                const uint16_t u = (x + 1 < src.width) ? y210_word_to_10bit(srcRow[sx + 3]) : v;
 
                 double r = 0.0, g = 0.0, b = 0.0;
                 yuv709_limited_to_rgb01(static_cast<double>(y0) / 1023.0,

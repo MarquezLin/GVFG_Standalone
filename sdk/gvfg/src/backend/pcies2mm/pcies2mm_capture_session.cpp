@@ -165,7 +165,9 @@ namespace
         case fourcc('N', 'V', '1', '2'):
             return PCIES2MM_PIXFMT_NV12;
         case fourcc('v', '2', '1', '0'):
-            return PCIES2MM_PIXFMT_V210;
+            // Temporary FPGA contract: FOURCC remains v210 while the DMA
+            // payload is laid out as Y210.
+            return PCIES2MM_PIXFMT_Y210;
         case fourcc('Y', '2', '1', '0'):
             return PCIES2MM_PIXFMT_Y210;
         case fourcc('P', '0', '1', '0'):
@@ -456,6 +458,7 @@ namespace gvfg::internal
         {
         case PCIES2MM_PIXFMT_YUY2:
         case PCIES2MM_PIXFMT_UYVY:
+        case PCIES2MM_PIXFMT_Y210:
         case PCIES2MM_PIXFMT_V210:
             break;
         default:

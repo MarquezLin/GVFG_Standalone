@@ -23,7 +23,6 @@
 
 constexpr ULONG FOURCC_V210 = 0x76323130;
 constexpr int GVFG_PIXFMT_Y210 = 7;
-constexpr int GVFG_PIXFMT_V210 = 9;
 
 struct GvfgFrame
 {
@@ -599,12 +598,15 @@ void MainWindow::init()
 
                 auto cb = [=](uchar *data, int video_width, int video_height) {
                     if (fourcc == FOURCC_V210 && preview_runtime_[ch]) {
-                        const uint64_t frameSize = (uint64_t)(((video_width + 5) / 6) * 16) * (uint64_t)video_height;
+                        // The FPGA format register currently reports v210,
+                        // but its DMA payload is Y210 (4 bytes per pixel).
+                        const uint64_t frameSize =
+                            (uint64_t)video_width * 4u * (uint64_t)video_height;
                         preview_runtime_[ch]->renderFrameData(data,
                                                               frameSize,
                                                               video_width,
                                                               video_height,
-                                                              GVFG_PIXFMT_V210,
+                                                              GVFG_PIXFMT_Y210,
                                                               10,
                                                               0);
                     } else {
