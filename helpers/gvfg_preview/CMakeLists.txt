@@ -25,8 +25,6 @@ target_compile_definitions(gvfg_preview PRIVATE
 )
 
 target_link_libraries(gvfg_preview
-    PUBLIC
-    gvfg
     PRIVATE
     user32
     dxgi

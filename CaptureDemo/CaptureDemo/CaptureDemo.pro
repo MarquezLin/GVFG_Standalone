@@ -61,6 +61,32 @@ RESOURCES += \
 INCLUDEPATH += $$PWD/3rdparty/include
 DEPENDPATH += $$PWD/3rdparty/include
 
+GVFG_ROOT = $$clean_path($$PWD/../..)
+INCLUDEPATH += \
+    $$GVFG_ROOT/helpers/gvfg_preview/include
+
+CONFIG(debug, debug|release) {
+    GVFG_CONFIG = Debug
+    GVFG_DEMO_OUTPUT = $$OUT_PWD/debug
+} else {
+    GVFG_CONFIG = Release
+    GVFG_DEMO_OUTPUT = $$OUT_PWD/release
+}
+
+msvc {
+    GVFG_BUILD = $$GVFG_ROOT/build/Desktop_Qt_6_10_2_MSVC2022_64bit-$${GVFG_CONFIG}
+    GVFG_PREVIEW_DLL = $$GVFG_BUILD/bin/gvfg_preview.dll
+}
+
+mingw {
+    GVFG_BUILD = $$GVFG_ROOT/build/Desktop_Qt_6_10_2_MinGW_64_bit-$${GVFG_CONFIG}
+    GVFG_PREVIEW_DLL = $$GVFG_BUILD/bin/libgvfg_preview.dll
+}
+
+LIBS += -L$$GVFG_BUILD/lib -lgvfg_preview
+
+QMAKE_POST_LINK += $$QMAKE_COPY $$shell_path($$GVFG_PREVIEW_DLL) $$shell_path($$GVFG_DEMO_OUTPUT)
+
 msvc {
     QMAKE_CFLAGS += /utf-8
     QMAKE_CXXFLAGS += /utf-8

@@ -10,8 +10,7 @@
 #include "my_widget/gl_widget.h"
 #include "yuv_widget.h"
 #include "task.h"
-
-struct GvfgPreviewRuntime;
+#include "gvfg_preview.h"
 
 enum
 {
@@ -90,7 +89,7 @@ private:
     QPoint mouse_pos_;
 
     std::shared_ptr<VideoCard> video_card_;
-    std::unique_ptr<GvfgPreviewRuntime> preview_runtime_[PCIE_S2MM_MAX_CHANNELS];
+    gvfg_preview_handle preview_handle_[PCIE_S2MM_MAX_CHANNELS] = {};
     std::unique_ptr<char[]> screen_data_buffer_;
     std::mutex screen_data_buffer_mtx_;
     std::unique_ptr<std::thread> screen_capture_thread_ = nullptr;

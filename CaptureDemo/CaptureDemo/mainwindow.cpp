@@ -15,176 +15,23 @@
 #include <conio.h>
 #include <QDateTime>
 #include <QFile>
-#include <QFileInfo>
 #include <QMessageBox>
-#include <QDir>
 #include "my_widget/nav_widget.h"
 #define FRAMESHAPE 10
 
 constexpr ULONG FOURCC_V210 = 0x76323130;
-constexpr int GVFG_PIXFMT_Y210 = 7;
 
-struct GvfgFrame
+namespace
 {
-    const void *data;
-    uint64_t data_size;
-    int width;
-    int height;
-    int pixel_format;
-    int bit_depth;
-    uint64_t frame_id;
-};
-
-struct GvfgPreviewRuntime
+void destroyPreview(gvfg_preview_handle &handle)
 {
-    using CreateFn = int (*)(void **);
-    using DestroyFn = int (*)(void *);
-    using AttachWindowFn = int (*)(void *, void *);
-    using RenderFrameFn = int (*)(void *, const GvfgFrame *);
-    using ShutdownFn = int (*)(void *);
-    using StrErrorFn = const char *(*)(int);
-
-    HMODULE dll = nullptr;
-    void *handle = nullptr;
-    CreateFn create = nullptr;
-    DestroyFn destroy = nullptr;
-    AttachWindowFn attachWindow = nullptr;
-    RenderFrameFn renderFrame = nullptr;
-    ShutdownFn shutdownFn = nullptr;
-    StrErrorFn strError = nullptr;
-    HWND attachedHwnd = nullptr;
-
-    ~GvfgPreviewRuntime()
-    {
-        shutdown();
-        if (dll)
-        {
-            FreeLibrary(dll);
-            dll = nullptr;
-        }
-    }
-
-    static QString findPreviewDll()
-    {
-        QDir dir(QCoreApplication::applicationDirPath());
-        for (int i = 0; i < 8; ++i)
-        {
-            const QString debugPath = dir.filePath("build/Desktop_Qt_6_10_2_MSVC2022_64bit-Debug/bin/gvfg_preview.dll");
-            if (QFileInfo::exists(debugPath))
-                return QDir::toNativeSeparators(debugPath);
-
-            const QString releasePath = dir.filePath("build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/bin/gvfg_preview.dll");
-            if (QFileInfo::exists(releasePath))
-                return QDir::toNativeSeparators(releasePath);
-
-            if (!dir.cdUp())
-                break;
-        }
-        return QString();
-    }
-
-    bool load()
-    {
-        if (dll)
-            return true;
-
-        const QString dllPath = findPreviewDll();
-        if (dllPath.isEmpty())
-        {
-            qWarning() << "gvfg_preview.dll not found";
-            return false;
-        }
-
-        dll = LoadLibraryExW(reinterpret_cast<LPCWSTR>(dllPath.utf16()), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-        if (!dll)
-        {
-            qWarning() << "LoadLibraryEx failed for" << dllPath << "error:" << GetLastError();
-            return false;
-        }
-
-        create = reinterpret_cast<CreateFn>(GetProcAddress(dll, "gvfg_preview_create"));
-        destroy = reinterpret_cast<DestroyFn>(GetProcAddress(dll, "gvfg_preview_destroy"));
-        attachWindow = reinterpret_cast<AttachWindowFn>(GetProcAddress(dll, "gvfg_preview_attach_window"));
-        renderFrame = reinterpret_cast<RenderFrameFn>(GetProcAddress(dll, "gvfg_preview_render_frame"));
-        shutdownFn = reinterpret_cast<ShutdownFn>(GetProcAddress(dll, "gvfg_preview_shutdown"));
-        strError = reinterpret_cast<StrErrorFn>(GetProcAddress(dll, "gvfg_preview_strerror"));
-
-        if (!create || !destroy || !attachWindow || !renderFrame || !shutdownFn)
-        {
-            qWarning() << "gvfg_preview.dll missing required exports";
-            return false;
-        }
-
-        int st = create(&handle);
-        if (st != 0 || !handle)
-        {
-            qWarning() << "gvfg_preview_create failed:" << statusText(st);
-            return false;
-        }
-
-        qDebug() << "gvfg_preview loaded:" << dllPath;
-        return true;
-    }
-
-    bool attach(HWND hwnd)
-    {
-        if (!load() || !hwnd)
-            return false;
-        if (attachedHwnd == hwnd)
-            return true;
-
-        int st = attachWindow(handle, hwnd);
-        if (st != 0)
-        {
-            qWarning() << "gvfg_preview_attach_window failed:" << statusText(st);
-            return false;
-        }
-
-        attachedHwnd = hwnd;
-        return true;
-    }
-
-    bool renderFrameData(const void *data, uint64_t size, int width, int height, int pixelFormat, int bitDepth, uint64_t frameId)
-    {
-        if (!handle || !data)
-            return false;
-
-        GvfgFrame frame = {};
-        frame.data = data;
-        frame.data_size = size;
-        frame.width = width;
-        frame.height = height;
-        frame.pixel_format = pixelFormat;
-        frame.bit_depth = bitDepth;
-        frame.frame_id = frameId;
-
-        int st = renderFrame(handle, &frame);
-        if (st != 0)
-        {
-            qWarning() << "gvfg_preview_render_frame failed:" << statusText(st);
-            return false;
-        }
-        return true;
-    }
-
-    void shutdown()
-    {
-        if (handle)
-        {
-            if (shutdownFn)
-                shutdownFn(handle);
-            if (destroy)
-                destroy(handle);
-            handle = nullptr;
-        }
-        attachedHwnd = nullptr;
-    }
-
-    const char *statusText(int st) const
-    {
-        return strError ? strError(st) : "unknown";
-    }
-};
+    if (!handle)
+        return;
+    gvfg_preview_shutdown(handle);
+    gvfg_preview_destroy(handle);
+    handle = nullptr;
+}
+}
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -587,28 +434,47 @@ void MainWindow::init()
 
                 HWND previewHwnd = nullptr;
                 if (fourcc == FOURCC_V210) {
-                    if (!preview_runtime_[ch])
-                        preview_runtime_[ch] = std::make_unique<GvfgPreviewRuntime>();
+                    if (!preview_handle_[ch]) {
+                        const gvfg_preview_status_t createStatus =
+                            gvfg_preview_create(&preview_handle_[ch]);
+                        if (createStatus != GVFG_PREVIEW_OK) {
+                            qWarning() << "gvfg_preview_create failed:"
+                                       << gvfg_preview_strerror(createStatus);
+                        }
+                    }
                     gl_widget_[ch]->setUpdatesEnabled(false);
                     previewHwnd = reinterpret_cast<HWND>(gl_widget_[ch]->winId());
-                    if (!preview_runtime_[ch]->attach(previewHwnd)) {
-                        qWarning() << "failed to attach gvfg preview for ch" << ch;
+                    if (preview_handle_[ch]) {
+                        const gvfg_preview_status_t attachStatus =
+                            gvfg_preview_attach_window(preview_handle_[ch], previewHwnd);
+                        if (attachStatus != GVFG_PREVIEW_OK) {
+                            qWarning() << "gvfg_preview_attach_window failed:"
+                                       << gvfg_preview_strerror(attachStatus);
+                        }
                     }
                 }
 
                 auto cb = [=](uchar *data, int video_width, int video_height) {
-                    if (fourcc == FOURCC_V210 && preview_runtime_[ch]) {
+                    if (fourcc == FOURCC_V210 && preview_handle_[ch]) {
                         // The FPGA format register currently reports v210,
                         // but its DMA payload is Y210 (4 bytes per pixel).
                         const uint64_t frameSize =
                             (uint64_t)video_width * 4u * (uint64_t)video_height;
-                        preview_runtime_[ch]->renderFrameData(data,
-                                                              frameSize,
-                                                              video_width,
-                                                              video_height,
-                                                              GVFG_PIXFMT_Y210,
-                                                              10,
-                                                              0);
+                        gvfg_preview_frame_t frame{};
+                        frame.struct_size = sizeof(frame);
+                        frame.data = data;
+                        frame.data_size = frameSize;
+                        frame.width = video_width;
+                        frame.height = video_height;
+                        frame.pixel_format = GVFG_PREVIEW_PIXFMT_Y210;
+                        frame.bit_depth = 10;
+                        frame.row_bytes = video_width * 4;
+                        const gvfg_preview_status_t renderStatus =
+                            gvfg_preview_render_frame(preview_handle_[ch], &frame);
+                        if (renderStatus != GVFG_PREVIEW_OK) {
+                            qWarning() << "gvfg_preview_render_frame failed:"
+                                       << gvfg_preview_strerror(renderStatus);
+                        }
                     } else {
                         gl_widget_[ch]->renderYUV422((const uchar *)data, video_width, video_height);
                     }
@@ -637,8 +503,7 @@ void MainWindow::init()
                 if(video_card_) {
                     int ch = i; // capture channel index
                     video_card_->stopCapture(ch);
-                    if (preview_runtime_[ch])
-                        preview_runtime_[ch]->shutdown();
+                    destroyPreview(preview_handle_[ch]);
                     gl_widget_[ch]->setUpdatesEnabled(true);
                     btn_start_capture_[ch]->setEnabled(true);
                     btn_stop_capture_[ch]->setEnabled(false);
@@ -658,8 +523,7 @@ void MainWindow::init()
         if(video_card_) {
             video_card_->uninit();
             for (int i = 0; i < PCIE_S2MM_MAX_CHANNELS; i++) {
-                if (preview_runtime_[i])
-                    preview_runtime_[i]->shutdown();
+                destroyPreview(preview_handle_[i]);
                 gl_widget_[i]->setUpdatesEnabled(true);
             }
             btn_init_->setEnabled(true);
@@ -739,8 +603,7 @@ void MainWindow::clickedCloseBtn()
 
     for (int i = 0; i < PCIE_S2MM_MAX_CHANNELS; i++)
     {
-        if (preview_runtime_[i])
-            preview_runtime_[i]->shutdown();
+        destroyPreview(preview_handle_[i]);
     }
 
     for (int i = 0; i < PCIE_S2MM_MAX_CHANNELS; i++)

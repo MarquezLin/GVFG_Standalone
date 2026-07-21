@@ -604,7 +604,47 @@ void MainWindow::captureReadLoop()
             const uint64_t frameId = frame.frame_id;
             if (previewHandle_)
             {
-                const gvfg_preview_status_t previewStatus = gvfg_preview_render_frame(previewHandle_, &frame);
+                gvfg_preview_frame_t previewFrame{};
+                previewFrame.struct_size = sizeof(previewFrame);
+                previewFrame.data = frame.data;
+                previewFrame.data_size = frame.data_size;
+                previewFrame.width = frame.width;
+                previewFrame.height = frame.height;
+                previewFrame.bit_depth = frame.bit_depth;
+                previewFrame.frame_id = frame.frame_id;
+
+                switch (frame.pixel_format)
+                {
+                case GVFG_PIXFMT_YUY2:
+                    previewFrame.pixel_format = GVFG_PREVIEW_PIXFMT_YUY2;
+                    previewFrame.row_bytes = frame.width * 2;
+                    break;
+                case GVFG_PIXFMT_Y210:
+                    previewFrame.pixel_format = GVFG_PREVIEW_PIXFMT_Y210;
+                    previewFrame.row_bytes = frame.width * 4;
+                    break;
+                case GVFG_PIXFMT_V210:
+                    previewFrame.pixel_format = GVFG_PREVIEW_PIXFMT_V210;
+                    previewFrame.row_bytes = ((frame.width + 5) / 6) * 16;
+                    break;
+                default:
+                    previewFrame.pixel_format = 0;
+                    break;
+                }
+
+                gvfg_frame_layout_t layout{};
+                layout.struct_size = sizeof(layout);
+                if (gvfg_get_frame_layout(&frame, &layout) == GVFG_OK &&
+                    layout.plane_count > 0 &&
+                    layout.plane_data[0] &&
+                    layout.plane_stride[0] > 0)
+                {
+                    previewFrame.data = layout.plane_data[0];
+                    previewFrame.row_bytes = layout.plane_stride[0];
+                }
+
+                const gvfg_preview_status_t previewStatus =
+                    gvfg_preview_render_frame(previewHandle_, &previewFrame);
                 if (previewStatus != GVFG_PREVIEW_OK)
                 {
                     const uint64_t failures = ++previewFailureCount_;

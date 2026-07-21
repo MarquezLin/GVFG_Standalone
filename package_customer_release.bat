@@ -140,7 +140,7 @@ echo [release] Write package notes...
     echo.
     echo Link with lib\gvfg.lib for capture.
     echo Link with lib\gvfg_preview.lib only if the application uses the optional preview helper.
-    echo Deploy bin\gvfg.dll and, when used, bin\gvfg_preview.dll next to the customer application executable.
+    echo Deploy bin\gvfg.dll for capture and bin\gvfg_preview.dll only when preview is used; the preview DLL is standalone.
     echo Run samples\gvfg_qt_preview\gvfg_qt_preview.exe to verify the packaged runtime.
 ) > "%STAGE_DIR%\PACKAGE_README.txt"
 

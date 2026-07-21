@@ -35,7 +35,7 @@ public:
         return configured_;
     }
 
-    bool render(const gvfg_frame_t &frame)
+    bool render(const gvfg_preview_frame_t &frame)
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!configured_ || !hwnd_ || !frame.data || frame.width <= 0 || frame.height <= 0)
@@ -52,47 +52,33 @@ public:
 
         gvfg::internal::gvfg_render_pixfmt_t renderFmt = gvfg::internal::GVFG_RENDER_FMT_YUY2;
         const uint8_t *base = static_cast<const uint8_t *>(frame.data);
-        int stride = 0;
+        const int stride = frame.row_bytes;
         bool uploaded = false;
 
         switch (frame.pixel_format)
         {
-        case GVFG_PIXFMT_YUY2:
+        case GVFG_PREVIEW_PIXFMT_YUY2:
             renderFmt = gvfg::internal::GVFG_RENDER_FMT_YUY2;
-            stride = frame.width * 2;
             break;
-        case GVFG_PIXFMT_Y210:
+        case GVFG_PREVIEW_PIXFMT_Y210:
             renderFmt = gvfg::internal::GVFG_RENDER_FMT_Y210;
-            stride = frame.width * 4;
             break;
-        case GVFG_PIXFMT_V210:
+        case GVFG_PREVIEW_PIXFMT_V210:
             renderFmt = gvfg::internal::GVFG_RENDER_FMT_Y210;
-            stride = ((frame.width + 5) / 6) * 16;
             break;
         default:
             return false;
         }
 
-        gvfg_frame_layout_t layout{};
-        layout.struct_size = sizeof(layout);
-        if (gvfg_get_frame_layout(&frame, &layout) == GVFG_OK &&
-            layout.plane_count > 0 &&
-            layout.plane_data[0] &&
-            layout.plane_stride[0] > 0)
-        {
-            base = static_cast<const uint8_t *>(layout.plane_data[0]);
-            stride = layout.plane_stride[0];
-        }
-
         switch (frame.pixel_format)
         {
-        case GVFG_PIXFMT_YUY2:
+        case GVFG_PREVIEW_PIXFMT_YUY2:
             uploaded = pipeline_->upload_yuy2_frame(base, stride, frame.width, frame.height);
             break;
-        case GVFG_PIXFMT_Y210:
+        case GVFG_PREVIEW_PIXFMT_Y210:
             uploaded = pipeline_->upload_y210_frame(base, stride, frame.width, frame.height);
             break;
-        case GVFG_PIXFMT_V210:
+        case GVFG_PREVIEW_PIXFMT_V210:
             uploaded = pipeline_->upload_v210_frame(base, stride, frame.width, frame.height);
             break;
         default:
@@ -378,16 +364,39 @@ extern "C"
     }
 
     gvfg_preview_status_t gvfg_preview_render_frame(gvfg_preview_handle handle,
-                                                    const gvfg_frame_t *frame)
+                                                    const gvfg_preview_frame_t *frame)
     {
         if (!handle || !frame)
             return GVFG_PREVIEW_EINVAL;
-        if (!frame->data || frame->width <= 0 || frame->height <= 0)
+        if (frame->struct_size < sizeof(gvfg_preview_frame_t) ||
+            !frame->data ||
+            frame->width <= 0 ||
+            frame->height <= 0 ||
+            frame->row_bytes <= 0)
             return GVFG_PREVIEW_EINVAL;
-        if (frame->pixel_format != GVFG_PIXFMT_YUY2 &&
-            frame->pixel_format != GVFG_PIXFMT_Y210 &&
-            frame->pixel_format != GVFG_PIXFMT_V210)
+
+        uint64_t minimumRowBytes = 0;
+        switch (frame->pixel_format)
+        {
+        case GVFG_PREVIEW_PIXFMT_YUY2:
+            minimumRowBytes = static_cast<uint64_t>(frame->width) * 2u;
+            break;
+        case GVFG_PREVIEW_PIXFMT_Y210:
+            minimumRowBytes = static_cast<uint64_t>(frame->width) * 4u;
+            break;
+        case GVFG_PREVIEW_PIXFMT_V210:
+            minimumRowBytes = static_cast<uint64_t>((frame->width + 5) / 6) * 16u;
+            break;
+        default:
             return GVFG_PREVIEW_ENOTSUP;
+        }
+
+        const uint64_t rowBytes = static_cast<uint64_t>(frame->row_bytes);
+        if (rowBytes < minimumRowBytes ||
+            rowBytes > UINT64_MAX / static_cast<uint64_t>(frame->height) ||
+            frame->data_size < rowBytes * static_cast<uint64_t>(frame->height))
+            return GVFG_PREVIEW_EINVAL;
+
         return handle->renderer.render(*frame) ? GVFG_PREVIEW_OK : GVFG_PREVIEW_ERENDER;
     }
 
