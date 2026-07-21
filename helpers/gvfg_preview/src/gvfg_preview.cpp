@@ -28,7 +28,6 @@ public:
             gvfg::internal::gvfg_render_preview_desc_t desc{};
             desc.hwnd = hwnd_;
             desc.enable_preview = configured_ ? 1 : 0;
-            desc.use_fp16_pipeline = 1;
             desc.swapchain_10bit = gvfg::internal::GVFG_RENDER_PREVIEW_BITDEPTH_AUTO;
             pipeline_->configurePreview(desc);
         }
@@ -44,7 +43,16 @@ public:
             return false;
         }
 
-        if (!ensureDevice() || !ensurePipeline(frame.width, frame.height, frame.bit_depth > 0 ? frame.bit_depth : 8))
+        int sourceBitDepth = frame.bit_depth > 0 ? frame.bit_depth : 8;
+        if (frame.pixel_format == GVFG_PREVIEW_PIXFMT_Y210 ||
+            frame.pixel_format == GVFG_PREVIEW_PIXFMT_V210)
+        {
+            // These packed formats always carry 10-bit components. Do not let
+            // a missing or incorrect caller hint silently select an 8-bit swapchain.
+            sourceBitDepth = 10;
+        }
+
+        if (!ensureDevice() || !ensurePipeline(frame.width, frame.height, sourceBitDepth))
         {
             clearActiveInfo();
             return false;
@@ -291,7 +299,6 @@ private:
         gvfg::internal::gvfg_render_preview_desc_t desc{};
         desc.hwnd = hwnd_;
         desc.enable_preview = configured_ ? 1 : 0;
-        desc.use_fp16_pipeline = 1;
         desc.swapchain_10bit = gvfg::internal::GVFG_RENDER_PREVIEW_BITDEPTH_AUTO;
         pipeline_->configurePreview(desc);
         pipeline_->set_source_bit_depth(sourceBitDepth > 0 ? sourceBitDepth : 8);

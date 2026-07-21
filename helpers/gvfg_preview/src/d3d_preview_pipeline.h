@@ -10,24 +10,9 @@ namespace gvfg::internal
 
 typedef enum
 {
-    GVFG_RENDER_FMT_NV12,
     GVFG_RENDER_FMT_YUY2,
-    GVFG_RENDER_FMT_ARGB,
-    GVFG_RENDER_FMT_P010,
     GVFG_RENDER_FMT_Y210
 } gvfg_render_pixfmt_t;
-
-typedef struct
-{
-    const void *data[3];
-    int stride[3];
-    int plane_count;
-    int width;
-    int height;
-    gvfg_render_pixfmt_t format;
-    uint64_t pts_ns;
-    uint64_t frame_id;
-} gvfg_render_frame_t;
 
 typedef enum
 {
@@ -40,7 +25,6 @@ typedef struct
 {
     void *hwnd;
     int enable_preview;
-    int use_fp16_pipeline;
     int swapchain_10bit;
 } gvfg_render_preview_desc_t;
 
@@ -66,15 +50,11 @@ public:
     DXGI_FORMAT scene_texture_format() const;
     DXGI_FORMAT linear_fp16_texture_format() const;
     bool blit_fp16_to_rgba8(int frame_w, int frame_h);
-    bool upload_nv12_frame(const uint8_t *y, int stride_y, const uint8_t *uv, int stride_uv, int frame_w, int frame_h);
-    bool upload_p010_frame(const uint8_t *y, int stride_y, const uint8_t *uv, int stride_uv, int frame_w, int frame_h);
     bool upload_yuy2_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h);
     bool upload_y210_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h);
     bool upload_v210_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h);
     bool render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, int frame_w, int frame_h);
     bool copy_fp16_to_scene();
-    bool readback_to_frame(int frame_w, int frame_h, uint64_t pts_ns, uint64_t frame_id,
-                           gvfg_render_frame_t *out);
 
     ID3D11Device *d3d_ = nullptr;
     ID3D11DeviceContext *ctx_ = nullptr;
@@ -91,18 +71,13 @@ public:
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_rgba8_to_preview_;
 
     Microsoft::WRL::ComPtr<ID3D11Texture2D> rt_rgba_;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> upload_nv12_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> upload_yuy2_packed_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> upload_y210_packed_;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv_rgba_;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> rt_stage_;
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> cs_params_;
-    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> rt_uav_;
 
     Microsoft::WRL::ComPtr<ID3D11VertexShader> vs_;
-    Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_nv12_;
-    Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_p010_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_yuy2_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_y210_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_fp16_to_rgba8_;
@@ -113,7 +88,6 @@ public:
 
     void *preview_hwnd_ = nullptr;
     bool preview_enabled_ = false;
-    bool preview_use_fp16_ = false;
     int preview_swapchain_mode_ = GVFG_RENDER_PREVIEW_BITDEPTH_10BIT;
     int preview_source_bit_depth_ = 0;
     bool preview_swapchain_10bit_ = false;
