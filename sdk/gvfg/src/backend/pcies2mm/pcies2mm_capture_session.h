@@ -34,7 +34,7 @@ namespace gvfg::internal
         pcies2mm_status_t open_device_index(size_t deviceIndex);
         pcies2mm_status_t close();
 
-        pcies2mm_status_t set_input(pcies2mm_input_t input);
+        pcies2mm_status_t set_channel(uint32_t channel);
         pcies2mm_status_t get_signal_status(pcies2mm_signal_status_t &out) const;
 
         pcies2mm_status_t set_event_callback(pcies2mm_event_callback_t callback, void *user, uint32_t eventMask);
@@ -55,8 +55,6 @@ namespace gvfg::internal
 
         bool read_reg(uint32_t offset, uint32_t &out) const;
         bool write_reg(uint32_t offset, uint32_t value) const;
-        bool read_reg_bar1(uint32_t offset, uint32_t &out) const;
-        bool write_reg_bar1(uint32_t offset, uint32_t value) const;
         bool register_event(uint32_t channelIndex, uint32_t eventType, HANDLE eventHandle);
         void unregister_event(uint32_t channelIndex, uint32_t eventType);
         bool create_and_register_events(uint32_t channelIndex);
@@ -70,6 +68,7 @@ namespace gvfg::internal
         void handle_format_change_event(uint32_t channel);
         void handle_plugin_event(uint32_t channel);
         void handle_unplug_event(uint32_t channel);
+        bool resume_capture_from_signal(uint32_t channel);
         bool refresh_stream_from_signal(bool resizeRing);
         void publish_frame(size_t slotIndex, size_t bytes);
         void emit_event(pcies2mm_event_type_t type, uint32_t irqBit, uint32_t irqMask) const;
@@ -104,12 +103,14 @@ namespace gvfg::internal
 
         pcies2mm_stream_desc_t stream_desc_{};
         uint32_t stream_bit_depth_ = 8;
-        pcies2mm_input_t input_ = PCIES2MM_INPUT_SDI;
+        uint32_t channel_ = 0;
         bool opened_ = false;
         bool configured_ = false;
 
         std::atomic<bool> running_{false};
         std::atomic<bool> capture_active_{false};
+        mutable std::atomic<bool> signal_presence_known_{false};
+        mutable std::atomic<bool> signal_present_{false};
         std::thread capture_thread_;
 
         mutable std::mutex mutex_;

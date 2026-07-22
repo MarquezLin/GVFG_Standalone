@@ -15,11 +15,6 @@
 
 namespace
 {
-    QString hex32(uint32_t value)
-    {
-        return QStringLiteral("0x") + QString::number(value, 16).rightJustified(8, QLatin1Char('0')).toUpper();
-    }
-
     QString boolText(int value)
     {
         return value ? QStringLiteral("yes") : QStringLiteral("no");
@@ -34,16 +29,9 @@ namespace
     {
         if (!stats.backend_running)
             return QStringLiteral("stopped");
-        if (stats.backend_data_worker_stop)
-            return QStringLiteral("stopping");
         if (!stats.backend_capture_active)
             return QStringLiteral("paused");
         return QStringLiteral("streaming");
-    }
-
-    QString workerText(const gvfg_debug_backend_stats_t &stats)
-    {
-        return stats.backend_data_worker_stop ? QStringLiteral("stopping") : QStringLiteral("running");
     }
 
     QString appHoldingText(uint64_t value)
@@ -68,14 +56,11 @@ namespace
         const QString resolution = (signal.width > 0 && signal.height > 0)
                                        ? QStringLiteral("%1x%2").arg(signal.width).arg(signal.height)
                                        : QStringLiteral("--");
-        const QString fps = signal.frame_rate_name[0] != '\0'
-                                ? QString::fromLatin1(signal.frame_rate_name)
-                                : QStringLiteral("--");
-        const QString format = signal.video_format[0] != '\0'
-                                   ? QString::fromLatin1(signal.video_format)
+        const QString format = signal.pixel_format[0] != '\0'
+                                   ? QString::fromLatin1(signal.pixel_format)
                                    : QStringLiteral("--");
         const QString bit = signal.bit_depth > 0 ? QString::number(signal.bit_depth) : QStringLiteral("--");
-        return QStringLiteral("%1 %2 %3 %4-bit").arg(resolution, fps, format, bit);
+        return QStringLiteral("%1 %2 %3-bit").arg(resolution, format, bit);
     }
 
     QString backendLastError(gvfg_handle handle)
@@ -90,10 +75,10 @@ namespace
     {
         switch (type)
         {
-        case GVFG_EVENT_PLUG_IN:
-            return QStringLiteral("PLUG_IN");
-        case GVFG_EVENT_PLUG_OUT:
-            return QStringLiteral("PLUG_OUT");
+        case GVFG_EVENT_SIGNAL_CONNECTED:
+            return QStringLiteral("SIGNAL_CONNECTED");
+        case GVFG_EVENT_SIGNAL_DISCONNECTED:
+            return QStringLiteral("SIGNAL_DISCONNECTED");
         case GVFG_EVENT_CAPTURE_PAUSED:
             return QStringLiteral("CAPTURE_PAUSED");
         case GVFG_EVENT_CAPTURE_RESUMED:
@@ -177,7 +162,12 @@ void MainWindow::refreshDevices()
     for (int i = 0; i < deviceCount_; ++i)
     {
         const QString name = QString::fromUtf8(devices_[i].name);
-        ui_->deviceCombo->addItem(name.isEmpty() ? QStringLiteral("GVFG Capture") : name, devices_[i].index);
+        const QString displayName = name.isEmpty() ? QStringLiteral("GVFG Capture") : name;
+        for (int channel = GVFG_CHANNEL_0; channel <= GVFG_CHANNEL_1; ++channel)
+        {
+            const int selection = devices_[i].index * 2 + channel;
+            ui_->deviceCombo->addItem(QStringLiteral("%1 - CH%2").arg(displayName).arg(channel), selection);
+        }
     }
 
     if (deviceCount_ <= 0)
@@ -229,8 +219,10 @@ bool MainWindow::openDevice()
         return false;
     }
 
-    const int deviceIndex = ui_->deviceCombo->currentData().toInt();
-    st = gvfg_open(handle_, deviceIndex);
+    const int selection = ui_->deviceCombo->currentData().toInt();
+    const int deviceIndex = selection / 2;
+    const int channelIndex = selection % 2;
+    st = gvfg_open_channel(handle_, deviceIndex, channelIndex);
     if (st != GVFG_OK)
     {
         showError(QStringLiteral("gvfg_open"), st);
@@ -239,7 +231,7 @@ bool MainWindow::openDevice()
     }
 
     lastSignalStatusText_.clear();
-    appendLog(QStringLiteral("Opened device index %1").arg(deviceIndex));
+    appendLog(QStringLiteral("Opened device index %1 CH%2").arg(deviceIndex).arg(channelIndex));
     appendLog(QStringLiteral("FPGA signal monitor active"));
     updateSignalStatus(true);
     signalStatusTimer_->start();
@@ -382,8 +374,6 @@ void MainWindow::updateSignalStatus(bool writeLog)
 
     const auto &signal = info.input_signal;
     const auto &readFrame = info.last_frame;
-    gvfg_debug_fpga_signal_raw_t fpgaRaw{};
-    const bool haveRaw = gvfg_debug_get_fpga_signal_raw(handle_, &fpgaRaw) == GVFG_OK;
     gvfg_debug_backend_stats_t backendStats{};
     backendStats.struct_size = sizeof(backendStats);
     const bool haveBackendStats = gvfg_debug_get_backend_stats(handle_, &backendStats) == GVFG_OK;
@@ -408,27 +398,17 @@ void MainWindow::updateSignalStatus(bool writeLog)
                                         readFrame.bit_depth);
 
     QStringList statusLines;
-    statusLines << QStringLiteral("Input   | SDI lock=%1 HDMI lock=%2 signal=%3")
-                       .arg(boolText(signal.sdi_locked), boolText(signal.hdmi_locked), signalFrameText(signal));
-    statusLines << (haveRaw
-                        ? QStringLiteral("FPGA Raw| valid=%1 size_reg=%2x%3 format=%4 fps=%5 bit_depth=%6 status=%7")
-                              .arg(hex32(fpgaRaw.valid_mask))
-                              .arg(fpgaRaw.width_raw)
-                              .arg(fpgaRaw.height_raw)
-                              .arg(hex32(fpgaRaw.video_format_raw))
-                              .arg(hex32(fpgaRaw.frame_rate_raw))
-                              .arg(fpgaRaw.bit_depth_raw)
-                              .arg(hex32(fpgaRaw.status_raw))
-                        : QStringLiteral("FPGA Raw| unavailable"));
+    statusLines << QStringLiteral("Input   | CH%1 connected=%2 signal=%3")
+                       .arg(signal.channel)
+                       .arg(boolText(signal.connected), signalFrameText(signal));
     statusLines << QStringLiteral("App     | reader_fps=%1 last_frame=%2 preview_active=%3 preview_output=%4")
                        .arg(info.capture_fps > 0.0 ? QString::number(info.capture_fps, 'f', 2) : QStringLiteral("--"))
                        .arg(lastFrame)
                        .arg(boolText(previewInfoOk ? 1 : 0))
                        .arg(previewFrame);
     statusLines << (haveBackendStats
-                        ? QStringLiteral("Capture| status=%1 worker=%2 pending_irqs=%3 dma_errors=%4 no_frame_waits=%5")
+                        ? QStringLiteral("Capture| status=%1 pending_irqs=%2 dma_errors=%3 no_frame_waits=%4")
                               .arg(captureStatusText(backendStats))
-                              .arg(workerText(backendStats))
                               .arg(backendStats.backend_pending_events)
                               .arg(static_cast<qulonglong>(backendStats.backend_dma_errors))
                               .arg(static_cast<qulonglong>(backendStats.backend_wait_timeouts))

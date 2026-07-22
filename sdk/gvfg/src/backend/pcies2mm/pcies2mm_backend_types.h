@@ -16,13 +16,6 @@ typedef enum pcies2mm_status_t
     PCIES2MM_EIO
 } pcies2mm_status_t;
 
-typedef enum pcies2mm_input_t
-{
-    PCIES2MM_INPUT_UNKNOWN = 0,
-    PCIES2MM_INPUT_SDI = 1,
-    PCIES2MM_INPUT_HDMI = 2
-} pcies2mm_input_t;
-
 typedef enum pcies2mm_pixel_format_t
 {
     PCIES2MM_PIXFMT_UNKNOWN = 0,
@@ -46,7 +39,7 @@ typedef enum pcies2mm_stream_state_t
 
 typedef struct pcies2mm_stream_desc_t
 {
-    pcies2mm_input_t input;
+    uint32_t channel;
     uint32_t width;
     uint32_t height;
     pcies2mm_pixel_format_t pixel_format;
@@ -56,21 +49,12 @@ typedef struct pcies2mm_stream_desc_t
 
 typedef struct pcies2mm_signal_status_t
 {
-    int signal_locked;
-    pcies2mm_input_t input;
+    int connected;
+    uint32_t channel;
     uint32_t width;
     uint32_t height;
     pcies2mm_pixel_format_t pixel_format;
     uint32_t bit_depth;
-    uint32_t fpga_valid_mask;       /* bit0:0x0c, bit1:0x18, bit2:0x1c, bit3:0x180 */
-    uint32_t fpga_width_valid;      /* Non-zero when FPGA 0x10 read succeeded. */
-    uint32_t fpga_height_valid;     /* Non-zero when FPGA 0x14 read succeeded. */
-    uint32_t fpga_width_raw;        /* Raw FPGA 0x10 width register. */
-    uint32_t fpga_height_raw;       /* Raw FPGA 0x14 height register. */
-    uint32_t fpga_video_format_raw; /* 0x0c: 0=yuv422, 1=rgb, 2=yuv444, 3=yuv420 */
-    uint32_t fpga_frame_rate_raw;   /* 0x18 low nibble: frame-rate code */
-    uint32_t fpga_bit_depth_raw;    /* 0x1c: 8 or 10 */
-    uint32_t fpga_status_raw;       /* 0x180: bit0 SDI lock, bit1 SDI DDR, bit2 HDMI lock, bit3 HDMI DDR */
 } pcies2mm_signal_status_t;
 
 typedef struct pcies2mm_frame_t
@@ -98,7 +82,6 @@ typedef struct pcies2mm_debug_state_t
 {
     int running;
     int capture_active;
-    int data_worker_stop;
     uint32_t pending_events;
     uint64_t latest_sequence;
     uint64_t delivered_sequence;

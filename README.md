@@ -74,5 +74,5 @@ bin/gvfg_convert.dll
 ```
 
 Customer/demo package 不應包含 `gvfg_debug.h`、SDK source、PCIES2MM backend
-headers、IRQ details、raw FPGA values 或 helper source。這些只屬於 internal
+headers、IRQ details 或 helper source。這些只屬於 internal
 debug/full application package。

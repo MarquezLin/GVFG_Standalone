@@ -107,6 +107,12 @@ typedef enum
 
 typedef enum
 {
+    GVFG_CHANNEL_0 = 0,
+    GVFG_CHANNEL_1 = 1
+} gvfg_channel_t;
+
+typedef enum
+{
     GVFG_FRAME_LAYOUT_CONTIGUOUS = 1u << 0,  /* Planes are contained inside one contiguous data buffer. */
     GVFG_FRAME_LAYOUT_SDK_DERIVED = 1u << 1  /* Layout was derived by the SDK from the native format. */
 } gvfg_frame_layout_flags_t;
@@ -119,13 +125,12 @@ typedef struct
 
 typedef struct
 {
-    int width;                       /* Signal width in pixels when available. */
-    int height;                      /* Signal height in pixels when available. */
-    char video_format[16];           /* Decoded signal format name. */
-    char frame_rate_name[16];        /* None, 23.98, 24, 47.95, ..., or "--" for unsupported codes. */
-    int bit_depth;                   /* Signal bit depth: 8 or 10 when valid. */
-    int sdi_locked;                  /* Non-zero when SDI reports locked. */
-    int hdmi_locked;                 /* Non-zero when HDMI reports locked. */
+    int connected;             /* Non-zero while the selected channel has a valid input signal. */
+    int channel;               /* gvfg_channel_t selected when the device was opened. */
+    int width;                 /* Signal width in pixels when connected. */
+    int height;                /* Signal height in pixels when connected. */
+    char pixel_format[16];     /* Actual DMA payload format, for example Y210. */
+    int bit_depth;             /* Signal bit depth derived from the payload format. */
 } gvfg_signal_status_t;
 
 typedef struct
@@ -172,10 +177,15 @@ typedef struct
 typedef enum
 {
     GVFG_EVENT_UNKNOWN = 0,
-    GVFG_EVENT_PLUG_IN = 1,
-    GVFG_EVENT_PLUG_OUT = 2,
+    GVFG_EVENT_SIGNAL_CONNECTED = 1,
+    GVFG_EVENT_SIGNAL_DISCONNECTED = 2,
     GVFG_EVENT_CAPTURE_PAUSED = 3,
-    GVFG_EVENT_CAPTURE_RESUMED = 4
+    GVFG_EVENT_CAPTURE_RESUMED = 4,
+
+    /* Backward-compatible aliases. These events describe the input signal,
+       not physical insertion/removal of the PCIe capture device. */
+    GVFG_EVENT_PLUG_IN = GVFG_EVENT_SIGNAL_CONNECTED,
+    GVFG_EVENT_PLUG_OUT = GVFG_EVENT_SIGNAL_DISCONNECTED
 } gvfg_event_type_t;
 
 typedef struct
@@ -202,8 +212,8 @@ typedef void (*gvfg_frame_callback_t)(
 /*
  * Optional callback-mode event delivery.
  *
- * Event callbacks may be invoked from a different SDK-owned thread than frame
- * callbacks. Do not assume ordering between frame and event callbacks.
+ * Frame and event callbacks for one handle are serialized on the same
+ * SDK-owned dispatch thread. A callback must not block for long periods.
  */
 typedef void (*gvfg_event_callback_t)(
     _In_ gvfg_handle handle,
@@ -273,11 +283,17 @@ GVFG_API gvfg_status_t gvfg_destroy(
  * - GVFG_ENODEV if the device cannot be opened.
  * - GVFG_EIO for driver/backend failures.
  *
- * The current implementation selects the SDI input internally.
+ * This is a backward-compatible shorthand for opening CH0.
  */
 GVFG_API gvfg_status_t gvfg_open(
     _In_ gvfg_handle handle,
     _In_ int device_index);
+
+/* Open CH0 or CH1 explicitly on a physical capture device. */
+GVFG_API gvfg_status_t gvfg_open_channel(
+    _In_ gvfg_handle handle,
+    _In_ int device_index,
+    _In_ int channel_index);
 
 /*
  * Configure and start capture on an opened device.
@@ -286,13 +302,15 @@ GVFG_API gvfg_status_t gvfg_open(
  * - handle: Opened session handle.
  *
  * Returns:
- * - GVFG_OK on success, including when capture is already running.
+ * - GVFG_OK on success, including when capture is already running or the SDK
+ *   has entered signal-monitoring mode while no input is connected.
  * - GVFG_EINVAL if handle is NULL.
  * - GVFG_ESTATE if no device is open.
  * - GVFG_EIO or another status code if stream configuration/start fails.
  *
  * After success, call gvfg_read_frame() to receive frames and gvfg_poll_event()
- * to receive capture events.
+ * to receive capture events. With no input signal, frame reads time out; capture
+ * starts automatically after a signal-connected event.
  */
 GVFG_API gvfg_status_t gvfg_start(
     _In_ gvfg_handle handle);
@@ -318,14 +336,15 @@ GVFG_API gvfg_status_t gvfg_set_event_callback(
 /*
  * Start capture in callback mode.
  *
- * The SDK creates one frame worker thread for this handle. The frame callback
- * is not invoked concurrently for the same handle.
+ * The SDK creates one callback dispatch thread for this handle. Frame and event
+ * callbacks are not invoked concurrently for the same handle. The backend uses
+ * one additional thread to wait for driver DMA and signal events.
  */
 GVFG_API gvfg_status_t gvfg_start_callback_mode(
     _In_ gvfg_handle handle);
 
 /*
- * Stop callback mode and wait for the frame worker thread to exit.
+ * Stop callback mode and wait for the callback dispatch thread to exit.
  *
  * Do not call this from inside the frame callback.
  */

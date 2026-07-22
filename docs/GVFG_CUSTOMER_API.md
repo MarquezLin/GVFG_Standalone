@@ -89,14 +89,13 @@ typedef enum
 
 Customer-readable input signal status：
 
+- connected state 與 CH0 / CH1
 - width / height
-- video format text
-- frame-rate text
+- 實際 DMA pixel format
 - bit depth
-- SDI / HDMI lock status
 
-Raw FPGA values、register-like values、validity masks 都是 internal debug data，
-只應透過 internal debug package 裡的 `gvfg_debug.h` 提供。
+新 driver 未提供 frame-rate、SDI/HDMI lock、DDR status 或舊 FPGA validity
+register，因此 SDK 不再合成或公開這些欄位。
 
 ### `gvfg_frame_t`
 
@@ -206,10 +205,13 @@ source 或 destination format 會回傳 `GVFG_ENOTSUP`。
 
 Customer event 保持 driver-neutral：
 
-- `GVFG_EVENT_PLUG_IN`
-- `GVFG_EVENT_PLUG_OUT`
+- `GVFG_EVENT_SIGNAL_CONNECTED`
+- `GVFG_EVENT_SIGNAL_DISCONNECTED`
 - `GVFG_EVENT_CAPTURE_PAUSED`
 - `GVFG_EVENT_CAPTURE_RESUMED`
+
+`GVFG_EVENT_PLUG_IN` 與 `GVFG_EVENT_PLUG_OUT` 保留為 source-compatible aliases；
+它們表示所選 channel 的 input signal 插拔，不是 PCIe capture device 的實體插拔。
 
 Frame interrupts、IRQ bit numbers、IRQ masks 都是 internal details，不應出現在
 `gvfg_capture.h`。
@@ -237,13 +239,19 @@ gvfg_status_t gvfg_destroy(gvfg_handle handle);
 
 建立或銷毀 session handle。銷毀 running handle 時會先 stop capture。
 
-### `gvfg_open`
+### `gvfg_open` / `gvfg_open_channel`
 
 ```c
 gvfg_status_t gvfg_open(gvfg_handle handle, int device_index);
+gvfg_status_t gvfg_open_channel(gvfg_handle handle,
+                                int device_index,
+                                int channel_index);
 ```
 
-用 `gvfg_enumerate_devices()` 得到的 device index 開啟 device。
+用 `gvfg_enumerate_devices()` 得到的 device index 開啟 device。`gvfg_open()` 預設
+開啟 CH0；需要明確選擇 CaptureDemo 的 CH0/CH1 時使用 `gvfg_open_channel()`。
+選定的 channel 會一致套用到 signal status、signal 插拔事件、DMA done index 與
+frame buffer。
 
 ### `gvfg_start` / `gvfg_stop`
 
@@ -252,7 +260,9 @@ gvfg_status_t gvfg_start(gvfg_handle handle);
 gvfg_status_t gvfg_stop(gvfg_handle handle);
 ```
 
-開始或停止 capture。`gvfg_start()` 成功後，用 `gvfg_read_frame()` 取 frame。
+開始或停止 capture。`gvfg_start()` 成功後，用 `gvfg_read_frame()` 取 frame。沒有 input
+signal 時 `gvfg_start()` 仍會成功並進入 event monitoring；frame read 會 timeout，收到
+`GVFG_EVENT_SIGNAL_CONNECTED` 後 SDK 會自動重新讀取格式並啟動 DMA。
 
 ### Callback mode
 
@@ -277,19 +287,18 @@ gvfg_status_t gvfg_start_callback_mode(gvfg_handle handle);
 gvfg_status_t gvfg_stop_callback_mode(gvfg_handle handle);
 ```
 
-Callback mode 是 optional。它適合想讓 SDK 管理 frame/event worker thread 的 application。
+Callback mode 是 optional。它適合想讓 SDK 管理 frame/event dispatch thread 的 application。
 同一個 handle 只能使用 pull mode 或 callback mode 其中一種；callback mode active
 時，`gvfg_read_frame()` 和 `gvfg_poll_event()` 會回 `GVFG_ESTATE`。
 
 Callback mode 規則：
 
 - `gvfg_start_callback_mode()` 前必須先設定 frame callback。
-- Frame callback 由 SDK-owned worker thread 呼叫。
-- 同一個 handle 的 frame callback 不會併發呼叫。
+- Frame 與 event callback 由同一條 SDK-owned dispatch thread 呼叫。
+- 同一個 handle 的 frame/event callback 會序列化，不會彼此併發。
 - Frame pointer 只在 callback 期間有效；callback return 後 SDK 會自動 release。
 - Callback 內不要呼叫 `gvfg_destroy()`；`gvfg_stop_callback_mode()` 也應由其他 thread 呼叫。
-- Event callback 由 SDK-owned event worker thread 呼叫，可能和 frame callback 不同 thread。
-- 不要假設 event callback 和 frame callback 的順序完全同步。
+- Event callback 依 SDK 收到事件的順序，和 frame callback 在同一條 thread dispatch。
 - Heavy work 應 copy/queue 到 application 自己的 worker thread。
 
 最小 callback flow：

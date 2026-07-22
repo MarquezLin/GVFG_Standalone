@@ -105,9 +105,9 @@ namespace
         switch (type)
         {
         case PCIES2MM_EVENT_PLUG_IN:
-            return GVFG_EVENT_PLUG_IN;
+            return GVFG_EVENT_SIGNAL_CONNECTED;
         case PCIES2MM_EVENT_PLUG_OUT:
-            return GVFG_EVENT_PLUG_OUT;
+            return GVFG_EVENT_SIGNAL_DISCONNECTED;
         case PCIES2MM_EVENT_CAPTURE_PAUSED:
             return GVFG_EVENT_CAPTURE_PAUSED;
         case PCIES2MM_EVENT_CAPTURE_RESUMED:
@@ -115,11 +115,6 @@ namespace
         default:
             return GVFG_EVENT_UNKNOWN;
         }
-    }
-
-    bool fpga_field_valid(uint32_t mask, int bit)
-    {
-        return (mask & (1u << bit)) != 0;
     }
 
     int to_gvfg_pixel_format(pcies2mm_pixel_format_t fmt)
@@ -327,54 +322,6 @@ namespace
         return layout.plane_count > 0 ? GVFG_OK : GVFG_ENOTSUP;
     }
 
-    const char *fpga_video_format_name(uint32_t value)
-    {
-        switch (value & 0x3u)
-        {
-        case 0:
-            return "YUV422";
-        case 1:
-            return "RGB";
-        case 2:
-            return "YUV444";
-        case 3:
-            return "YUV420";
-        default:
-            return "UNKNOWN";
-        }
-    }
-
-    const char *fpga_frame_rate_name(uint32_t value)
-    {
-        switch (value & 0x0fu)
-        {
-        case 0x0:
-            return "None";
-        case 0x2:
-            return "23.98";
-        case 0x3:
-            return "24";
-        case 0x4:
-            return "47.95";
-        case 0x5:
-            return "25";
-        case 0x6:
-            return "29.97";
-        case 0x7:
-            return "30";
-        case 0x8:
-            return "48";
-        case 0x9:
-            return "50";
-        case 0xa:
-            return "59.94";
-        case 0xb:
-            return "60";
-        default:
-            return "--";
-        }
-    }
-
 }
 
 struct gvfg_handle_t
@@ -384,9 +331,9 @@ struct gvfg_handle_t
         close();
     }
 
-    gvfg_status_t open(int index)
+    gvfg_status_t open(int index, int channelIndex = GVFG_CHANNEL_0)
     {
-        if (index < 0)
+        if (index < 0 || (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1))
             return GVFG_EINVAL;
         if (callbackModeActive.load(std::memory_order_acquire) || isInCallbackThread())
             return GVFG_ESTATE;
@@ -404,14 +351,14 @@ struct gvfg_handle_t
 
         currentIndex = index;
         syncBackendEventCallback();
-        selectedInput = PCIES2MM_INPUT_SDI;
+        selectedChannel = static_cast<uint32_t>(channelIndex);
         resetRuntimeCounters();
-        const pcies2mm_status_t stInput = backend->set_input(selectedInput);
-        if (stInput != PCIES2MM_OK)
+        const pcies2mm_status_t stChannel = backend->set_channel(selectedChannel);
+        if (stChannel != PCIES2MM_OK)
         {
-            recordError(pcies2mm_error_text(stInput, backend.get()));
+            recordError(pcies2mm_error_text(stChannel, backend.get()));
             close();
-            return map_status(stInput);
+            return map_status(stChannel);
         }
 
         querySignal();
@@ -474,28 +421,17 @@ struct gvfg_handle_t
     gvfg_status_t getSignalStatus(gvfg_signal_status_t &out)
     {
         std::memset(&out, 0, sizeof(out));
-        querySignal();
-        bool haveSignalSize = false;
+        const pcies2mm_status_t status = querySignal();
         {
             std::lock_guard<std::mutex> lock(stateMutex);
-            haveSignalSize = fpgaWidthValid && fpgaHeightValid && fpgaWidthRaw != 0 && fpgaHeightRaw != 0;
-            const bool videoFormatValid = fpga_field_valid(fpgaValidMask, 0);
-            const bool frameRateValid = fpga_field_valid(fpgaValidMask, 1);
-            const bool bitDepthValid = fpga_field_valid(fpgaValidMask, 2);
-            const bool statusValid = fpga_field_valid(fpgaValidMask, 3);
-            out.width = haveSignalSize ? static_cast<int>(fpgaWidthRaw) : 0;
-            out.height = haveSignalSize ? static_cast<int>(fpgaHeightRaw) : 0;
-            copy_cstr(out.video_format,
-                      sizeof(out.video_format),
-                      videoFormatValid ? fpga_video_format_name(fpgaVideoFormatRaw) : "--");
-            copy_cstr(out.frame_rate_name,
-                      sizeof(out.frame_rate_name),
-                      frameRateValid ? fpga_frame_rate_name(fpgaFrameRateRaw) : "--");
-            out.bit_depth = bitDepthValid ? static_cast<int>(fpgaBitDepthRaw) : 0;
-            out.sdi_locked = statusValid && (fpgaStatusRaw & (1u << 0)) ? 1 : 0;
-            out.hdmi_locked = statusValid && (fpgaStatusRaw & (1u << 2)) ? 1 : 0;
+            out.connected = signalConnected ? 1 : 0;
+            out.channel = static_cast<int>(selectedChannel);
+            out.width = static_cast<int>(width);
+            out.height = static_cast<int>(height);
+            copy_cstr(out.pixel_format, sizeof(out.pixel_format), gvfg_pixel_format_name(to_gvfg_pixel_format(pixelFormat)));
+            out.bit_depth = static_cast<int>(bitDepth);
         }
-        return haveSignalSize ? GVFG_OK : GVFG_ENODEV;
+        return map_status(status);
     }
 
     gvfg_status_t getRuntimeInfo(gvfg_runtime_info_t &out)
@@ -552,90 +488,21 @@ struct gvfg_handle_t
 
     }
 
-    void querySignal()
+    pcies2mm_status_t querySignal()
     {
         if (!backend)
-            return;
+            return PCIES2MM_ESTATE;
 
         pcies2mm_signal_status_t sig{};
-        if (backend->get_signal_status(sig) != PCIES2MM_OK)
-            return;
+        const pcies2mm_status_t status = backend->get_signal_status(sig);
 
         std::lock_guard<std::mutex> lock(stateMutex);
-        if (sig.width > 0)
-            width = sig.width;
-        if (sig.height > 0)
-            height = sig.height;
-        if (sig.bit_depth > 0)
-            bitDepth = sig.bit_depth;
-        pixelFormat = sig.pixel_format != PCIES2MM_PIXFMT_UNKNOWN ? sig.pixel_format : PCIES2MM_PIXFMT_YUY2;
-        fpgaValidMask = sig.fpga_valid_mask;
-        fpgaWidthValid = sig.fpga_width_valid != 0;
-        fpgaHeightValid = sig.fpga_height_valid != 0;
-        fpgaWidthRaw = sig.fpga_width_raw;
-        fpgaHeightRaw = sig.fpga_height_raw;
-        fpgaVideoFormatRaw = sig.fpga_video_format_raw;
-        fpgaFrameRateRaw = sig.fpga_frame_rate_raw;
-        fpgaBitDepthRaw = sig.fpga_bit_depth_raw;
-        fpgaStatusRaw = sig.fpga_status_raw;
-    }
-
-    static const char *inputName(pcies2mm_input_t input)
-    {
-        switch (input)
-        {
-        case PCIES2MM_INPUT_HDMI:
-            return "HDMI";
-        case PCIES2MM_INPUT_SDI:
-            return "SDI";
-        default:
-            return "unknown";
-        }
-    }
-
-    gvfg_status_t validateSelectedInputReady()
-    {
-        const bool statusValid = fpga_field_valid(fpgaValidMask, 3);
-        const bool sdiLocked = (fpgaStatusRaw & (1u << 0)) != 0;
-        const bool sdiDdrOk = (fpgaStatusRaw & (1u << 1)) != 0;
-        const bool hdmiLocked = (fpgaStatusRaw & (1u << 2)) != 0;
-        const bool hdmiDdrOk = (fpgaStatusRaw & (1u << 3)) != 0;
-        const bool selectedReady = (selectedInput == PCIES2MM_INPUT_HDMI) ? (hdmiLocked && hdmiDdrOk)
-                                                                         : (sdiLocked && sdiDdrOk);
-
-        if (!statusValid || !selectedReady)
-        {
-            char msg[256] = {};
-            std::snprintf(msg,
-                          sizeof(msg),
-                          "%s input not ready; FPGA status valid=%d raw=0x%08x sdi_lock=%d sdi_ddr=%d hdmi_lock=%d hdmi_ddr=%d",
-                          inputName(selectedInput),
-                          statusValid ? 1 : 0,
-                          fpgaStatusRaw,
-                          sdiLocked ? 1 : 0,
-                          sdiDdrOk ? 1 : 0,
-                          hdmiLocked ? 1 : 0,
-                          hdmiDdrOk ? 1 : 0);
-            recordError(msg);
-            return GVFG_ENODEV;
-        }
-
-        if (!fpgaWidthValid || !fpgaHeightValid || fpgaWidthRaw == 0 || fpgaHeightRaw == 0)
-        {
-            char msg[192] = {};
-            std::snprintf(msg,
-                          sizeof(msg),
-                          "%s input has no valid FPGA resolution; width_valid=%d width=%u height_valid=%d height=%u",
-                          inputName(selectedInput),
-                          fpgaWidthValid ? 1 : 0,
-                          fpgaWidthRaw,
-                          fpgaHeightValid ? 1 : 0,
-                          fpgaHeightRaw);
-            recordError(msg);
-            return GVFG_ENODEV;
-        }
-
-        return GVFG_OK;
+        width = status == PCIES2MM_OK ? sig.width : 0;
+        height = status == PCIES2MM_OK ? sig.height : 0;
+        bitDepth = status == PCIES2MM_OK ? sig.bit_depth : 0;
+        pixelFormat = status == PCIES2MM_OK ? sig.pixel_format : PCIES2MM_PIXFMT_UNKNOWN;
+        signalConnected = status == PCIES2MM_OK && sig.connected != 0;
+        return status;
     }
 
     gvfg_status_t configureStream()
@@ -643,21 +510,24 @@ struct gvfg_handle_t
         if (!backend)
             return GVFG_ESTATE;
 
-        querySignal();
-        const gvfg_status_t inputReady = validateSelectedInputReady();
-        if (inputReady != GVFG_OK)
-            return inputReady;
+        const pcies2mm_status_t signalStatus = querySignal();
+        if (signalStatus != PCIES2MM_OK && signalStatus != PCIES2MM_ENODEV)
+            return map_status(signalStatus);
 
-        if (width == 0)
-            width = 1920;
-        if (height == 0)
-            height = 1080;
+        const bool waitingForSignal = signalStatus == PCIES2MM_ENODEV;
+        // configure_stream() is also used to enter event-monitoring mode. Keep
+        // its inactive placeholder ring minimal; the real signal descriptor
+        // replaces it before DMA is enabled after reconnect.
+        const uint32_t configureWidth = waitingForSignal ? 2 : width;
+        const uint32_t configureHeight = waitingForSignal ? 1 : height;
+        const pcies2mm_pixel_format_t configureFormat =
+            waitingForSignal || pixelFormat == PCIES2MM_PIXFMT_UNKNOWN ? PCIES2MM_PIXFMT_YUY2 : pixelFormat;
 
         pcies2mm_stream_desc_t desc{};
-        desc.input = selectedInput;
-        desc.width = width;
-        desc.height = height;
-        desc.pixel_format = pixelFormat;
+        desc.channel = selectedChannel;
+        desc.width = configureWidth;
+        desc.height = configureHeight;
+        desc.pixel_format = configureFormat;
         desc.buffer_count = 3;
 
         const pcies2mm_status_t st = backend->configure_stream(desc);
@@ -666,6 +536,8 @@ struct gvfg_handle_t
             recordError(pcies2mm_error_text(st, backend.get()));
             return map_status(st);
         }
+        if (waitingForSignal)
+            recordError(nullptr);
         return GVFG_OK;
     }
 
@@ -842,6 +714,10 @@ struct gvfg_handle_t
             return cfg;
 
         resetRuntimeCounters();
+        {
+            std::lock_guard<std::mutex> lock(eventMutex);
+            eventQueue.clear();
+        }
         const pcies2mm_status_t st = backend->start_stream();
         if (st != PCIES2MM_OK)
         {
@@ -856,7 +732,6 @@ struct gvfg_handle_t
         try
         {
             callbackThread = std::thread(&gvfg_handle_t::callbackThreadProc, this);
-            callbackEventThread = std::thread(&gvfg_handle_t::callbackEventThreadProc, this);
         }
         catch (...)
         {
@@ -867,8 +742,6 @@ struct gvfg_handle_t
             eventCv.notify_all();
             if (callbackThread.joinable())
                 callbackThread.join();
-            if (callbackEventThread.joinable())
-                callbackEventThread.join();
             return GVFG_EIO;
         }
 
@@ -877,8 +750,7 @@ struct gvfg_handle_t
 
     gvfg_status_t stopCallbackMode()
     {
-        if ((callbackThread.joinable() && std::this_thread::get_id() == callbackThread.get_id()) ||
-            (callbackEventThread.joinable() && std::this_thread::get_id() == callbackEventThread.get_id()))
+        if (callbackThread.joinable() && std::this_thread::get_id() == callbackThread.get_id())
             return GVFG_ESTATE;
 
         if (!callbackModeActive.load(std::memory_order_acquire))
@@ -892,8 +764,6 @@ struct gvfg_handle_t
 
         if (callbackThread.joinable())
             callbackThread.join();
-        if (callbackEventThread.joinable())
-            callbackEventThread.join();
         callbackModeActive.store(false, std::memory_order_release);
         releaseHeldFrameForStop();
         return GVFG_OK;
@@ -901,51 +771,18 @@ struct gvfg_handle_t
 
     bool isInCallbackThread() const
     {
-        return (callbackThread.joinable() && std::this_thread::get_id() == callbackThread.get_id()) ||
-               (callbackEventThread.joinable() && std::this_thread::get_id() == callbackEventThread.get_id());
+        return callbackThread.joinable() && std::this_thread::get_id() == callbackThread.get_id();
     }
 
-    void callbackThreadProc()
+    void dispatchPendingEvents()
     {
-        while (!callbackStop.load(std::memory_order_acquire))
-        {
-            gvfg_frame_t frame{};
-            const gvfg_status_t st = readFrame(frame, 100, true);
-            if (st == GVFG_ETIMEOUT)
-                continue;
-            if (st != GVFG_OK)
-            {
-                if (!callbackStop.load(std::memory_order_acquire))
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-
-            gvfg_frame_callback_t callback = nullptr;
-            void *userData = nullptr;
-            {
-                std::lock_guard<std::mutex> lock(callbackMutex);
-                callback = frameCallback;
-                userData = frameCallbackUserData;
-            }
-
-            if (callback)
-                callback(this, &frame, userData);
-
-            releaseFrame(frame);
-        }
-    }
-
-    void callbackEventThreadProc()
-    {
-        while (!callbackStop.load(std::memory_order_acquire))
+        for (;;)
         {
             gvfg_event_t event{};
             {
-                std::unique_lock<std::mutex> lock(eventMutex);
-                eventCv.wait(lock, [this]()
-                             { return callbackStop.load(std::memory_order_acquire) || !eventQueue.empty(); });
-                if (callbackStop.load(std::memory_order_acquire))
-                    break;
+                std::lock_guard<std::mutex> lock(eventMutex);
+                if (eventQueue.empty())
+                    return;
                 event = eventQueue.front();
                 eventQueue.pop_front();
             }
@@ -960,6 +797,57 @@ struct gvfg_handle_t
 
             if (callback)
                 callback(this, &event, userData);
+        }
+    }
+
+    void callbackThreadProc()
+    {
+        while (!callbackStop.load(std::memory_order_acquire))
+        {
+            dispatchPendingEvents();
+            if (callbackStop.load(std::memory_order_acquire))
+                break;
+
+            gvfg_frame_t frame{};
+            const gvfg_status_t st = readFrame(frame, 100, true);
+            if (st == GVFG_ETIMEOUT)
+                continue;
+            if (st != GVFG_OK)
+            {
+                if (!callbackStop.load(std::memory_order_acquire))
+                {
+                    std::unique_lock<std::mutex> lock(eventMutex);
+                    eventCv.wait_for(lock,
+                                     std::chrono::milliseconds(100),
+                                     [this]()
+                                     { return callbackStop.load(std::memory_order_acquire) || !eventQueue.empty(); });
+                }
+                continue;
+            }
+
+            // An event may have arrived while wait_frame() was blocked. Deliver
+            // it before the newly returned frame so a resume notification is
+            // observed before the first post-reconnect frame callback.
+            dispatchPendingEvents();
+            if (callbackStop.load(std::memory_order_acquire))
+            {
+                releaseFrame(frame);
+                break;
+            }
+
+            gvfg_frame_callback_t callback = nullptr;
+            void *userData = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(callbackMutex);
+                callback = frameCallback;
+                userData = frameCallbackUserData;
+            }
+
+            if (callback)
+                callback(this, &frame, userData);
+
+            releaseFrame(frame);
+            dispatchPendingEvents();
         }
     }
 
@@ -998,7 +886,6 @@ struct gvfg_handle_t
             out.backend_wait_timeouts = waitTimeouts;
             out.backend_running = debugState.running;
             out.backend_capture_active = debugState.capture_active;
-            out.backend_data_worker_stop = debugState.data_worker_stop;
             out.backend_pending_events = debugState.pending_events;
             out.backend_latest_sequence = debugState.latest_sequence;
             out.backend_delivered_sequence = debugState.delivered_sequence;
@@ -1007,26 +894,6 @@ struct gvfg_handle_t
             out.backend_ring_size = debugState.ring_size;
         }
 
-        return GVFG_OK;
-    }
-
-    gvfg_status_t getDebugFpgaSignalRaw(gvfg_debug_fpga_signal_raw_t &out)
-    {
-        if (!backend)
-            return GVFG_ESTATE;
-
-        querySignal();
-        std::lock_guard<std::mutex> lock(stateMutex);
-        std::memset(&out, 0, sizeof(out));
-        out.valid_mask = fpgaValidMask;
-        out.width_valid = fpgaWidthValid ? 1u : 0u;
-        out.height_valid = fpgaHeightValid ? 1u : 0u;
-        out.width_raw = fpgaWidthRaw;
-        out.height_raw = fpgaHeightRaw;
-        out.video_format_raw = fpgaVideoFormatRaw;
-        out.frame_rate_raw = fpgaFrameRateRaw;
-        out.bit_depth_raw = fpgaBitDepthRaw;
-        out.status_raw = fpgaStatusRaw;
         return GVFG_OK;
     }
 
@@ -1084,22 +951,14 @@ struct gvfg_handle_t
 
     std::unique_ptr<gvfg::internal::PcieS2mmCaptureSession> backend;
     int currentIndex = -1;
-    pcies2mm_input_t selectedInput = PCIES2MM_INPUT_SDI;
+    uint32_t selectedChannel = GVFG_CHANNEL_0;
 
     uint32_t width = 0;
     uint32_t height = 0;
-    uint32_t bitDepth = 8;
-    pcies2mm_pixel_format_t pixelFormat = PCIES2MM_PIXFMT_YUY2;
+    uint32_t bitDepth = 0;
+    pcies2mm_pixel_format_t pixelFormat = PCIES2MM_PIXFMT_UNKNOWN;
+    bool signalConnected = false;
     mutable std::mutex stateMutex;
-    uint32_t fpgaValidMask = 0;
-    bool fpgaWidthValid = false;
-    bool fpgaHeightValid = false;
-    uint32_t fpgaWidthRaw = 0;
-    uint32_t fpgaHeightRaw = 0;
-    uint32_t fpgaVideoFormatRaw = 0;
-    uint32_t fpgaFrameRateRaw = 0;
-    uint32_t fpgaBitDepthRaw = 0;
-    uint32_t fpgaStatusRaw = 0;
     std::atomic<uint64_t> lastPtsNs{0};
     std::atomic<uint64_t> deliveredFrames{0};
     std::atomic<uint32_t> deliveredWidth{0};
@@ -1126,7 +985,6 @@ struct gvfg_handle_t
     std::atomic<bool> callbackModeActive{false};
     std::atomic<bool> callbackStop{false};
     std::thread callbackThread;
-    std::thread callbackEventThread;
 
 };
 
@@ -1179,7 +1037,14 @@ extern "C"
     {
         if (!handle)
             return GVFG_EINVAL;
-        return handle->open(device_index);
+        return handle->open(device_index, GVFG_CHANNEL_0);
+    }
+
+    gvfg_status_t gvfg_open_channel(gvfg_handle handle, int device_index, int channel_index)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        return handle->open(device_index, channel_index);
     }
 
     gvfg_status_t gvfg_start(gvfg_handle handle)
@@ -1319,14 +1184,6 @@ extern "C"
         std::memcpy(out_stats, &stats, callerSize);
         out_stats->struct_size = callerSize;
         return GVFG_OK;
-    }
-
-    gvfg_status_t gvfg_debug_get_fpga_signal_raw(gvfg_handle handle,
-                                                 gvfg_debug_fpga_signal_raw_t *out_raw)
-    {
-        if (!handle || !out_raw)
-            return GVFG_EINVAL;
-        return handle->getDebugFpgaSignalRaw(*out_raw);
     }
 
     gvfg_status_t gvfg_debug_get_last_error_detail(gvfg_handle handle,

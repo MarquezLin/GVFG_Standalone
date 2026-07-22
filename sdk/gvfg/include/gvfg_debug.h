@@ -39,7 +39,6 @@ typedef struct
 
     int backend_running;
     int backend_capture_active;
-    int backend_data_worker_stop;
     uint32_t backend_pending_events;
     uint64_t backend_latest_sequence;
     uint64_t backend_delivered_sequence;
@@ -47,19 +46,6 @@ typedef struct
     uint64_t backend_next_write_slot;
     uint64_t backend_ring_size;
 } gvfg_debug_backend_stats_t;
-
-typedef struct
-{
-    uint32_t valid_mask;
-    uint32_t width_valid;
-    uint32_t height_valid;
-    uint32_t width_raw;
-    uint32_t height_raw;
-    uint32_t video_format_raw;
-    uint32_t frame_rate_raw;
-    uint32_t bit_depth_raw;
-    uint32_t status_raw;
-} gvfg_debug_fpga_signal_raw_t;
 
 /*
  * Query driver-neutral internal backend counters.
@@ -70,15 +56,6 @@ typedef struct
 GVFG_API gvfg_status_t gvfg_debug_get_backend_stats(
     _In_ gvfg_handle handle,
     _Out_ gvfg_debug_backend_stats_t *out_stats);
-
-/*
- * Query raw FPGA signal values for internal hardware/FPGA debugging.
- *
- * These values are intentionally excluded from gvfg_capture.h.
- */
-GVFG_API gvfg_status_t gvfg_debug_get_fpga_signal_raw(
-    _In_ gvfg_handle handle,
-    _Out_ gvfg_debug_fpga_signal_raw_t *out_raw);
 
 /*
  * Copy the latest backend error detail into out_message.

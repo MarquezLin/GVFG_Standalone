@@ -26,7 +26,7 @@ samples/gvfg_qt_preview/
 ```
 
 從 customer 角度看，core SDK 必須維持 driver-neutral。PCIES2MM、IRQ、DMA counters、
-raw FPGA values、backend details 都是 internal。
+backend details 都是 internal。
 
 ## 架構
 
@@ -56,7 +56,7 @@ flowchart TD
     subgraph Backend["Internal Backend"]
         PcieS2mm["sdk/gvfg/src/backend/pcies2mm"]
         Ring["frame_ring_"]
-        Workers["event worker + data worker"]
+        Workers["single driver event + DMA worker"]
     end
 
     CustomerApp --> CaptureApi
@@ -82,7 +82,7 @@ Core capture API 的基本模式是 FFmpeg-style pull model：
 ```text
 gvfg_enumerate_devices
 -> gvfg_create
--> gvfg_open
+-> gvfg_open / gvfg_open_channel(CH0 or CH1)
 -> gvfg_start
 -> loop:
    gvfg_read_frame
@@ -96,21 +96,25 @@ gvfg_enumerate_devices
 Pull mode 下，`gvfg.dll` 不擁有 application 的 public read thread。UI app 應該
 自己建立 worker thread，並在那個 thread 呼叫 `gvfg_read_frame()`。
 
-另外提供 optional callback mode，給想讓 SDK 管理 frame/event worker thread 的
+另外提供 optional callback mode，給想讓 SDK 管理 frame/event dispatch thread 的
 application：
 
 ```text
 gvfg_set_frame_callback
 gvfg_set_event_callback optional
 gvfg_start_callback_mode
--> SDK-owned frame worker invokes frame callback
--> SDK-owned event worker invokes event callback when configured
+-> one SDK-owned dispatch worker invokes frame/event callbacks serially
 -> callback return 後 SDK auto-release frame
 gvfg_stop_callback_mode
 ```
 
 同一個 handle 只能 pull mode 或 callback mode 二選一。Callback mode active 時，
 `gvfg_read_frame()` 與 `gvfg_poll_event()` 必須回 `GVFG_ESTATE`。
+
+`gvfg_start()` 在沒有 input signal 時仍會註冊 driver events 並啟動單一 backend
+wait thread，但不 enable DMA。`gvfg_read_frame()` 此時 timeout；收到 signal-connected
+event 後，backend 在相同 thread 重讀 width/height/payload format、resize ring，然後
+enable DMA 並送出 capture-resumed event。
 
 ## Frame 所有權
 
@@ -130,8 +134,7 @@ gvfg_stop_callback_mode
 - `gvfg_preview_render_frame()` 是 synchronous，應該在 `gvfg_release_frame()` 前呼叫。
 - Callback mode 下，frame pointer 只在 frame callback 期間有效；callback return
   後由 SDK 自動 release。
-- 同一個 handle 的 frame callback 不併發；event callback 由 SDK-owned event worker
-  thread 呼叫，不保證和 frame callback 完全排序。
+- 同一個 handle 的 frame/event callback 共用一條 SDK-owned dispatch thread，依序呼叫。
 - 不要在 callback 內呼叫 `gvfg_destroy()`；stop callback mode 應由其他 thread
   呼叫。
 
@@ -149,14 +152,17 @@ gvfg_read_frame
 Customer event 保持 driver-neutral：
 
 ```text
-GVFG_EVENT_PLUG_IN
-GVFG_EVENT_PLUG_OUT
+GVFG_EVENT_SIGNAL_CONNECTED
+GVFG_EVENT_SIGNAL_DISCONNECTED
 GVFG_EVENT_CAPTURE_PAUSED
 GVFG_EVENT_CAPTURE_RESUMED
 ```
 
+舊名稱 `GVFG_EVENT_PLUG_IN/OUT` 僅為 aliases；事件代表 input signal cable，
+不是 PCIe capture device hotplug。
+
 Video IRQ handling 是 `sdk/gvfg/src/backend/pcies2mm` 內部細節。IRQ bit numbers、
-IRQ masks、DMA counters、raw FPGA register-like values 不應出現在
+IRQ masks 與 DMA counters 不應出現在
 `gvfg_capture.h`。
 
 ## API Surfaces
@@ -176,7 +182,6 @@ include/gvfg_debug.h
 backend counters
 interrupt count
 DMA errors
-raw FPGA signal values
 latest backend error detail
 PDB symbols
 internal diagnostic tools

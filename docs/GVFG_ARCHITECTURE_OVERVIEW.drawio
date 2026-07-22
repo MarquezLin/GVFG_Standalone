@@ -30,7 +30,7 @@
         <mxCell id="backendTypes" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="pcies2mm_backend_types.h&lt;br&gt;internal frame/event/status types" vertex="1">
           <mxGeometry height="58" width="285" x="30" y="95" as="geometry" />
         </mxCell>
-        <mxCell id="workers" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="event worker + data worker&lt;br&gt;publish frames and events" vertex="1">
+        <mxCell id="workers" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="single driver event + DMA worker&lt;br&gt;publish frames and events" vertex="1">
           <mxGeometry height="52" width="280" x="510" y="173" as="geometry" />
         </mxCell>
         <mxCell id="pcies2mmSession" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="sdk/gvfg/src/backend/pcies2mm/pcies2mm_capture_session.cpp&lt;br&gt;internal session / workers / frame ring" vertex="1">
