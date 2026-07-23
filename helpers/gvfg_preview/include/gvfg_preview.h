@@ -38,8 +38,7 @@ typedef struct gvfg_preview_handle_t *gvfg_preview_handle;
 typedef enum
 {
     GVFG_PREVIEW_PIXFMT_YUY2 = 1,
-    GVFG_PREVIEW_PIXFMT_Y210 = 7,
-    GVFG_PREVIEW_PIXFMT_V210 = 9
+    GVFG_PREVIEW_PIXFMT_Y210 = 2
 } gvfg_preview_pixel_format_t;
 
 typedef struct

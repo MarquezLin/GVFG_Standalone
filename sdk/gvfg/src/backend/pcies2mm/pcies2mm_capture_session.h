@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pcies2mm_backend_types.h"
+#include "pcies2mm_device.h"
 
 #include <windows.h>
 
@@ -15,14 +16,6 @@
 
 namespace gvfg::internal
 {
-    struct PcieS2mmDevice
-    {
-        std::wstring interface_path;
-        std::wstring friendly_name;
-    };
-
-    std::vector<PcieS2mmDevice> enumerate_pcies2mm_devices();
-
     class PcieS2mmCaptureSession
     {
     public:

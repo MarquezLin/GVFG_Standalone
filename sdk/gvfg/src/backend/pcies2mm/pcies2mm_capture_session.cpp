@@ -1,6 +1,7 @@
 #include "pcies2mm_capture_session.h"
-
-#include <setupapi.h>
+#include "pcies2mm_ioctl.h"
+#include "pcies2mm_reg.h"
+#include "pcies2mm_video_format.h"
 
 #include <algorithm>
 #include <chrono>
@@ -10,73 +11,14 @@
 #include <limits>
 #include <sstream>
 
-#pragma comment(lib, "SetupAPI.lib")
-
 namespace
 {
-    // New pcie_s2mm_driver device interface from CaptureDemo/video_card.cpp.
-    const GUID GUID_DEVINTERFACE_PcieS2mm =
-        {0x8c47b9c3, 0x1faa, 0x4557, {0xbc, 0x1d, 0xf2, 0x25, 0xd2, 0x6c, 0x9e, 0x91}};
-
-    constexpr DWORD kIoctlWriteReg = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS);
-    constexpr DWORD kIoctlReadReg = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS);
-    constexpr DWORD kIoctlRegisterEvent = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS);
-    constexpr DWORD kIoctlGetFrame = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS);
-    constexpr DWORD kIoctlUnregisterEvent = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS);
-    constexpr DWORD kIoctlGetVideoDoneIndex = CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS);
-
-    constexpr uint32_t kEventTypeVideoDma = 0;
-    constexpr uint32_t kEventTypeVideoFormatChange = 1;
-    constexpr uint32_t kEventTypeVideoPlugin = 2;
-    constexpr uint32_t kEventTypeVideoUnplug = 3;
     constexpr uint32_t kDmaBufferCount = 16;
     constexpr uint32_t kMaxChannels = 2;
     constexpr uint32_t kDefaultWidth = 1920;
     constexpr uint32_t kDefaultHeight = 1080;
     constexpr uint32_t kDefaultRingBufferCount = 3;
     constexpr uint32_t kMaxRingBufferCount = 16;
-
-    // Temporary FPGA/driver contract for this board revision. The format
-    // register may expose either FOURCC v210 or legacy YUV422 code 0, while
-    // the DMA payload is Y210 (16-bit containers, 10 valid bits).
-    constexpr bool kTemporaryYuv422PayloadIsY210 = true;
-    constexpr uint32_t kFpgaFourccV210 = 0x76323130u;
-    constexpr uint32_t kFpgaFourccY210 = 0x59323130u;
-
-    constexpr uint32_t kInterruptBase = 0x00000000;
-    constexpr uint32_t kCh0VideoBase = 0x00000200;
-    constexpr uint32_t kCh1VideoBase = 0x00000400;
-    constexpr uint32_t kIrqMaskW1sOffset = 0x004;
-    constexpr uint32_t kIrqMaskW1cOffset = 0x008;
-    constexpr uint32_t kVideoEnOffset = 0x000;
-    constexpr uint32_t kVideoDmaEnOffset = 0x020;
-    constexpr uint32_t kVideoHSizeOffset = 0x02c;
-    constexpr uint32_t kVideoVSizeOffset = 0x030;
-    constexpr uint32_t kVideoFormatOffset = 0x034;
-
-    constexpr uint32_t kCh0VideoDmaIrqMask = 1u << 0;
-    constexpr uint32_t kCh1VideoDmaIrqMask = 1u << 4;
-
-    constexpr uint32_t fourcc(char a, char b, char c, char d)
-    {
-        return static_cast<uint32_t>(static_cast<unsigned char>(a)) |
-               (static_cast<uint32_t>(static_cast<unsigned char>(b)) << 8) |
-               (static_cast<uint32_t>(static_cast<unsigned char>(c)) << 16) |
-               (static_cast<uint32_t>(static_cast<unsigned char>(d)) << 24);
-    }
-
-    typedef struct _PCIES2MM_REG_ACCESS
-    {
-        ULONG Offset;
-        ULONG Value;
-    } PCIES2MM_REG_ACCESS;
-
-    typedef struct _PCIES2MM_EVENT_REG
-    {
-        ULONG Type;
-        ULONG ChannelIndex;
-        HANDLE EventHandle;
-    } PCIES2MM_EVENT_REG;
 
     static uint64_t steady_now_ns()
     {
@@ -159,88 +101,6 @@ namespace
 #define PCIES2MM_LOG(...) trace_log(false, "", __VA_ARGS__)
 #define PCIES2MM_ERROR_LOG(...) trace_log(true, "[error]", __VA_ARGS__)
 
-    static pcies2mm_pixel_format_t decode_pixel_format(uint32_t raw)
-    {
-        if (kTemporaryYuv422PayloadIsY210 && raw == 0)
-            return PCIES2MM_PIXFMT_Y210;
-
-        // CaptureDemo compares the register against these literal values. The
-        // FPGA stores the four ASCII bytes in display order, unlike Windows'
-        // little-endian MAKEFOURCC integer representation used below.
-        if (raw == kFpgaFourccV210 || raw == kFpgaFourccY210)
-            return PCIES2MM_PIXFMT_Y210;
-
-        switch (raw)
-        {
-        case fourcc('Y', 'U', 'Y', '2'):
-            return PCIES2MM_PIXFMT_YUY2;
-        case fourcc('U', 'Y', 'V', 'Y'):
-            return PCIES2MM_PIXFMT_UYVY;
-        case fourcc('N', 'V', '1', '2'):
-            return PCIES2MM_PIXFMT_NV12;
-        case fourcc('v', '2', '1', '0'):
-            // Temporary FPGA contract: FOURCC remains v210 while the DMA
-            // payload is laid out as Y210.
-            return PCIES2MM_PIXFMT_Y210;
-        case fourcc('Y', '2', '1', '0'):
-            return PCIES2MM_PIXFMT_Y210;
-        case fourcc('P', '0', '1', '0'):
-            return PCIES2MM_PIXFMT_P010;
-        default:
-            break;
-        }
-
-        switch (raw & 0x3u)
-        {
-        case 0:
-            return PCIES2MM_PIXFMT_YUY2;
-        case 1:
-            return PCIES2MM_PIXFMT_RGB24;
-        case 2:
-            return PCIES2MM_PIXFMT_YUV444;
-        case 3:
-            return PCIES2MM_PIXFMT_NV12;
-        default:
-            return PCIES2MM_PIXFMT_UNKNOWN;
-        }
-    }
-
-    static uint32_t bit_depth_for_pixfmt(pcies2mm_pixel_format_t fmt)
-    {
-        switch (fmt)
-        {
-        case PCIES2MM_PIXFMT_P010:
-        case PCIES2MM_PIXFMT_Y210:
-        case PCIES2MM_PIXFMT_V210:
-            return 10;
-        default:
-            return 8;
-        }
-    }
-
-    static size_t bytes_per_frame(uint32_t width, uint32_t height, pcies2mm_pixel_format_t fmt, uint32_t bitDepth)
-    {
-        const size_t pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
-        switch (fmt)
-        {
-        case PCIES2MM_PIXFMT_NV12:
-            return pixels * 3u / 2u;
-        case PCIES2MM_PIXFMT_P010:
-            return pixels * 3u;
-        case PCIES2MM_PIXFMT_RGB24:
-        case PCIES2MM_PIXFMT_YUV444:
-            return bitDepth > 8u ? pixels * 6u : pixels * 3u;
-        case PCIES2MM_PIXFMT_Y210:
-            return pixels * 4u;
-        case PCIES2MM_PIXFMT_V210:
-            return ((static_cast<size_t>(width) + 5u) / 6u) * 16u * static_cast<size_t>(height);
-        case PCIES2MM_PIXFMT_YUY2:
-        case PCIES2MM_PIXFMT_UYVY:
-        default:
-            return pixels * 2u;
-        }
-    }
-
     static uint32_t event_mask_for_type(pcies2mm_event_type_t type)
     {
         switch (type)
@@ -269,39 +129,6 @@ namespace
 
 namespace gvfg::internal
 {
-    std::vector<PcieS2mmDevice> enumerate_pcies2mm_devices()
-    {
-        std::vector<PcieS2mmDevice> devices;
-        HDEVINFO info = SetupDiGetClassDevsW(&GUID_DEVINTERFACE_PcieS2mm, nullptr, nullptr,
-                                             DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
-        if (info == INVALID_HANDLE_VALUE)
-            return devices;
-
-        SP_DEVICE_INTERFACE_DATA iface = {};
-        iface.cbSize = sizeof(iface);
-        for (DWORD index = 0; SetupDiEnumDeviceInterfaces(info, nullptr, &GUID_DEVINTERFACE_PcieS2mm, index, &iface); ++index)
-        {
-            DWORD required = 0;
-            SetupDiGetDeviceInterfaceDetailW(info, &iface, nullptr, 0, &required, nullptr);
-            if (required == 0)
-                continue;
-
-            std::vector<uint8_t> detailBytes(required);
-            auto *detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W *>(detailBytes.data());
-            detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
-            if (!SetupDiGetDeviceInterfaceDetailW(info, &iface, detail, required, nullptr, nullptr))
-                continue;
-
-            PcieS2mmDevice device;
-            device.interface_path = detail->DevicePath;
-            device.friendly_name = L"PcieS2mm Capture Device " + std::to_wstring(devices.size());
-            devices.push_back(device);
-        }
-
-        SetupDiDestroyDeviceInfoList(info);
-        return devices;
-    }
-
     PcieS2mmCaptureSession::PcieS2mmCaptureSession()
     {
         stream_desc_.channel = 0;
@@ -399,9 +226,9 @@ namespace gvfg::internal
         uint32_t rawWidth = 0;
         uint32_t rawHeight = 0;
         uint32_t rawFormat = 0;
-        const bool widthOk = read_reg(video_base() + kVideoHSizeOffset, rawWidth);
-        const bool heightOk = read_reg(video_base() + kVideoVSizeOffset, rawHeight);
-        const bool formatOk = read_reg(video_base() + kVideoFormatOffset, rawFormat);
+        const bool widthOk = read_reg(video_base() + VIDEO_HSIZE_OFFSET, rawWidth);
+        const bool heightOk = read_reg(video_base() + VIDEO_VSIZE_OFFSET, rawHeight);
+        const bool formatOk = read_reg(video_base() + VIDEO_FORMAT_OFFSET, rawFormat);
 
         const bool haveRawSize = widthOk && heightOk && rawWidth != 0 && rawHeight != 0;
         const bool presenceKnown = signal_presence_known_.load(std::memory_order_acquire);
@@ -428,7 +255,11 @@ namespace gvfg::internal
         out.height = height;
         out.pixel_format = fmt;
         out.bit_depth = bitDepth;
-        return connected ? PCIES2MM_OK : PCIES2MM_ENODEV;
+        if (connected)
+            return PCIES2MM_OK;
+        if (signalPresent && haveRawSize && formatOk)
+            return PCIES2MM_ENOTSUP;
+        return PCIES2MM_ENODEV;
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::set_event_callback(pcies2mm_event_callback_t callback, void *user, uint32_t eventMask)
@@ -453,9 +284,7 @@ namespace gvfg::internal
         switch (fmt)
         {
         case PCIES2MM_PIXFMT_YUY2:
-        case PCIES2MM_PIXFMT_UYVY:
         case PCIES2MM_PIXFMT_Y210:
-        case PCIES2MM_PIXFMT_V210:
             break;
         default:
             return fail(PCIES2MM_ENOTSUP, "configure_stream(pixel_format)", ERROR_NOT_SUPPORTED);
@@ -514,13 +343,13 @@ namespace gvfg::internal
         {
             // Match the proven CaptureDemo sequence: register events first,
             // enable DMA/video second, then start the single wait thread.
-            const bool dmaEnableOk = write_reg(video_base() + kVideoDmaEnOffset, 1);
-            const bool videoEnableOk = write_reg(video_base() + kVideoEnOffset, 1);
+            const bool dmaEnableOk = write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 1);
+            const bool videoEnableOk = write_reg(video_base() + VIDEO_EN_OFFSET, 1);
             if (!dmaEnableOk || !videoEnableOk)
             {
                 const DWORD err = GetLastError();
-                write_reg(video_base() + kVideoDmaEnOffset, 0);
-                write_reg(video_base() + kVideoEnOffset, 0);
+                write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
+                write_reg(video_base() + VIDEO_EN_OFFSET, 0);
                 unregister_events(channel);
                 close_event_handles();
                 return fail(PCIES2MM_EIO, "enable video capture", err);
@@ -539,8 +368,8 @@ namespace gvfg::internal
             capture_active_ = false;
             if (startCaptureNow)
             {
-                write_reg(video_base() + kVideoDmaEnOffset, 0);
-                write_reg(video_base() + kVideoEnOffset, 0);
+                write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
+                write_reg(video_base() + VIDEO_EN_OFFSET, 0);
             }
             unregister_events(channel);
             close_event_handles();
@@ -572,9 +401,9 @@ namespace gvfg::internal
 
         if (device_ != INVALID_HANDLE_VALUE)
         {
-            write_reg(video_base() + kVideoDmaEnOffset, 0);
-            write_reg(video_base() + kVideoEnOffset, 0);
-            write_reg(kInterruptBase + kIrqMaskW1cOffset, video_irq_mask_bit());
+            write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
+            write_reg(video_base() + VIDEO_EN_OFFSET, 0);
+            write_reg(INTERRUPT_BASE + IRQ_MASK_W1C_OFFSET, video_irq_mask_bit());
         }
 
         if (dma_event_)
@@ -720,7 +549,7 @@ namespace gvfg::internal
         reg.Offset = offset;
         DWORD bytesReturned = 0;
         const BOOL ok = DeviceIoControl(device_,
-                                        kIoctlReadReg,
+                                        IOCTL_PCIES2MM_READ_REG,
                                         &reg,
                                         sizeof(reg),
                                         &reg,
@@ -740,7 +569,7 @@ namespace gvfg::internal
         reg.Value = value;
         DWORD bytesReturned = 0;
         return DeviceIoControl(device_,
-                               kIoctlWriteReg,
+                               IOCTL_PCIES2MM_WRITE_REG,
                                &reg,
                                sizeof(reg),
                                nullptr,
@@ -757,7 +586,7 @@ namespace gvfg::internal
         eventReg.EventHandle = eventHandle;
         DWORD bytesReturned = 0;
         return DeviceIoControl(device_,
-                               kIoctlRegisterEvent,
+                               IOCTL_PCIES2MM_REGISTER_EVENT,
                                &eventReg,
                                sizeof(eventReg),
                                nullptr,
@@ -774,7 +603,7 @@ namespace gvfg::internal
         eventReg.EventHandle = nullptr;
         DWORD bytesReturned = 0;
         DeviceIoControl(device_,
-                        kIoctlUnregisterEvent,
+                        IOCTL_PCIES2MM_UNREGISTER_EVENT,
                         &eventReg,
                         sizeof(eventReg),
                         nullptr,
@@ -792,23 +621,23 @@ namespace gvfg::internal
         if (!dma_event_ || !format_change_event_ || !plug_in_event_ || !plug_out_event_)
             return false;
 
-        if (!register_event(channelIndex, kEventTypeVideoDma, dma_event_))
+        if (!register_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_DMA, dma_event_))
             return false;
-        if (!register_event(channelIndex, kEventTypeVideoFormatChange, format_change_event_))
+        if (!register_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_FORMAT_CHANGE, format_change_event_))
             return false;
-        if (!register_event(channelIndex, kEventTypeVideoPlugin, plug_in_event_))
+        if (!register_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_PLUGIN, plug_in_event_))
             return false;
-        if (!register_event(channelIndex, kEventTypeVideoUnplug, plug_out_event_))
+        if (!register_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_UNPLUG, plug_out_event_))
             return false;
         return true;
     }
 
     void PcieS2mmCaptureSession::unregister_events(uint32_t channelIndex)
     {
-        unregister_event(channelIndex, kEventTypeVideoDma);
-        unregister_event(channelIndex, kEventTypeVideoFormatChange);
-        unregister_event(channelIndex, kEventTypeVideoPlugin);
-        unregister_event(channelIndex, kEventTypeVideoUnplug);
+        unregister_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_DMA);
+        unregister_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_FORMAT_CHANGE);
+        unregister_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_PLUGIN);
+        unregister_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_UNPLUG);
     }
 
     void PcieS2mmCaptureSession::close_event_handles()
@@ -841,7 +670,7 @@ namespace gvfg::internal
         ULONG value = 0;
         DWORD bytesReturned = 0;
         const BOOL ok = DeviceIoControl(device_,
-                                        kIoctlGetVideoDoneIndex,
+                                        IOCTL_PCIES2MM_GET_VIDEO_DONE_INDEX,
                                         &input,
                                         sizeof(input),
                                         &value,
@@ -859,7 +688,7 @@ namespace gvfg::internal
         ULONG input[2] = {channelIndex, frameIndex};
         DWORD bytesReturned = 0;
         const BOOL ok = DeviceIoControl(device_,
-                                        kIoctlGetFrame,
+                                        IOCTL_PCIES2MM_GET_FRAME,
                                         input,
                                         sizeof(input),
                                         buffer,
@@ -874,7 +703,7 @@ namespace gvfg::internal
     void PcieS2mmCaptureSession::capture_thread_proc()
     {
         const uint32_t channel = active_channel();
-        write_reg(kInterruptBase + kIrqMaskW1sOffset, video_irq_mask_bit());
+        write_reg(INTERRUPT_BASE + IRQ_MASK_W1S_OFFSET, video_irq_mask_bit());
         HANDLE waitHandles[] = {
             dma_event_,
             format_change_event_,
@@ -931,7 +760,7 @@ namespace gvfg::internal
             }
         }
 
-        write_reg(kInterruptBase + kIrqMaskW1cOffset, video_irq_mask_bit());
+        write_reg(INTERRUPT_BASE + IRQ_MASK_W1C_OFFSET, video_irq_mask_bit());
     }
 
     void PcieS2mmCaptureSession::handle_dma_event(uint32_t channel)
@@ -1028,8 +857,8 @@ namespace gvfg::internal
 
     void PcieS2mmCaptureSession::handle_format_change_event(uint32_t channel)
     {
-        write_reg(video_base() + kVideoDmaEnOffset, 0);
-        write_reg(video_base() + kVideoEnOffset, 0);
+        write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
+        write_reg(video_base() + VIDEO_EN_OFFSET, 0);
         capture_active_ = false;
         emit_event(PCIES2MM_EVENT_CAPTURE_PAUSED, channel == 0 ? 0 : 4, video_irq_mask_bit());
 
@@ -1053,8 +882,8 @@ namespace gvfg::internal
     {
         signal_present_.store(false, std::memory_order_release);
         signal_presence_known_.store(true, std::memory_order_release);
-        write_reg(video_base() + kVideoDmaEnOffset, 0);
-        write_reg(video_base() + kVideoEnOffset, 0);
+        write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
+        write_reg(video_base() + VIDEO_EN_OFFSET, 0);
         capture_active_ = false;
         emit_event(PCIES2MM_EVENT_PLUG_OUT, channel == 0 ? 0 : 4, video_irq_mask_bit());
         emit_event(PCIES2MM_EVENT_CAPTURE_PAUSED, channel == 0 ? 0 : 4, video_irq_mask_bit());
@@ -1080,13 +909,13 @@ namespace gvfg::internal
             !refresh_stream_from_signal(true))
             return false;
 
-        const bool dmaEnableOk = write_reg(video_base() + kVideoDmaEnOffset, 1);
-        const bool videoEnableOk = write_reg(video_base() + kVideoEnOffset, 1);
+        const bool dmaEnableOk = write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 1);
+        const bool videoEnableOk = write_reg(video_base() + VIDEO_EN_OFFSET, 1);
         if (!dmaEnableOk || !videoEnableOk)
         {
             const DWORD err = GetLastError();
-            write_reg(video_base() + kVideoDmaEnOffset, 0);
-            write_reg(video_base() + kVideoEnOffset, 0);
+            write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
+            write_reg(video_base() + VIDEO_EN_OFFSET, 0);
             capture_active_.store(false, std::memory_order_release);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -1125,7 +954,7 @@ namespace gvfg::internal
         }
 
         const uint32_t bitDepth = bit_depth_for_pixfmt(signal.pixel_format);
-        const size_t bytes = bytes_per_frame(signal.width, signal.height, signal.pixel_format, bitDepth);
+        const size_t bytes = bytes_per_frame(signal.width, signal.height, signal.pixel_format);
         if (bytes == 0 || bytes > (std::numeric_limits<DWORD>::max)())
         {
             PCIES2MM_ERROR_LOG("refresh_stream_from_signal invalid frame size width=%u height=%u bytes=%zu",
@@ -1240,16 +1069,16 @@ namespace gvfg::internal
 
     uint32_t PcieS2mmCaptureSession::video_base() const
     {
-        return active_channel() == 0 ? kCh0VideoBase : kCh1VideoBase;
+        return CH_VIDEO_BASE(active_channel());
     }
 
     uint32_t PcieS2mmCaptureSession::video_irq_mask_bit() const
     {
-        return active_channel() == 0 ? kCh0VideoDmaIrqMask : kCh1VideoDmaIrqMask;
+        return IRQ_BIT_MASK(active_channel(), IRQ_SUB_VIDEO_DMA_CTRL);
     }
 
     size_t PcieS2mmCaptureSession::frame_size_bytes() const
     {
-        return bytes_per_frame(stream_desc_.width, stream_desc_.height, stream_desc_.pixel_format, stream_bit_depth_);
+        return bytes_per_frame(stream_desc_.width, stream_desc_.height, stream_desc_.pixel_format);
     }
 }

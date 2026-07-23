@@ -1,10 +1,10 @@
 /*
- * PCIES2MM driver public contract used by the GVFG backend.
+ * Private ABI contract between the GVFG backend and the PCIE S2MM driver.
+ * This header is not part of the public GVFG SDK API.
  */
 
 #pragma once
 
-#include <stdint.h>
 #include <windows.h>
 
 #define PCIES2MM_IOCTL(index, method, access) CTL_CODE(FILE_DEVICE_UNKNOWN, index, method, access)
@@ -16,7 +16,7 @@
 #define IOCTL_PCIES2MM_UNREGISTER_EVENT PCIES2MM_IOCTL(0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_PCIES2MM_GET_VIDEO_DONE_INDEX PCIES2MM_IOCTL(0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
-enum
+enum PCIES2MM_DRIVER_EVENT_TYPE
 {
     PCIES2MM_EVENT_TYPE_VIDEO_DMA = 0,
     PCIES2MM_EVENT_TYPE_VIDEO_FORMAT_CHANGE = 1,
@@ -25,15 +25,15 @@ enum
     PCIES2MM_EVENT_TYPE_AUDIO_DMA = 4
 };
 
-typedef struct PCIES2MM_REG_ACCESS
+struct PCIES2MM_REG_ACCESS
 {
     ULONG Offset;
     ULONG Value;
-} PCIES2MM_REG_ACCESS;
+};
 
-typedef struct PCIES2MM_EVENT_REG
+struct PCIES2MM_EVENT_REG
 {
     ULONG Type;
     ULONG ChannelIndex;
     HANDLE EventHandle;
-} PCIES2MM_EVENT_REG;
+};

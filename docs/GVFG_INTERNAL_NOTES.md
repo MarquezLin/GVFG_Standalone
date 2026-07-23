@@ -28,6 +28,34 @@ samples/gvfg_qt_preview/
 從 customer 角度看，core SDK 必須維持 driver-neutral。PCIES2MM、IRQ、DMA counters、
 backend details 都是 internal。
 
+### PCIES2MM backend 檔案分工
+
+`sdk/gvfg/src/backend/pcies2mm/` 內部依責任拆分如下：
+
+```text
+pcies2mm_capture_session.{h,cpp}
+  stream lifecycle, single driver-event/DMA worker, event dispatch,
+  SDK-owned frame ring and frame ownership
+
+pcies2mm_device.{h,cpp}
+  Windows SetupAPI device discovery and device interface path
+
+pcies2mm_ioctl.h
+  private ABI contract shared with the PCIE S2MM driver:
+  IOCTL codes, driver event IDs and DeviceIoControl structures
+
+pcies2mm_reg.h
+  FPGA register offsets and bit masks
+
+pcies2mm_video_format.{h,cpp}
+  native YUY2/Y210 layout rules and format-register decoding
+```
+
+`pcies2mm_ioctl.h` 與 `pcies2mm_reg.h` 都不是 customer public header，不可放進
+SDK customer include package。目前板卡只接受 YUY2 與 Y210；這個 FPGA revision 即使
+format register 回報 v210，DMA payload 仍由 `pcies2mm_video_format.cpp` 解讀為 Y210。
+上述拆分只分離程式責任，不會增加 capture thread。
+
 ## 架構
 
 ```mermaid
@@ -96,21 +124,6 @@ gvfg_enumerate_devices
 Pull mode 下，`gvfg.dll` 不擁有 application 的 public read thread。UI app 應該
 自己建立 worker thread，並在那個 thread 呼叫 `gvfg_read_frame()`。
 
-另外提供 optional callback mode，給想讓 SDK 管理 frame/event dispatch thread 的
-application：
-
-```text
-gvfg_set_frame_callback
-gvfg_set_event_callback optional
-gvfg_start_callback_mode
--> one SDK-owned dispatch worker invokes frame/event callbacks serially
--> callback return 後 SDK auto-release frame
-gvfg_stop_callback_mode
-```
-
-同一個 handle 只能 pull mode 或 callback mode 二選一。Callback mode active 時，
-`gvfg_read_frame()` 與 `gvfg_poll_event()` 必須回 `GVFG_ESTATE`。
-
 `gvfg_start()` 在沒有 input signal 時仍會註冊 driver events 並啟動單一 backend
 wait thread，但不 enable DMA。`gvfg_read_frame()` 此時 timeout；收到 signal-connected
 event 後，backend 在相同 thread 重讀 width/height/payload format、resize ring，然後
@@ -132,11 +145,6 @@ enable DMA 並送出 capture-resumed event。
 - 同一個 handle 一次最多 hold 一個 frame。
 - Application 如果 release 後還要用 data，必須自己 copy frame。
 - `gvfg_preview_render_frame()` 是 synchronous，應該在 `gvfg_release_frame()` 前呼叫。
-- Callback mode 下，frame pointer 只在 frame callback 期間有效；callback return
-  後由 SDK 自動 release。
-- 同一個 handle 的 frame/event callback 共用一條 SDK-owned dispatch thread，依序呼叫。
-- 不要在 callback 內呼叫 `gvfg_destroy()`；stop callback mode 應由其他 thread
-  呼叫。
 
 Typical two-way use：
 

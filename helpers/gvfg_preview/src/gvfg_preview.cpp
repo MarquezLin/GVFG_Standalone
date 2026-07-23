@@ -44,8 +44,7 @@ public:
         }
 
         int sourceBitDepth = frame.bit_depth > 0 ? frame.bit_depth : 8;
-        if (frame.pixel_format == GVFG_PREVIEW_PIXFMT_Y210 ||
-            frame.pixel_format == GVFG_PREVIEW_PIXFMT_V210)
+        if (frame.pixel_format == GVFG_PREVIEW_PIXFMT_Y210)
         {
             // These packed formats always carry 10-bit components. Do not let
             // a missing or incorrect caller hint silently select an 8-bit swapchain.
@@ -71,9 +70,6 @@ public:
         case GVFG_PREVIEW_PIXFMT_Y210:
             renderFmt = gvfg::internal::GVFG_RENDER_FMT_Y210;
             break;
-        case GVFG_PREVIEW_PIXFMT_V210:
-            renderFmt = gvfg::internal::GVFG_RENDER_FMT_Y210;
-            break;
         default:
             return false;
         }
@@ -85,9 +81,6 @@ public:
             break;
         case GVFG_PREVIEW_PIXFMT_Y210:
             uploaded = pipeline_->upload_y210_frame(base, stride, frame.width, frame.height);
-            break;
-        case GVFG_PREVIEW_PIXFMT_V210:
-            uploaded = pipeline_->upload_v210_frame(base, stride, frame.width, frame.height);
             break;
         default:
             return false;
@@ -390,9 +383,6 @@ extern "C"
             break;
         case GVFG_PREVIEW_PIXFMT_Y210:
             minimumRowBytes = static_cast<uint64_t>(frame->width) * 4u;
-            break;
-        case GVFG_PREVIEW_PIXFMT_V210:
-            minimumRowBytes = static_cast<uint64_t>((frame->width + 5) / 6) * 16u;
             break;
         default:
             return GVFG_PREVIEW_ENOTSUP;

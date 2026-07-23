@@ -603,10 +603,6 @@ void MainWindow::captureReadLoop()
                     previewFrame.pixel_format = GVFG_PREVIEW_PIXFMT_Y210;
                     previewFrame.row_bytes = frame.width * 4;
                     break;
-                case GVFG_PIXFMT_V210:
-                    previewFrame.pixel_format = GVFG_PREVIEW_PIXFMT_V210;
-                    previewFrame.row_bytes = ((frame.width + 5) / 6) * 16;
-                    break;
                 default:
                     previewFrame.pixel_format = 0;
                     break;

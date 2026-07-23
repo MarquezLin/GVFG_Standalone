@@ -76,7 +76,7 @@ extern "C" {
 enum
 {
     GVFG_MAX_DEVICES = 16,
-    GVFG_MAX_PLANES = 4
+    GVFG_MAX_PLANES = 1
 };
 
 typedef enum
@@ -94,15 +94,7 @@ typedef enum
 {
     GVFG_PIXFMT_UNKNOWN = 0,
     GVFG_PIXFMT_YUY2 = 1,
-    GVFG_PIXFMT_UYVY = 2,
-    GVFG_PIXFMT_RGB24 = 3,
-    GVFG_PIXFMT_BGRX32 = 4,
-    GVFG_PIXFMT_NV12 = 5,
-    GVFG_PIXFMT_P010 = 6,
-    GVFG_PIXFMT_Y210 = 7,
-    GVFG_PIXFMT_YUV444 = 8,
-    GVFG_PIXFMT_V210 = 9,
-    GVFG_PIXFMT_BGRA8 = 100
+    GVFG_PIXFMT_Y210 = 2
 } gvfg_pixel_format_t;
 
 typedef enum
@@ -138,7 +130,7 @@ typedef struct
     int width;              /* Width of the most recent frame returned by gvfg_read_frame(). */
     int height;             /* Height of the most recent frame returned by gvfg_read_frame(). */
     int bit_depth;          /* Bits per color channel of the frame buffer. */
-    char pixel_format[32];  /* Native frame buffer format, for example YUY2, Y210, V210, NV12, or P010. */
+    char pixel_format[32];  /* Native frame buffer format: YUY2 or Y210. */
     int valid;              /* Non-zero while capture is running after at least one frame read. */
 } gvfg_last_frame_info_t;
 
@@ -196,29 +188,6 @@ typedef struct
 
 /* Opaque session handle created by gvfg_create() and released by gvfg_destroy(). */
 typedef struct gvfg_handle_t *gvfg_handle;
-
-/*
- * Optional callback-mode frame delivery.
- *
- * The frame pointer is valid only for the duration of the callback. The SDK
- * releases the frame automatically after the callback returns. Copy the data if
- * it must outlive the callback.
- */
-typedef void (*gvfg_frame_callback_t)(
-    _In_ gvfg_handle handle,
-    _In_ const gvfg_frame_t *frame,
-    _In_opt_ void *user_data);
-
-/*
- * Optional callback-mode event delivery.
- *
- * Frame and event callbacks for one handle are serialized on the same
- * SDK-owned dispatch thread. A callback must not block for long periods.
- */
-typedef void (*gvfg_event_callback_t)(
-    _In_ gvfg_handle handle,
-    _In_ const gvfg_event_t *event,
-    _In_opt_ void *user_data);
 
 /*
  * Enumerate GVFG capture devices.
@@ -313,42 +282,6 @@ GVFG_API gvfg_status_t gvfg_open_channel(
  * starts automatically after a signal-connected event.
  */
 GVFG_API gvfg_status_t gvfg_start(
-    _In_ gvfg_handle handle);
-
-/*
- * Set the optional frame callback used by gvfg_start_callback_mode().
- *
- * Callback mode and pull mode are mutually exclusive for the same handle.
- */
-GVFG_API gvfg_status_t gvfg_set_frame_callback(
-    _In_ gvfg_handle handle,
-    _In_opt_ gvfg_frame_callback_t callback,
-    _In_opt_ void *user_data);
-
-/*
- * Set the optional event callback used while callback mode is active.
- */
-GVFG_API gvfg_status_t gvfg_set_event_callback(
-    _In_ gvfg_handle handle,
-    _In_opt_ gvfg_event_callback_t callback,
-    _In_opt_ void *user_data);
-
-/*
- * Start capture in callback mode.
- *
- * The SDK creates one callback dispatch thread for this handle. Frame and event
- * callbacks are not invoked concurrently for the same handle. The backend uses
- * one additional thread to wait for driver DMA and signal events.
- */
-GVFG_API gvfg_status_t gvfg_start_callback_mode(
-    _In_ gvfg_handle handle);
-
-/*
- * Stop callback mode and wait for the callback dispatch thread to exit.
- *
- * Do not call this from inside the frame callback.
- */
-GVFG_API gvfg_status_t gvfg_stop_callback_mode(
     _In_ gvfg_handle handle);
 
 /*

@@ -25,14 +25,6 @@ static inline uint16_t normalize_y210_word_for_upload(uint16_t v)
     return static_cast<uint16_t>((v >> 6) & 0x03FFu);
 }
 
-static inline uint32_t read_le32(const uint8_t *p)
-{
-    return static_cast<uint32_t>(p[0]) |
-           (static_cast<uint32_t>(p[1]) << 8) |
-           (static_cast<uint32_t>(p[2]) << 16) |
-           (static_cast<uint32_t>(p[3]) << 24);
-}
-
 static const char *ss_dxgi_format_name(DXGI_FORMAT fmt)
 {
     switch (fmt)
@@ -687,105 +679,6 @@ bool D3DPreviewPipeline::upload_y210_frame(const uint8_t *data, int src_stride, 
             d4[1] = U;
             d4[2] = Y1;
             d4[3] = V;
-        }
-    }
-
-    ctx_->Unmap(upload_y210_packed_.Get(), 0);
-    return true;
-}
-
-bool D3DPreviewPipeline::upload_v210_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h)
-{
-    if (!ctx_ || !d3d_ || !data || frame_w <= 0 || frame_h <= 0)
-        return false;
-
-    const int groupsPerRow = (frame_w + 5) / 6;
-    const int minStride = groupsPerRow * 16;
-    const int effectiveStride = (src_stride > 0) ? src_stride : minStride;
-    if (effectiveStride < minStride)
-        return false;
-
-    const int w2 = (frame_w + 1) / 2;
-    if (upload_y210_packed_)
-    {
-        D3D11_TEXTURE2D_DESC desc{};
-        upload_y210_packed_->GetDesc(&desc);
-        if ((int)desc.Width != w2 || (int)desc.Height != frame_h || desc.Format != DXGI_FORMAT_R16G16B16A16_UINT)
-            upload_y210_packed_.Reset();
-    }
-
-    if (!upload_y210_packed_)
-    {
-        D3D11_TEXTURE2D_DESC td{};
-        td.Width = (UINT)w2;
-        td.Height = (UINT)frame_h;
-        td.MipLevels = 1;
-        td.ArraySize = 1;
-        td.SampleDesc.Count = 1;
-        td.Format = DXGI_FORMAT_R16G16B16A16_UINT;
-        td.Usage = D3D11_USAGE_DYNAMIC;
-        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        td.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        if (FAILED(d3d_->CreateTexture2D(&td, nullptr, &upload_y210_packed_)))
-            return false;
-    }
-
-    D3D11_MAPPED_SUBRESOURCE m{};
-    if (FAILED(ctx_->Map(upload_y210_packed_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &m)))
-        return false;
-
-    for (int row = 0; row < frame_h; ++row)
-    {
-        const uint8_t *srcRow = data + (size_t)row * (size_t)effectiveStride;
-        uint8_t *dstRow = static_cast<uint8_t *>(m.pData) + (size_t)row * (size_t)m.RowPitch;
-        uint16_t *dst16 = reinterpret_cast<uint16_t *>(dstRow);
-
-        for (int group = 0; group < groupsPerRow; ++group)
-        {
-            const uint8_t *p = srcRow + group * 16;
-            const uint32_t w0 = read_le32(p + 0);
-            const uint32_t w1 = read_le32(p + 4);
-            const uint32_t w2v = read_le32(p + 8);
-            const uint32_t w3 = read_le32(p + 12);
-
-            const uint16_t u01 = static_cast<uint16_t>((w0 >> 0) & 0x3ffu);
-            const uint16_t y0 = static_cast<uint16_t>((w0 >> 10) & 0x3ffu);
-            const uint16_t v01 = static_cast<uint16_t>((w0 >> 20) & 0x3ffu);
-            const uint16_t y1 = static_cast<uint16_t>((w1 >> 0) & 0x3ffu);
-            const uint16_t u23 = static_cast<uint16_t>((w1 >> 10) & 0x3ffu);
-            const uint16_t y2 = static_cast<uint16_t>((w1 >> 20) & 0x3ffu);
-            const uint16_t v23 = static_cast<uint16_t>((w2v >> 0) & 0x3ffu);
-            const uint16_t y3 = static_cast<uint16_t>((w2v >> 10) & 0x3ffu);
-            const uint16_t u45 = static_cast<uint16_t>((w2v >> 20) & 0x3ffu);
-            const uint16_t y4 = static_cast<uint16_t>((w3 >> 0) & 0x3ffu);
-            const uint16_t v45 = static_cast<uint16_t>((w3 >> 10) & 0x3ffu);
-            const uint16_t y5 = static_cast<uint16_t>((w3 >> 20) & 0x3ffu);
-
-            const int pair = group * 3;
-            if (pair < w2)
-            {
-                uint16_t *d4 = dst16 + pair * 4;
-                d4[0] = y0;
-                d4[1] = u01;
-                d4[2] = y1;
-                d4[3] = v01;
-            }
-            if (pair + 1 < w2)
-            {
-                uint16_t *d4 = dst16 + (pair + 1) * 4;
-                d4[0] = y2;
-                d4[1] = u23;
-                d4[2] = y3;
-                d4[3] = v23;
-            }
-            if (pair + 2 < w2)
-            {
-                uint16_t *d4 = dst16 + (pair + 2) * 4;
-                d4[0] = y4;
-                d4[1] = u45;
-                d4[2] = y5;
-                d4[3] = v45;
-            }
         }
     }
 

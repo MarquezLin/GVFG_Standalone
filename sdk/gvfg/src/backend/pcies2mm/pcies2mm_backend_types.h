@@ -3,8 +3,6 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define PCIES2MM_MAX_PLANES 3
-
 typedef enum pcies2mm_status_t
 {
     PCIES2MM_OK = 0,
@@ -20,14 +18,7 @@ typedef enum pcies2mm_pixel_format_t
 {
     PCIES2MM_PIXFMT_UNKNOWN = 0,
     PCIES2MM_PIXFMT_YUY2 = 1,
-    PCIES2MM_PIXFMT_UYVY = 2,
-    PCIES2MM_PIXFMT_RGB24 = 3,
-    PCIES2MM_PIXFMT_BGRX32 = 4,
-    PCIES2MM_PIXFMT_NV12 = 5,
-    PCIES2MM_PIXFMT_P010 = 6,
-    PCIES2MM_PIXFMT_Y210 = 7,
-    PCIES2MM_PIXFMT_YUV444 = 8,
-    PCIES2MM_PIXFMT_V210 = 9
+    PCIES2MM_PIXFMT_Y210 = 2
 } pcies2mm_pixel_format_t;
 
 typedef enum pcies2mm_stream_state_t

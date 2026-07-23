@@ -52,7 +52,6 @@ public:
     bool blit_fp16_to_rgba8(int frame_w, int frame_h);
     bool upload_yuy2_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h);
     bool upload_y210_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h);
-    bool upload_v210_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h);
     bool render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, int frame_w, int frame_h);
     bool copy_fp16_to_scene();
 

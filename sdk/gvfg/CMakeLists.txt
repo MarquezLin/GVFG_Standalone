@@ -12,7 +12,12 @@ add_library(gvfg SHARED
     src/backend/pcies2mm/pcies2mm_backend_types.h
     src/backend/pcies2mm/pcies2mm_capture_session.cpp
     src/backend/pcies2mm/pcies2mm_capture_session.h
-    src/backend/pcies2mm/pcies2mm_public.h
+    src/backend/pcies2mm/pcies2mm_device.cpp
+    src/backend/pcies2mm/pcies2mm_device.h
+    src/backend/pcies2mm/pcies2mm_ioctl.h
+    src/backend/pcies2mm/pcies2mm_reg.h
+    src/backend/pcies2mm/pcies2mm_video_format.cpp
+    src/backend/pcies2mm/pcies2mm_video_format.h
     src/gvfg_capture.cpp
 )
 

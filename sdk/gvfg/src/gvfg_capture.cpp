@@ -14,7 +14,6 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
 using namespace gvfg::internal;
@@ -123,22 +122,8 @@ namespace
         {
         case PCIES2MM_PIXFMT_YUY2:
             return GVFG_PIXFMT_YUY2;
-        case PCIES2MM_PIXFMT_UYVY:
-            return GVFG_PIXFMT_UYVY;
-        case PCIES2MM_PIXFMT_RGB24:
-            return GVFG_PIXFMT_RGB24;
-        case PCIES2MM_PIXFMT_BGRX32:
-            return GVFG_PIXFMT_BGRX32;
-        case PCIES2MM_PIXFMT_NV12:
-            return GVFG_PIXFMT_NV12;
-        case PCIES2MM_PIXFMT_P010:
-            return GVFG_PIXFMT_P010;
         case PCIES2MM_PIXFMT_Y210:
             return GVFG_PIXFMT_Y210;
-        case PCIES2MM_PIXFMT_YUV444:
-            return GVFG_PIXFMT_YUV444;
-        case PCIES2MM_PIXFMT_V210:
-            return GVFG_PIXFMT_V210;
         default:
             return GVFG_PIXFMT_UNKNOWN;
         }
@@ -150,24 +135,8 @@ namespace
         {
         case GVFG_PIXFMT_YUY2:
             return "YUY2";
-        case GVFG_PIXFMT_UYVY:
-            return "UYVY";
-        case GVFG_PIXFMT_RGB24:
-            return "RGB24";
-        case GVFG_PIXFMT_BGRX32:
-            return "BGRX32";
-        case GVFG_PIXFMT_NV12:
-            return "NV12";
-        case GVFG_PIXFMT_P010:
-            return "P010";
         case GVFG_PIXFMT_Y210:
             return "Y210";
-        case GVFG_PIXFMT_YUV444:
-            return "YUV444";
-        case GVFG_PIXFMT_V210:
-            return "V210";
-        case GVFG_PIXFMT_BGRA8:
-            return "BGRA8";
         default:
             return "UNKNOWN";
         }
@@ -179,56 +148,6 @@ namespace
             return false;
         out = a * b;
         return true;
-    }
-
-    bool checked_add_u64(uint64_t a, uint64_t b, uint64_t &out)
-    {
-        if (b > UINT64_MAX - a)
-            return false;
-        out = a + b;
-        return true;
-    }
-
-    bool set_frame_plane(const gvfg_frame_t &frame,
-                         gvfg_frame_layout_t &layout,
-                         int index,
-                         uint64_t offset,
-                         uint64_t size,
-                         int stride)
-    {
-        if (index < 0 || index >= GVFG_MAX_PLANES || !frame.data || stride < 0)
-            return false;
-
-        uint64_t end = 0;
-        if (!checked_add_u64(offset, size, end) || end > frame.data_size)
-            return false;
-
-        layout.plane_data[index] = static_cast<const uint8_t *>(frame.data) + offset;
-        layout.plane_offset[index] = offset;
-        layout.plane_size[index] = size;
-        layout.plane_stride[index] = stride;
-        return true;
-    }
-
-    void set_fallback_frame_layout(const gvfg_frame_t &frame, gvfg_frame_layout_t &layout)
-    {
-        layout.row_bytes = 0;
-        layout.plane_count = frame.data ? 1 : 0;
-        layout.layout_flags = 0;
-        if (layout.plane_count == 0)
-            return;
-
-        int stride = 0;
-        if (frame.height > 0)
-        {
-            const uint64_t guessedStride = frame.data_size / static_cast<uint64_t>(frame.height);
-            if (guessedStride <= static_cast<uint64_t>(INT_MAX))
-                stride = static_cast<int>(guessedStride);
-        }
-
-        layout.row_bytes = stride;
-        if (set_frame_plane(frame, layout, 0, 0, frame.data_size, stride))
-            layout.layout_flags = GVFG_FRAME_LAYOUT_CONTIGUOUS | GVFG_FRAME_LAYOUT_SDK_DERIVED;
     }
 
     gvfg_status_t populate_frame_layout(const gvfg_frame_t &frame, gvfg_frame_layout_t &layout)
@@ -247,79 +166,30 @@ namespace
 
         const uint64_t width = static_cast<uint64_t>(frame.width);
         const uint64_t height = static_cast<uint64_t>(frame.height);
+        uint64_t bytesPerPixel = 0;
+        if (frame.pixel_format == GVFG_PIXFMT_YUY2)
+            bytesPerPixel = 2;
+        else if (frame.pixel_format == GVFG_PIXFMT_Y210)
+            bytesPerPixel = 4;
+        else
+            return GVFG_ENOTSUP;
+
         uint64_t row = 0;
-        uint64_t size0 = 0;
-        uint64_t size1 = 0;
+        uint64_t size = 0;
+        if (!checked_mul_u64(width, bytesPerPixel, row) ||
+            !checked_mul_u64(row, height, size) ||
+            row > static_cast<uint64_t>(INT_MAX) ||
+            size > frame.data_size)
+            return GVFG_EINVAL;
 
-        switch (frame.pixel_format)
-        {
-        case GVFG_PIXFMT_YUY2:
-        case GVFG_PIXFMT_UYVY:
-            if (!checked_mul_u64(width, 2u, row) || !checked_mul_u64(row, height, size0))
-                break;
-            if (row <= static_cast<uint64_t>(INT_MAX) && set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)))
-                layout.plane_count = 1;
-            break;
-        case GVFG_PIXFMT_Y210:
-        case GVFG_PIXFMT_BGRX32:
-        case GVFG_PIXFMT_BGRA8:
-            if (!checked_mul_u64(width, 4u, row) || !checked_mul_u64(row, height, size0))
-                break;
-            if (row <= static_cast<uint64_t>(INT_MAX) && set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)))
-                layout.plane_count = 1;
-            break;
-        case GVFG_PIXFMT_RGB24:
-            if (!checked_mul_u64(width, 3u, row) || !checked_mul_u64(row, height, size0))
-                break;
-            if (row <= static_cast<uint64_t>(INT_MAX) && set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)))
-                layout.plane_count = 1;
-            break;
-        case GVFG_PIXFMT_YUV444:
-            if (!checked_mul_u64(width, frame.bit_depth > 8 ? 6u : 3u, row) ||
-                !checked_mul_u64(row, height, size0))
-                break;
-            if (row <= static_cast<uint64_t>(INT_MAX) && set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)))
-                layout.plane_count = 1;
-            break;
-        case GVFG_PIXFMT_V210:
-            if (!checked_mul_u64((width + 5u) / 6u, 16u, row) || !checked_mul_u64(row, height, size0))
-                break;
-            if (row <= static_cast<uint64_t>(INT_MAX) && set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)))
-                layout.plane_count = 1;
-            break;
-        case GVFG_PIXFMT_NV12:
-            row = width;
-            if (!checked_mul_u64(row, height, size0) ||
-                !checked_mul_u64(row, height / 2u, size1))
-                break;
-            if (row <= static_cast<uint64_t>(INT_MAX) &&
-                set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)) &&
-                set_frame_plane(frame, layout, 1, size0, size1, static_cast<int>(row)))
-                layout.plane_count = 2;
-            break;
-        case GVFG_PIXFMT_P010:
-            if (!checked_mul_u64(width, 2u, row) ||
-                !checked_mul_u64(row, height, size0) ||
-                !checked_mul_u64(row, height / 2u, size1))
-                break;
-            if (row <= static_cast<uint64_t>(INT_MAX) &&
-                set_frame_plane(frame, layout, 0, 0, size0, static_cast<int>(row)) &&
-                set_frame_plane(frame, layout, 1, size0, size1, static_cast<int>(row)))
-                layout.plane_count = 2;
-            break;
-        default:
-            break;
-        }
-
-        if (layout.plane_count > 0)
-        {
-            layout.row_bytes = layout.plane_stride[0];
-            layout.layout_flags = GVFG_FRAME_LAYOUT_CONTIGUOUS | GVFG_FRAME_LAYOUT_SDK_DERIVED;
-            return GVFG_OK;
-        }
-
-        set_fallback_frame_layout(frame, layout);
-        return layout.plane_count > 0 ? GVFG_OK : GVFG_ENOTSUP;
+        layout.row_bytes = static_cast<int>(row);
+        layout.plane_count = 1;
+        layout.plane_data[0] = frame.data;
+        layout.plane_stride[0] = static_cast<int>(row);
+        layout.plane_size[0] = size;
+        layout.plane_offset[0] = 0;
+        layout.layout_flags = GVFG_FRAME_LAYOUT_CONTIGUOUS | GVFG_FRAME_LAYOUT_SDK_DERIVED;
+        return GVFG_OK;
     }
 
 }
@@ -335,9 +205,6 @@ struct gvfg_handle_t
     {
         if (index < 0 || (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1))
             return GVFG_EINVAL;
-        if (callbackModeActive.load(std::memory_order_acquire) || isInCallbackThread())
-            return GVFG_ESTATE;
-
         close();
 
         backend = std::make_unique<gvfg::internal::PcieS2mmCaptureSession>();
@@ -369,8 +236,6 @@ struct gvfg_handle_t
     {
         if (!backend)
             return GVFG_ESTATE;
-        if (callbackModeActive.load(std::memory_order_acquire))
-            return GVFG_ESTATE;
         if (running)
             return GVFG_OK;
 
@@ -397,8 +262,6 @@ struct gvfg_handle_t
 
     gvfg_status_t stop()
     {
-        if (callbackModeActive.load(std::memory_order_acquire))
-            return stopCallbackMode();
         running = false;
         releaseHeldFrameForStop();
         if (backend)
@@ -541,14 +404,11 @@ struct gvfg_handle_t
         return GVFG_OK;
     }
 
-    gvfg_status_t readFrame(gvfg_frame_t &out, uint32_t timeoutMs, bool allowCallbackMode = false)
+    gvfg_status_t readFrame(gvfg_frame_t &out, uint32_t timeoutMs)
     {
         std::memset(&out, 0, sizeof(out));
         if (!backend || !running)
             return GVFG_ESTATE;
-        if (callbackModeActive.load(std::memory_order_acquire) && !allowCallbackMode)
-            return GVFG_ESTATE;
-
         {
             std::lock_guard<std::mutex> lock(frameMutex);
             if (readInProgress || frameHeld)
@@ -649,9 +509,6 @@ struct gvfg_handle_t
 
     gvfg_status_t pollEvent(gvfg_event_t &out, uint32_t timeoutMs)
     {
-        if (callbackModeActive.load(std::memory_order_acquire))
-            return GVFG_ESTATE;
-
         std::unique_lock<std::mutex> lock(eventMutex);
         const auto hasEvent = [this]()
         {
@@ -671,184 +528,6 @@ struct gvfg_handle_t
         out = eventQueue.front();
         eventQueue.pop_front();
         return GVFG_OK;
-    }
-
-    gvfg_status_t setFrameCallback(gvfg_frame_callback_t callback, void *userData)
-    {
-        if (callbackModeActive.load(std::memory_order_acquire))
-            return GVFG_ESTATE;
-
-        std::lock_guard<std::mutex> lock(callbackMutex);
-        frameCallback = callback;
-        frameCallbackUserData = userData;
-        return GVFG_OK;
-    }
-
-    gvfg_status_t setEventCallback(gvfg_event_callback_t callback, void *userData)
-    {
-        std::lock_guard<std::mutex> lock(callbackMutex);
-        eventCallback = callback;
-        eventCallbackUserData = userData;
-        return GVFG_OK;
-    }
-
-    gvfg_status_t startCallbackMode()
-    {
-        if (!backend)
-            return GVFG_ESTATE;
-        if (callbackModeActive.load(std::memory_order_acquire))
-            return GVFG_OK;
-        if (running.load(std::memory_order_acquire))
-            return GVFG_ESTATE;
-
-        gvfg_frame_callback_t callback = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(callbackMutex);
-            callback = frameCallback;
-        }
-        if (!callback)
-            return GVFG_EINVAL;
-
-        const gvfg_status_t cfg = configureStream();
-        if (cfg != GVFG_OK)
-            return cfg;
-
-        resetRuntimeCounters();
-        {
-            std::lock_guard<std::mutex> lock(eventMutex);
-            eventQueue.clear();
-        }
-        const pcies2mm_status_t st = backend->start_stream();
-        if (st != PCIES2MM_OK)
-        {
-            recordError(pcies2mm_error_text(st, backend.get()));
-            return map_status(st);
-        }
-
-        callbackStop.store(false, std::memory_order_release);
-        callbackModeActive.store(true, std::memory_order_release);
-        running.store(true, std::memory_order_release);
-
-        try
-        {
-            callbackThread = std::thread(&gvfg_handle_t::callbackThreadProc, this);
-        }
-        catch (...)
-        {
-            callbackModeActive.store(false, std::memory_order_release);
-            callbackStop.store(true, std::memory_order_release);
-            running.store(false, std::memory_order_release);
-            backend->stop_stream();
-            eventCv.notify_all();
-            if (callbackThread.joinable())
-                callbackThread.join();
-            return GVFG_EIO;
-        }
-
-        return GVFG_OK;
-    }
-
-    gvfg_status_t stopCallbackMode()
-    {
-        if (callbackThread.joinable() && std::this_thread::get_id() == callbackThread.get_id())
-            return GVFG_ESTATE;
-
-        if (!callbackModeActive.load(std::memory_order_acquire))
-            return GVFG_OK;
-
-        callbackStop.store(true, std::memory_order_release);
-        running.store(false, std::memory_order_release);
-        eventCv.notify_all();
-        if (backend)
-            backend->stop_stream();
-
-        if (callbackThread.joinable())
-            callbackThread.join();
-        callbackModeActive.store(false, std::memory_order_release);
-        releaseHeldFrameForStop();
-        return GVFG_OK;
-    }
-
-    bool isInCallbackThread() const
-    {
-        return callbackThread.joinable() && std::this_thread::get_id() == callbackThread.get_id();
-    }
-
-    void dispatchPendingEvents()
-    {
-        for (;;)
-        {
-            gvfg_event_t event{};
-            {
-                std::lock_guard<std::mutex> lock(eventMutex);
-                if (eventQueue.empty())
-                    return;
-                event = eventQueue.front();
-                eventQueue.pop_front();
-            }
-
-            gvfg_event_callback_t callback = nullptr;
-            void *userData = nullptr;
-            {
-                std::lock_guard<std::mutex> lock(callbackMutex);
-                callback = eventCallback;
-                userData = eventCallbackUserData;
-            }
-
-            if (callback)
-                callback(this, &event, userData);
-        }
-    }
-
-    void callbackThreadProc()
-    {
-        while (!callbackStop.load(std::memory_order_acquire))
-        {
-            dispatchPendingEvents();
-            if (callbackStop.load(std::memory_order_acquire))
-                break;
-
-            gvfg_frame_t frame{};
-            const gvfg_status_t st = readFrame(frame, 100, true);
-            if (st == GVFG_ETIMEOUT)
-                continue;
-            if (st != GVFG_OK)
-            {
-                if (!callbackStop.load(std::memory_order_acquire))
-                {
-                    std::unique_lock<std::mutex> lock(eventMutex);
-                    eventCv.wait_for(lock,
-                                     std::chrono::milliseconds(100),
-                                     [this]()
-                                     { return callbackStop.load(std::memory_order_acquire) || !eventQueue.empty(); });
-                }
-                continue;
-            }
-
-            // An event may have arrived while wait_frame() was blocked. Deliver
-            // it before the newly returned frame so a resume notification is
-            // observed before the first post-reconnect frame callback.
-            dispatchPendingEvents();
-            if (callbackStop.load(std::memory_order_acquire))
-            {
-                releaseFrame(frame);
-                break;
-            }
-
-            gvfg_frame_callback_t callback = nullptr;
-            void *userData = nullptr;
-            {
-                std::lock_guard<std::mutex> lock(callbackMutex);
-                callback = frameCallback;
-                userData = frameCallbackUserData;
-            }
-
-            if (callback)
-                callback(this, &frame, userData);
-
-            releaseFrame(frame);
-            dispatchPendingEvents();
-        }
     }
 
     gvfg_status_t getDebugBackendStats(gvfg_debug_backend_stats_t &out)
@@ -977,15 +656,6 @@ struct gvfg_handle_t
     std::mutex eventMutex;
     std::condition_variable eventCv;
     std::deque<gvfg_event_t> eventQueue;
-    std::mutex callbackMutex;
-    gvfg_frame_callback_t frameCallback = nullptr;
-    void *frameCallbackUserData = nullptr;
-    gvfg_event_callback_t eventCallback = nullptr;
-    void *eventCallbackUserData = nullptr;
-    std::atomic<bool> callbackModeActive{false};
-    std::atomic<bool> callbackStop{false};
-    std::thread callbackThread;
-
 };
 
 extern "C"
@@ -1027,8 +697,6 @@ extern "C"
 
     gvfg_status_t gvfg_destroy(gvfg_handle handle)
     {
-        if (handle && handle->isInCallbackThread())
-            return GVFG_ESTATE;
         delete handle;
         return GVFG_OK;
     }
@@ -1052,38 +720,6 @@ extern "C"
         if (!handle)
             return GVFG_EINVAL;
         return handle->start();
-    }
-
-    gvfg_status_t gvfg_set_frame_callback(gvfg_handle handle,
-                                          gvfg_frame_callback_t callback,
-                                          void *user_data)
-    {
-        if (!handle)
-            return GVFG_EINVAL;
-        return handle->setFrameCallback(callback, user_data);
-    }
-
-    gvfg_status_t gvfg_set_event_callback(gvfg_handle handle,
-                                          gvfg_event_callback_t callback,
-                                          void *user_data)
-    {
-        if (!handle)
-            return GVFG_EINVAL;
-        return handle->setEventCallback(callback, user_data);
-    }
-
-    gvfg_status_t gvfg_start_callback_mode(gvfg_handle handle)
-    {
-        if (!handle)
-            return GVFG_EINVAL;
-        return handle->startCallbackMode();
-    }
-
-    gvfg_status_t gvfg_stop_callback_mode(gvfg_handle handle)
-    {
-        if (!handle)
-            return GVFG_EINVAL;
-        return handle->stopCallbackMode();
     }
 
     gvfg_status_t gvfg_read_frame(gvfg_handle handle, gvfg_frame_t *out_frame, uint32_t timeout_ms)
