@@ -1,6 +1,8 @@
 #include "gvfg_capture.h"
 
+#if GVFG_ENABLE_INTERNAL_DEBUG_API
 #include "gvfg_debug.h"
+#endif
 #include "pcies2mm_capture_session.h"
 
 #include <algorithm>
@@ -554,6 +556,7 @@ struct gvfg_handle_t
         return GVFG_OK;
     }
 
+#if GVFG_ENABLE_INTERNAL_DEBUG_API
     gvfg_status_t getDebugBackendStats(gvfg_debug_backend_stats_t &out)
     {
         std::memset(&out, 0, sizeof(out));
@@ -611,6 +614,7 @@ struct gvfg_handle_t
             copy_cstr(outMessage, outMessageSize, backend ? backend->last_error() : "");
         return GVFG_OK;
     }
+#endif
 
     void recordError(const char *msg)
     {
@@ -866,6 +870,7 @@ extern "C"
         }
     }
 
+#if GVFG_ENABLE_INTERNAL_DEBUG_API
     gvfg_status_t gvfg_debug_get_backend_stats(gvfg_handle handle,
                                                gvfg_debug_backend_stats_t *out_stats)
     {
@@ -895,6 +900,7 @@ extern "C"
             return GVFG_EINVAL;
         return handle->getLastErrorDetail(out_message, out_message_size);
     }
+#endif
 }
 
 

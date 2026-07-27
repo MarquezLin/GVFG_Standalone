@@ -29,3 +29,12 @@ target_link_libraries(gvfg_convert PUBLIC
 if (MSVC)
   target_compile_options(gvfg_convert PRIVATE /utf-8 /EHsc)
 endif()
+
+install(TARGETS gvfg_convert
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(FILES include/gvfg_convert.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)

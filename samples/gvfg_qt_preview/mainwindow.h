@@ -4,7 +4,6 @@
 #include <gvfg_preview.h>
 
 #include <QFile>
-#include <QElapsedTimer>
 #include <QString>
 #include <QWidget>
 
@@ -55,7 +54,9 @@ private:
     bool openLogFilePart();
     void rotateLogFileIfNeeded();
     void writeLogFileLine(const QString &line);
+#if GVFG_INTERNAL_DIAGNOSTICS
     void writeDiagnosticSnapshot(const QString &statusText);
+#endif
     void appendLog(const QString &message);
     void captureReadLoop();
     void joinCaptureThread();
@@ -74,8 +75,14 @@ private:
     uint64_t previewFailureCount_ = 0;
     QTimer *signalStatusTimer_ = nullptr;
     QString lastSignalStatusText_;
+#if GVFG_INTERNAL_DIAGNOSTICS
     QString lastLoggedBackendError_;
-    QElapsedTimer diagnosticSnapshotTimer_;
+    uint64_t lastDebugDmaErrors_ = 0;
+    uint64_t lastDebugDroppedFrames_ = 0;
+    uint64_t pendingDroppedFrames_ = 0;
+    qint64 lastDroppedWarningMs_ = 0;
+    bool haveDebugBaseline_ = false;
+#endif
     QFile logFile_;
     std::mutex logFileMutex_;
     QString logDirPath_;

@@ -7,6 +7,10 @@ Customer SDK 的 core API 只負責 capture。它不 expose SDK-managed preview�
 driver registers、DMA internals 或 FPGA debug controls。Preview rendering、
 snapshot conversion 這類功能放在 helper DLL，使用者需要時再另外 link。
 
+Customer 交付內容只包含 public headers 與 public DLL functions。Customer
+sample 只記錄 signal events、API failures、capture stall/recovery 與
+preview failures，不顯示硬體或 backend implementation details。
+
 ## 基本流程
 
 ```text

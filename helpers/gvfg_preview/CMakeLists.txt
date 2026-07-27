@@ -35,3 +35,12 @@ target_link_libraries(gvfg_preview
 if (MSVC)
   target_compile_options(gvfg_preview PRIVATE /utf-8 /EHsc)
 endif()
+
+install(TARGETS gvfg_preview
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(FILES include/gvfg_preview.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)

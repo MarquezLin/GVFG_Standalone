@@ -8,7 +8,6 @@ project(gvfg VERSION ${GVFG_SDK_VERSION} LANGUAGES CXX)
 
 add_library(gvfg SHARED
     include/gvfg_capture.h
-    include/gvfg_debug.h
     src/backend/pcies2mm/pcies2mm_backend_types.h
     src/backend/pcies2mm/pcies2mm_capture_session.cpp
     src/backend/pcies2mm/pcies2mm_capture_session.h
@@ -20,6 +19,10 @@ add_library(gvfg SHARED
     src/backend/pcies2mm/pcies2mm_video_format.h
     src/gvfg_capture.cpp
 )
+
+if (GVFG_ENABLE_INTERNAL_DEBUG_API)
+  target_sources(gvfg PRIVATE include/gvfg_debug.h)
+endif()
 
 set_target_properties(gvfg PROPERTIES
     AUTOMOC OFF
@@ -37,6 +40,7 @@ target_include_directories(gvfg
 target_compile_definitions(gvfg PRIVATE
     GVFG_BUILD
     GVFG_SDK_VERSION="${GVFG_SDK_VERSION}"
+    GVFG_ENABLE_INTERNAL_DEBUG_API=$<BOOL:${GVFG_ENABLE_INTERNAL_DEBUG_API}>
 )
 
 if (GVFG_PCIES2MM_DEBUG_LOG)
@@ -53,4 +57,18 @@ if (MSVC)
   target_compile_options(gvfg PRIVATE /utf-8 /EHsc)
 endif()
 
+install(TARGETS gvfg
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(FILES include/gvfg_capture.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+if (GVFG_ENABLE_INTERNAL_DEBUG_API)
+  install(FILES include/gvfg_debug.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  )
+endif()
 

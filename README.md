@@ -10,7 +10,8 @@ import library、runtime DLL 來使用 GVFG，不要直接把 GVFG source 編進
 - `sdk/gvfg`：GVFG customer C API、internal debug API、PCIES2MM backend。
 - `helpers/gvfg_preview`：可選的 preview helper DLL，在 `gvfg_read_frame()` 後使用。
 - `helpers/gvfg_convert`：可選的 snapshot/export conversion helper DLL。
-- `samples/gvfg_qt_preview`：內部 debug Qt preview tool。
+- `samples/gvfg_qt_preview`：customer-facing Qt preview sample；internal build
+  會另外產生 `gvfg_qt_diagnostic`。
 - `docs`：API 與整合說明。
 
 客戶端 API 細節在 `docs/GVFG_CUSTOMER_API.md`。內部架構、package
@@ -32,7 +33,23 @@ cmake --build build --target gvfg_qt_preview --config Release
 
 ```text
 BUILD_GVFG_SAMPLES=ON
+GVFG_ENABLE_INTERNAL_DEBUG_API=OFF
+BUILD_GVFG_INTERNAL_TOOLS=OFF
 GVFG_PCIES2MM_DEBUG_LOG=OFF
+```
+
+Customer build 必須保持 `GVFG_ENABLE_INTERNAL_DEBUG_API=OFF`。這會移除
+`gvfg_debug_*` DLL exports，install tree 也不會包含 `gvfg_debug.h`。
+
+公司內部 diagnostic build 使用：
+
+```bat
+cmake -S . -B build_internal ^
+  -DBUILD_GVFG_SAMPLES=OFF ^
+  -DGVFG_ENABLE_INTERNAL_DEBUG_API=ON ^
+  -DBUILD_GVFG_INTERNAL_TOOLS=ON ^
+  -DCMAKE_PREFIX_PATH=C:\Qt\6.10.2\msvc2022_64
+cmake --build build_internal --target gvfg_qt_diagnostic --config Release
 ```
 
 Build 產物：
@@ -46,6 +63,9 @@ build/.../lib/gvfg_preview.lib
 build/.../lib/gvfg_convert.lib
 build/.../bin/gvfg_qt_preview.exe
 ```
+
+`gvfg_qt_preview.exe` 只使用 public API，主畫面只顯示 input 與 Preview
+狀態；IRQ、DMA、ring slot 等資訊只存在 internal diagnostic tool。
 
 ## Consumer Layout
 

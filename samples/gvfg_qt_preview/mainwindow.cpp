@@ -2,7 +2,9 @@
 #include "previewwindow.h"
 #include "ui_mainwindow.h"
 
+#if GVFG_INTERNAL_DIAGNOSTICS
 #include <gvfg_debug.h>
+#endif
 
 #include <QCloseEvent>
 #include <QCoreApplication>
@@ -17,6 +19,15 @@
 
 namespace
 {
+    QString logFilePrefix()
+    {
+#if GVFG_INTERNAL_DIAGNOSTICS
+        return QStringLiteral("gvfg_qt_diagnostic");
+#else
+        return QStringLiteral("gvfg_qt_preview");
+#endif
+    }
+
     class LogHighlighter final : public QSyntaxHighlighter
     {
     public:
@@ -27,6 +38,8 @@ namespace
             errorFormat_.setFontWeight(QFont::Bold);
             recoveryFormat_.setForeground(QColor(0, 128, 0));
             recoveryFormat_.setFontWeight(QFont::Bold);
+            warningFormat_.setForeground(QColor(190, 110, 0));
+            warningFormat_.setFontWeight(QFont::Bold);
         }
 
     protected:
@@ -41,6 +54,12 @@ namespace
                 return;
             }
 
+            if (text.contains(QStringLiteral("warning"), Qt::CaseInsensitive))
+            {
+                setFormat(0, text.size(), warningFormat_);
+                return;
+            }
+
             if (text.contains(QStringLiteral("SIGNAL_CONNECTED")) ||
                 text.contains(QStringLiteral("CAPTURE_RESUMED")) ||
                 text.contains(QStringLiteral("recovered"), Qt::CaseInsensitive))
@@ -50,8 +69,10 @@ namespace
     private:
         QTextCharFormat errorFormat_;
         QTextCharFormat recoveryFormat_;
+        QTextCharFormat warningFormat_;
     };
 
+#if GVFG_INTERNAL_DIAGNOSTICS
     QString boolText(int value)
     {
         return value ? QStringLiteral("yes") : QStringLiteral("no");
@@ -77,6 +98,7 @@ namespace
     {
         return value == UINT64_MAX ? QStringLiteral("none") : QStringLiteral("slot %1").arg(valueOrDash(value));
     }
+#endif
 
     QString frameText(bool valid, int width, int height, const char *pixelFormat, int bitDepth)
     {
@@ -92,6 +114,9 @@ namespace
 
     QString signalFrameText(const gvfg_signal_status_t &signal)
     {
+        if (!signal.connected)
+            return QStringLiteral("No signal");
+
         const QString resolution = (signal.width > 0 && signal.height > 0)
                                        ? QStringLiteral("%1x%2").arg(signal.width).arg(signal.height)
                                        : QStringLiteral("--");
@@ -102,6 +127,7 @@ namespace
         return QStringLiteral("%1 %2 %3-bit").arg(resolution, format, bit);
     }
 
+#if GVFG_INTERNAL_DIAGNOSTICS
     QString backendLastError(gvfg_handle handle)
     {
         char message[512] = {};
@@ -109,6 +135,7 @@ namespace
             return {};
         return QString::fromUtf8(message);
     }
+#endif
 
     QString eventTypeText(gvfg_event_type_t type)
     {
@@ -133,13 +160,17 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui_->setupUi(this);
 
+#if GVFG_INTERNAL_DIAGNOSTICS
+    setWindowTitle(QStringLiteral("GVFG Internal Diagnostic"));
+#else
+    setWindowTitle(QStringLiteral("GVFG Preview Sample"));
+#endif
     previewWindow_ = new PreviewWindow();
     ui_->logEdit->setMaximumBlockCount(300);
     new LogHighlighter(ui_->logEdit->document());
     ui_->statusLabel->setWordWrap(true);
     signalStatusTimer_ = new QTimer(this);
     signalStatusTimer_->setInterval(1000);
-    diagnosticSnapshotTimer_.start();
     openLogFile();
 
     connect(ui_->refreshButton, &QPushButton::clicked, this, [this]()
@@ -218,7 +249,7 @@ void MainWindow::refreshDevices()
     }
     else
     {
-        appendLog(QStringLiteral("Found %1 PCIES2MM device(s)").arg(deviceCount_));
+        appendLog(QStringLiteral("Found %1 GVFG capture device(s)").arg(deviceCount_));
     }
 }
 
@@ -273,7 +304,7 @@ bool MainWindow::openDevice()
 
     lastSignalStatusText_.clear();
     appendLog(QStringLiteral("Opened device index %1 CH%2").arg(deviceIndex).arg(channelIndex));
-    appendLog(QStringLiteral("FPGA signal monitor active"));
+    appendLog(QStringLiteral("Signal monitoring active"));
     updateSignalStatus();
     signalStatusTimer_->start();
     updateUiState();
@@ -317,7 +348,9 @@ void MainWindow::startCapture()
     if (!applyPreview())
         return;
 
+#if GVFG_INTERNAL_DIAGNOSTICS
     appendLog(QStringLiteral("FPGA signal before stream start"));
+#endif
     updateSignalStatus();
 
     const gvfg_status_t st = gvfg_start(handle_);
@@ -330,6 +363,13 @@ void MainWindow::startCapture()
     }
 
     previewFailureCount_ = 0;
+#if GVFG_INTERNAL_DIAGNOSTICS
+    haveDebugBaseline_ = false;
+    lastDebugDmaErrors_ = 0;
+    lastDebugDroppedFrames_ = 0;
+    pendingDroppedFrames_ = 0;
+    lastDroppedWarningMs_ = 0;
+#endif
     captureStop_.store(false, std::memory_order_release);
     captureRunning_ = true;
     captureThread_ = std::thread([this]()
@@ -422,10 +462,11 @@ void MainWindow::updateSignalStatus()
     if (gvfg_get_signal_status(handle_, &signal) != GVFG_OK)
         return;
 
-    const auto &readFrame = info.last_frame;
+#if GVFG_INTERNAL_DIAGNOSTICS
     gvfg_debug_backend_stats_t backendStats{};
     backendStats.struct_size = sizeof(backendStats);
     const bool haveBackendStats = gvfg_debug_get_backend_stats(handle_, &backendStats) == GVFG_OK;
+#endif
     if (previewWindow_->isVisible())
         updatePreviewSourceSize(info, signal);
 
@@ -447,21 +488,22 @@ void MainWindow::updateSignalStatus()
                                                  previewInfo.pixel_format,
                                                  previewInfo.bit_depth)
                                      : QStringLiteral("--");
-    const QString lastFrame = frameText(readFrame.valid != 0,
-                                        readFrame.width,
-                                        readFrame.height,
-                                        gvfg_pixel_format_name(readFrame.pixel_format),
-                                        readFrame.bit_depth);
-
     QStringList statusLines;
-    statusLines << QStringLiteral("Input   | CH%1 connected=%2 signal=%3")
-                       .arg(signal.channel)
-                       .arg(boolText(signal.connected), signalFrameText(signal));
-    statusLines << QStringLiteral("Preview | fps=%1 last_frame=%2 active=%3 output=%4")
-                       .arg(previewFps)
-                       .arg(lastFrame)
-                       .arg(boolText(previewInfoOk ? 1 : 0))
-                       .arg(previewFrame);
+    statusLines << (signal.connected
+                        ? QStringLiteral("Input   | CH%1 | Connected | %2")
+                              .arg(signal.channel)
+                              .arg(signalFrameText(signal))
+                        : QStringLiteral("Input   | CH%1 | No signal")
+                              .arg(signal.channel));
+    statusLines << (previewInfoOk
+                        ? QStringLiteral("Preview | %1 | %2")
+                              .arg(previewFps == QStringLiteral("--")
+                                       ? QStringLiteral("Measuring")
+                                       : QStringLiteral("%1 FPS").arg(previewFps),
+                                   previewFrame)
+                        : QStringLiteral("Preview | Inactive"));
+
+#if GVFG_INTERNAL_DIAGNOSTICS
     statusLines << (haveBackendStats
                         ? QStringLiteral("Capture| status=%1 pending_irqs=%2 dma_errors=%3 no_frame_waits=%4")
                               .arg(captureStatusText(backendStats, signal.connected != 0))
@@ -483,6 +525,44 @@ void MainWindow::updateSignalStatus()
                                 valueOrDash(backendStats.backend_latest_sequence),
                                 valueOrDash(backendStats.backend_delivered_sequence));
     }
+
+    bool diagnosticProblemDetected = false;
+    if (haveBackendStats)
+    {
+        if (haveDebugBaseline_)
+        {
+            if (backendStats.backend_dma_errors > lastDebugDmaErrors_)
+            {
+                const uint64_t delta = backendStats.backend_dma_errors - lastDebugDmaErrors_;
+                appendLog(QStringLiteral("ERROR DMA failures +%1, total=%2")
+                              .arg(valueOrDash(delta),
+                                   valueOrDash(backendStats.backend_dma_errors)));
+                diagnosticProblemDetected = true;
+            }
+            if (backendStats.backend_frames_dropped > lastDebugDroppedFrames_)
+            {
+                const uint64_t delta = backendStats.backend_frames_dropped - lastDebugDroppedFrames_;
+                pendingDroppedFrames_ += delta;
+            }
+        }
+
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        if (pendingDroppedFrames_ > 0 &&
+            (lastDroppedWarningMs_ == 0 || nowMs - lastDroppedWarningMs_ >= 10000))
+        {
+            appendLog(QStringLiteral("WARNING dropped frames +%1, total=%2")
+                          .arg(valueOrDash(pendingDroppedFrames_),
+                               valueOrDash(backendStats.backend_frames_dropped)));
+            pendingDroppedFrames_ = 0;
+            lastDroppedWarningMs_ = nowMs;
+            diagnosticProblemDetected = true;
+        }
+
+        lastDebugDmaErrors_ = backendStats.backend_dma_errors;
+        lastDebugDroppedFrames_ = backendStats.backend_frames_dropped;
+        haveDebugBaseline_ = true;
+    }
+
     const QString lastError = backendLastError(handle_);
     if (!lastError.isEmpty())
         statusLines << QStringLiteral("Error   | %1").arg(lastError);
@@ -491,11 +571,13 @@ void MainWindow::updateSignalStatus()
     {
         lastLoggedBackendError_ = lastError;
         appendLog(QStringLiteral("Backend error | %1").arg(lastError));
+        diagnosticProblemDetected = true;
     }
     else if (lastError.isEmpty())
     {
         lastLoggedBackendError_.clear();
     }
+#endif
 
     const QString statusText = statusLines.join(QLatin1Char('\n'));
     const bool changed = lastSignalStatusText_ != statusText;
@@ -505,11 +587,10 @@ void MainWindow::updateSignalStatus()
         lastSignalStatusText_ = statusText;
     }
 
-    if (diagnosticSnapshotTimer_.elapsed() >= 10000)
-    {
+#if GVFG_INTERNAL_DIAGNOSTICS
+    if (diagnosticProblemDetected)
         writeDiagnosticSnapshot(statusText);
-        diagnosticSnapshotTimer_.restart();
-    }
+#endif
 }
 
 void MainWindow::updateUiState()
@@ -549,15 +630,16 @@ bool MainWindow::openLogFilePart()
     if (logFile_.isOpen())
         logFile_.close();
 
-    logFilePath_ = QStringLiteral("%1/gvfg_qt_preview_%2_part%3.log")
-                       .arg(logDirPath_, logSessionStamp_)
+    logFilePath_ = QStringLiteral("%1/%2_%3_part%4.log")
+                       .arg(logDirPath_, logFilePrefix(), logSessionStamp_)
                        .arg(logPartIndex_, 2, 10, QLatin1Char('0'));
     logFile_.setFileName(logFilePath_);
     if (!logFile_.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
         return false;
 
-    const QString header = QStringLiteral("\n==== gvfg_qt_preview session %1 part %2 ====\n")
-                               .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")))
+    const QString header = QStringLiteral("\n==== %1 session %2 part %3 ====\n")
+                               .arg(logFilePrefix(),
+                                    QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")))
                                .arg(logPartIndex_);
     logFile_.write(header.toUtf8());
     logFile_.flush();
@@ -592,14 +674,15 @@ void MainWindow::writeLogFileLine(const QString &line)
         ++logPartIndex_;
         if (logFile_.isOpen())
             logFile_.close();
-        logFilePath_ = QStringLiteral("%1/gvfg_qt_preview_%2_part%3.log")
-                           .arg(logDirPath_, logSessionStamp_)
+        logFilePath_ = QStringLiteral("%1/%2_%3_part%4.log")
+                           .arg(logDirPath_, logFilePrefix(), logSessionStamp_)
                            .arg(logPartIndex_, 2, 10, QLatin1Char('0'));
         logFile_.setFileName(logFilePath_);
         if (logFile_.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
         {
-            const QString header = QStringLiteral("\n==== gvfg_qt_preview session %1 part %2 ====\n")
-                                       .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")))
+            const QString header = QStringLiteral("\n==== %1 session %2 part %3 ====\n")
+                                       .arg(logFilePrefix(),
+                                            QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")))
                                        .arg(logPartIndex_);
             logFile_.write(header.toUtf8());
         }
@@ -613,6 +696,7 @@ void MainWindow::writeLogFileLine(const QString &line)
     logFile_.flush();
 }
 
+#if GVFG_INTERNAL_DIAGNOSTICS
 void MainWindow::writeDiagnosticSnapshot(const QString &statusText)
 {
     const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));
@@ -626,6 +710,7 @@ void MainWindow::writeDiagnosticSnapshot(const QString &statusText)
         writeLogFileLine(line);
     }
 }
+#endif
 
 void MainWindow::appendLog(const QString &message)
 {
@@ -644,23 +729,41 @@ void MainWindow::appendLog(const QString &message)
 
 void MainWindow::captureReadLoop()
 {
+    uint32_t consecutiveTimeouts = 0;
+    bool captureStalledLogged = false;
+
     while (!captureStop_.load(std::memory_order_acquire))
     {
         gvfg_event_t event{};
         while (gvfg_poll_event(handle_, &event, 0) == GVFG_OK)
         {
             const QString type = eventTypeText(event.type);
+#if GVFG_INTERNAL_DIAGNOSTICS
             const uint64_t timestampNs = event.timestamp_ns;
             QMetaObject::invokeMethod(this, [this, type, timestampNs]()
                                       { appendLog(QStringLiteral("event %1 ts=%2")
                                                       .arg(type)
                                                       .arg(static_cast<qulonglong>(timestampNs))); }, Qt::QueuedConnection);
+#else
+            QMetaObject::invokeMethod(this, [this, type]()
+                                      { appendLog(QStringLiteral("EVENT %1").arg(type)); },
+                                      Qt::QueuedConnection);
+#endif
         }
 
         gvfg_frame_t frame{};
         const gvfg_status_t st = gvfg_read_frame(handle_, &frame, 200);
         if (st == GVFG_OK)
         {
+            consecutiveTimeouts = 0;
+            if (captureStalledLogged)
+            {
+                captureStalledLogged = false;
+                QMetaObject::invokeMethod(this, [this]()
+                                          { appendLog(QStringLiteral("RECOVERED capture resumed")); },
+                                          Qt::QueuedConnection);
+            }
+
             if (previewHandle_)
             {
                 gvfg_preview_frame_t previewFrame{};
@@ -703,7 +806,7 @@ void MainWindow::captureReadLoop()
                 if (previewStatus != GVFG_PREVIEW_OK)
                 {
                     const uint64_t failures = ++previewFailureCount_;
-                    if (failures <= 5 || (failures % 60) == 0)
+                    if (failures == 1)
                     {
                         QMetaObject::invokeMethod(this, [this, failures, previewStatus]()
                                                   { appendLog(QStringLiteral("preview render failed #%1: %2")
@@ -726,7 +829,24 @@ void MainWindow::captureReadLoop()
         }
 
         if (st == GVFG_ETIMEOUT)
+        {
+            ++consecutiveTimeouts;
+            if (!captureStalledLogged &&
+                consecutiveTimeouts >= 10 &&
+                (consecutiveTimeouts % 5) == 0)
+            {
+                gvfg_signal_status_t signal{};
+                signal.struct_size = sizeof(signal);
+                if (gvfg_get_signal_status(handle_, &signal) == GVFG_OK && signal.connected)
+                {
+                    captureStalledLogged = true;
+                    QMetaObject::invokeMethod(this, [this]()
+                                              { appendLog(QStringLiteral("ERROR capture stalled: no frame for at least 2 seconds")); },
+                                              Qt::QueuedConnection);
+                }
+            }
             continue;
+        }
         if (captureStop_.load(std::memory_order_acquire) || st == GVFG_ESTATE)
             break;
 

@@ -21,8 +21,8 @@ helpers/gvfg_convert/
   optional snapshot/export helper; converts native capture frames on request
 
 samples/gvfg_qt_preview/
-  internal debug Qt tool
-  uses gvfg.dll + gvfg_preview.dll + gvfg_debug.h
+  gvfg_qt_preview: customer-facing, uses public APIs only
+  gvfg_qt_diagnostic: internal build, additionally uses gvfg_debug.h
 ```
 
 從 customer 角度看，core SDK 必須維持 driver-neutral。PCIES2MM、IRQ、DMA counters、
@@ -255,7 +255,7 @@ lib/gvfg_convert.lib
 bin/gvfg.dll
 bin/gvfg_preview.dll
 bin/gvfg_convert.dll
-bin/gvfg_qt_preview.exe
+bin/gvfg_qt_diagnostic.exe
 PDB symbols
 internal debug notes
 ```
@@ -272,8 +272,26 @@ Top-level CMake 會 build core SDK、helpers 和 optional sample：
 
 ```text
 BUILD_GVFG_SAMPLES=ON
+GVFG_ENABLE_INTERNAL_DEBUG_API=OFF
+BUILD_GVFG_INTERNAL_TOOLS=OFF
 GVFG_PCIES2MM_DEBUG_LOG=OFF
 ```
+
+Customer build 使用 `GVFG_ENABLE_INTERNAL_DEBUG_API=OFF`。此時 `gvfg.dll`
+不 export `gvfg_debug_get_backend_stats()` 或
+`gvfg_debug_get_last_error_detail()`，install tree 也不包含
+`gvfg_debug.h`。
+
+Internal diagnostic build 使用：
+
+```text
+BUILD_GVFG_SAMPLES=OFF
+GVFG_ENABLE_INTERNAL_DEBUG_API=ON
+BUILD_GVFG_INTERNAL_TOOLS=ON
+```
+
+只有這個 build 會產生 `gvfg_qt_diagnostic.exe` 並安裝
+`gvfg_debug.h`。
 
 輸出產物：
 
