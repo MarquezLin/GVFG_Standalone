@@ -43,6 +43,13 @@ console/service app:
 Backend 在 capture running 時可以有自己的 internal driver I/O workers，但那是
 `gvfg.dll` 背後的 implementation detail。
 
+同一個 handle 允許一條 frame-reading thread；query API 與 `gvfg_poll_event()`
+可以和它同時執行。Application 必須自行 serialize lifecycle API。`gvfg_stop()` 可以
+喚醒 blocked read/poll，但 stop/destroy 讓 frame 失效時，其他 thread 不得繼續存取它。
+
+所有等待 API 使用一致的 timeout：`0` 表示 non-blocking，
+`GVFG_TIMEOUT_INFINITE` 表示無限等待，其他值是 milliseconds。
+
 ## Frame 所有權
 
 `gvfg_read_frame()` 會回傳一個 SDK-owned frame buffer。
@@ -97,6 +104,15 @@ Customer-readable input signal status：
 新 driver 未提供 frame-rate、SDI/HDMI lock、DDR status 或舊 FPGA validity
 register，因此 SDK 不再合成或公開這些欄位。
 
+這是可擴充的 query output，呼叫前必須設定 `struct_size`。沒有 input signal 是正常
+狀態：API 回傳 `GVFG_OK`，同時 `connected == 0`。
+
+```c
+gvfg_signal_status_t signal = {};
+signal.struct_size = sizeof(signal);
+gvfg_get_signal_status(h, &signal);
+```
+
 ### `gvfg_frame_t`
 
 `gvfg_read_frame()` 回傳的 frame descriptor。
@@ -114,6 +130,10 @@ typedef struct
 } gvfg_frame_t;
 ```
 
+`gvfg_frame_t` 只保存每張 frame 必定存在的核心欄位；stable release 後凍結此 ABI。
+Memory layout、color metadata 與 timestamp metadata 不會繼續塞進這個 struct，而是
+分別透過 query API 取得。
+
 ### `gvfg_frame_layout_t`
 
 由 `gvfg_get_frame_layout()` 回傳的 optional per-plane layout。
@@ -129,7 +149,6 @@ typedef struct
     int plane_stride[GVFG_MAX_PLANES];
     uint64_t plane_size[GVFG_MAX_PLANES];
     uint64_t plane_offset[GVFG_MAX_PLANES];
-    uint64_t reserved[8];
 } gvfg_frame_layout_t;
 ```
 
@@ -144,7 +163,18 @@ DMA layout，也可以在不改 `gvfg_frame_t` 的情況下支援。
 `layout_flags` 是 `gvfg_frame_layout_flags_t` bitmask。目前 backend 會設
 `GVFG_FRAME_LAYOUT_CONTIGUOUS` 和 `GVFG_FRAME_LAYOUT_SDK_DERIVED`，表示 planes
 位在同一個 native DMA buffer 裡，而且 pitch 是 SDK 依照 known native format
-推導出來的。Application 必須忽略 `reserved[]`。
+推導出來的。
+
+### ABI 與 metadata 擴充規則
+
+- `gvfg_handle` 永遠保持 opaque。
+- `gvfg_frame_t` 保持極小，stable release 後凍結。
+- 真正可擴充的 query output 使用 `struct_size`。
+- Layout 使用 `gvfg_get_frame_layout()`。
+- 未來 color metadata 使用獨立的 `gvfg_get_frame_color_info()`。
+- 未來 timestamp metadata 使用獨立的 `gvfg_get_frame_timestamp_info()`。
+- Metadata 類型真的大量增加時，才考慮 side data。
+- 只有 major version 可以破壞既有 ABI。
 
 板子只提供兩種 native capture layout：
 
@@ -268,7 +298,8 @@ gvfg_status_t gvfg_read_frame(gvfg_handle handle,
                               uint32_t timeout_ms);
 ```
 
-讀取一個 frame。`timeout_ms == 0` 表示 indefinite wait。
+讀取一個 frame。`timeout_ms == 0` 表示 non-blocking；
+`timeout_ms == GVFG_TIMEOUT_INFINITE` 表示 indefinite wait。
 
 回傳值：
 
@@ -375,7 +406,10 @@ gvfg_status_t gvfg_poll_event(gvfg_handle handle,
                               uint32_t timeout_ms);
 ```
 
-Poll 一個 event。`timeout_ms == 0` 表示 non-blocking poll。
+Poll 一個 event。`timeout_ms == 0` 表示 non-blocking poll；
+`timeout_ms == GVFG_TIMEOUT_INFINITE` 表示 indefinite wait。
+只有 running session 可以 poll；`gvfg_stop()` 會喚醒 blocked poll 並使它回傳
+`GVFG_ESTATE`。
 
 ### `gvfg_get_signal_status`
 
@@ -386,6 +420,14 @@ gvfg_status_t gvfg_get_signal_status(gvfg_handle handle,
 
 查詢目前 input signal metadata。
 
+```c
+gvfg_signal_status_t status = {};
+status.struct_size = sizeof(status);
+gvfg_get_signal_status(h, &status);
+```
+
+沒有 input signal 時仍回傳 `GVFG_OK`，並設定 `status.connected = 0`。
+
 ### `gvfg_get_runtime_info`
 
 ```c
@@ -393,7 +435,15 @@ gvfg_status_t gvfg_get_runtime_info(gvfg_handle handle,
                                     gvfg_runtime_info_t *out_info);
 ```
 
-查詢目前 signal status、last read frame format、FPS、delivered frame count。
+查詢 last read frame format、FPS、delivered frame count。Input signal metadata 請另外
+呼叫 `gvfg_get_signal_status()`；不要把可擴充的 signal struct 內嵌進 runtime struct，
+避免未來欄位位移破壞 ABI。
+
+```c
+gvfg_runtime_info_t info = {};
+info.struct_size = sizeof(info);
+gvfg_get_runtime_info(h, &info);
+```
 
 ## Preview 邊界
 
@@ -411,3 +461,8 @@ gvfg_read_frame
 Customer demo source 需要簡單 display path 時，可以 include `gvfg_preview.h`
 並 link `gvfg_preview.dll`。Preview helper source 保持 private；customer code
 只看到 helper API 和 binary。
+
+`gvfg_preview_get_stats()` 可查詢 preview 顯示速率。`present_fps` 只計算
+DXGI `Present` 成功接受的畫面；使用 `DXGI_PRESENT_DO_NOT_WAIT` 時因
+swapchain busy 而跳過的畫面不列入。速率以最近五秒的 successful Present
+時間戳計算，開始顯示前至少收集兩秒，停止顯示超過一秒後回到 `0`。

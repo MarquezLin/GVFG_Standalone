@@ -984,17 +984,17 @@ bool D3DPreviewPipeline::ensure_preview_swapchain(int w, int h)
     return true;
 }
 
-bool D3DPreviewPipeline::present_preview(int src_w, int src_h)
+gvfg_preview_present_result_t D3DPreviewPipeline::present_preview(int src_w, int src_h)
 {
     static bool s_loggedPresentPath = false;
     if (!preview_enabled_ || !preview_swapchain_ || !preview_backbuf_ || !ctx_)
-        return false;
+        return GVFG_PREVIEW_PRESENT_FAILED;
 
     ID3D11RenderTargetView *nullRTV = nullptr;
     ctx_->OMSetRenderTargets(1, &nullRTV, nullptr);
 
     if (!preview_rtv_ || !vs_)
-        return false;
+        return GVFG_PREVIEW_PRESENT_FAILED;
 
     const float srcW = static_cast<float>(src_w);
     const float srcH = static_cast<float>(src_h);
@@ -1002,7 +1002,7 @@ bool D3DPreviewPipeline::present_preview(int src_w, int src_h)
     const float dstH = static_cast<float>(preview_h_);
 
     if (srcW <= 0.0f || srcH <= 0.0f || dstW <= 0.0f || dstH <= 0.0f)
-        return false;
+        return GVFG_PREVIEW_PRESENT_FAILED;
 
     float drawW = dstW;
     float drawH = dstH;
@@ -1055,7 +1055,7 @@ bool D3DPreviewPipeline::present_preview(int src_w, int src_h)
     if (preview_swapchain_10bit_)
     {
         if (!srv_scene_fp16_ || !ps_fp16_to_preview_)
-            return false;
+            return GVFG_PREVIEW_PRESENT_FAILED;
 
         ctx_->PSSetShader(ps_fp16_to_preview_.Get(), nullptr, 0);
         srv = srv_scene_fp16_.Get();
@@ -1063,7 +1063,7 @@ bool D3DPreviewPipeline::present_preview(int src_w, int src_h)
     else
     {
         if (!srv_rgba_ || !ps_rgba8_to_preview_)
-            return false;
+            return GVFG_PREVIEW_PRESENT_FAILED;
 
         ctx_->PSSetShader(ps_rgba8_to_preview_.Get(), nullptr, 0);
         srv = srv_rgba_.Get();
@@ -1106,7 +1106,7 @@ bool D3DPreviewPipeline::present_preview(int src_w, int src_h)
                           static_cast<unsigned long long>(s_presentBusyCount));
             ssp_log_text(warn);
         }
-        return true;
+        return GVFG_PREVIEW_PRESENT_SKIPPED;
     }
     if (FAILED(hr))
     {
@@ -1116,9 +1116,9 @@ bool D3DPreviewPipeline::present_preview(int src_w, int src_h)
                       static_cast<unsigned>(hr));
         ssp_log_text(err);
         release_preview_swapchain();
-        return false;
+        return GVFG_PREVIEW_PRESENT_FAILED;
     }
-    return true;
+    return GVFG_PREVIEW_PRESENTED;
 }
 
 DXGI_FORMAT D3DPreviewPipeline::preview_backbuffer_format() const

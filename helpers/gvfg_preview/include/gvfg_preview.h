@@ -65,6 +65,21 @@ typedef struct
     int adapter_index;
 } gvfg_preview_info_t;
 
+/*
+ * Preview presentation statistics.
+ *
+ * present_fps counts only frames accepted by DXGI Present. A frame skipped
+ * because the non-blocking swapchain is busy is excluded. The rate uses
+ * successful presents from the most recent five seconds.
+ */
+typedef struct
+{
+    uint32_t struct_size; /* Set to sizeof(gvfg_preview_stats_t). */
+    double present_fps;
+    uint64_t presented_frames;
+    uint64_t skipped_presents;
+} gvfg_preview_stats_t;
+
 GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_create(
     gvfg_preview_handle *out_handle);
 
@@ -93,6 +108,10 @@ GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_render_frame(
 GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_get_info(
     gvfg_preview_handle handle,
     gvfg_preview_info_t *out_info);
+
+GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_get_stats(
+    gvfg_preview_handle handle,
+    gvfg_preview_stats_t *out_stats);
 
 GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_shutdown(
     gvfg_preview_handle handle);

@@ -62,7 +62,7 @@ namespace gvfg::internal
         void handle_plugin_event(uint32_t channel);
         void handle_unplug_event(uint32_t channel);
         bool resume_capture_from_signal(uint32_t channel);
-        bool refresh_stream_from_signal(bool resizeRing);
+        bool refresh_stream_from_registers(bool resizeRing);
         void publish_frame(size_t slotIndex, size_t bytes);
         void emit_event(pcies2mm_event_type_t type, uint32_t irqBit, uint32_t irqMask) const;
 
@@ -102,6 +102,7 @@ namespace gvfg::internal
 
         std::atomic<bool> running_{false};
         std::atomic<bool> capture_active_{false};
+        std::atomic<bool> signal_probe_active_{false};
         mutable std::atomic<bool> signal_presence_known_{false};
         mutable std::atomic<bool> signal_present_{false};
         std::thread capture_thread_;

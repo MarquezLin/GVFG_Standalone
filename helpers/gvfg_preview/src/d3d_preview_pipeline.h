@@ -21,6 +21,13 @@ typedef enum
     GVFG_RENDER_PREVIEW_BITDEPTH_AUTO = 2
 } gvfg_render_preview_bitdepth_t;
 
+typedef enum
+{
+    GVFG_PREVIEW_PRESENT_FAILED = 0,
+    GVFG_PREVIEW_PRESENTED = 1,
+    GVFG_PREVIEW_PRESENT_SKIPPED = 2
+} gvfg_preview_present_result_t;
+
 typedef struct
 {
     void *hwnd;
@@ -45,7 +52,7 @@ public:
     bool ensure_rt_and_pipeline(int w, int h);
     bool ensure_preview_swapchain(int w, int h);
     bool preview_swapchain_10bit() const { return preview_swapchain_10bit_; }
-    bool present_preview(int src_w, int src_h);
+    gvfg_preview_present_result_t present_preview(int src_w, int src_h);
     DXGI_FORMAT preview_backbuffer_format() const;
     DXGI_FORMAT scene_texture_format() const;
     DXGI_FORMAT linear_fp16_texture_format() const;

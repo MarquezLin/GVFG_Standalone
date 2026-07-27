@@ -124,20 +124,30 @@ gvfg_enumerate_devices
 Pull mode 下，`gvfg.dll` 不擁有 application 的 public read thread。UI app 應該
 自己建立 worker thread，並在那個 thread 呼叫 `gvfg_read_frame()`。
 
-`gvfg_start()` 在沒有 input signal 時仍會註冊 driver events 並啟動單一 backend
-wait thread，但不 enable DMA。`gvfg_read_frame()` 此時 timeout；收到 signal-connected
-event 後，backend 在相同 thread 重讀 width/height/payload format、resize ring，然後
-enable DMA 並送出 capture-resumed event。
+`gvfg_start()` 在尚未確認 input signal 時仍會註冊 driver events 並啟動單一 backend
+wait thread。`gvfg_read_frame()` 此時 timeout；收到 signal-connected event 後，backend
+在相同 thread 重讀 width/height/payload format、resize ring，然後 enable DMA 並送出
+capture-resumed event。
+
+FPGA H/V/format registers 可能在拔除來源後保留 last-known values，因此它們只能用來
+準備 DMA probe layout，不能當作 signal-present 判斷。啟動時 backend 可以在內部 enable
+probe DMA，以涵蓋來源早於 event registration 就已接上的情況；只有收到 driver plug-in
+event 或成功取得第一張完整 frame 後，public signal status 才能回報 connected。
 
 ## Frame 所有權
 
 - `gvfg_read_frame()` 回傳一個 SDK-owned frame buffer。
 - `frame.data` 在 `gvfg_release_frame()` 前有效。
 - `gvfg_frame_t` 要保持 ABI-stable；不要為了 layout 直接 append fields。
+- `gvfg_handle` 永遠 opaque；stable release 後 `gvfg_frame_t` 凍結，只有 major
+  version 可以破壞既有 ABI。
 - `gvfg_get_frame_layout()` 回傳 SDK-filled layout metadata：`plane_data`、
   `plane_stride`、`plane_size`、`plane_offset`。目前 PCIES2MM backend 先用
   width/height/format 推導 tightly packed layout；未來 driver 如果能回報真實
   pitch 或 plane offsets，應該更新 layout query path，而不是改既有 frame struct。
+- 未來 color/timestamp metadata 應新增各自帶 `struct_size` 的 query output，例如
+  `gvfg_get_frame_color_info()` 與 `gvfg_get_frame_timestamp_info()`。不要預先在每個
+  struct 放大型 reserved array；等 metadata 類型真的很多再考慮 side data。
 - `gvfg_preview.dll` 應優先吃 `gvfg_get_frame_layout()`；layout query 不可用時才
   fallback 到 width-derived stride。
 - `gvfg_convert.dll` 負責 explicit snapshot/export conversion。不要把 color
@@ -145,6 +155,9 @@ enable DMA 並送出 capture-resumed event。
 - 同一個 handle 一次最多 hold 一個 frame。
 - Application 如果 release 後還要用 data，必須自己 copy frame。
 - `gvfg_preview_render_frame()` 是 synchronous，應該在 `gvfg_release_frame()` 前呼叫。
+- Qt sample 狀態列只顯示 Preview FPS，不顯示 reader/capture FPS。Preview FPS
+  由 `gvfg_preview_get_stats()` 提供，只計算 DXGI 接受的 Present；swapchain
+  busy skip 不計入，採最近五秒滑動時間窗。
 
 Typical two-way use：
 

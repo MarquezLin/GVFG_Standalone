@@ -4,6 +4,7 @@
 #include <gvfg_preview.h>
 
 #include <QFile>
+#include <QElapsedTimer>
 #include <QString>
 #include <QWidget>
 
@@ -44,15 +45,17 @@ private:
     void startCapture();
     void stopCapture();
     bool applyPreview();
-    void updatePreviewSourceSize(const gvfg_runtime_info_t &info);
+    void updatePreviewSourceSize(const gvfg_runtime_info_t &info,
+                                 const gvfg_signal_status_t &signal);
     void updatePreviewSourceSize();
-    void updateSignalStatus(bool writeLog);
+    void updateSignalStatus();
     void updateUiState();
     void showError(const QString &apiName, gvfg_status_t status);
     void openLogFile();
     bool openLogFilePart();
     void rotateLogFileIfNeeded();
     void writeLogFileLine(const QString &line);
+    void writeDiagnosticSnapshot(const QString &statusText);
     void appendLog(const QString &message);
     void captureReadLoop();
     void joinCaptureThread();
@@ -68,10 +71,11 @@ private:
     std::atomic<bool> captureRunning_{false};
     std::atomic<bool> captureStop_{false};
     std::thread captureThread_;
-    std::atomic<uint64_t> frameCount_{0};
     uint64_t previewFailureCount_ = 0;
     QTimer *signalStatusTimer_ = nullptr;
     QString lastSignalStatusText_;
+    QString lastLoggedBackendError_;
+    QElapsedTimer diagnosticSnapshotTimer_;
     QFile logFile_;
     std::mutex logFileMutex_;
     QString logDirPath_;

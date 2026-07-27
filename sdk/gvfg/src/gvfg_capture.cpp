@@ -8,18 +8,32 @@
 #include <chrono>
 #include <climits>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 using namespace gvfg::internal;
 
 namespace
 {
+#if INTPTR_MAX == INT64_MAX
+    static_assert(std::is_standard_layout_v<gvfg_frame_t>);
+    static_assert(sizeof(gvfg_frame_t) == 40, "gvfg_frame_t x64 ABI must remain frozen");
+    static_assert(offsetof(gvfg_frame_t, data) == 0);
+    static_assert(offsetof(gvfg_frame_t, data_size) == 8);
+    static_assert(offsetof(gvfg_frame_t, width) == 16);
+    static_assert(offsetof(gvfg_frame_t, height) == 20);
+    static_assert(offsetof(gvfg_frame_t, pixel_format) == 24);
+    static_assert(offsetof(gvfg_frame_t, bit_depth) == 28);
+    static_assert(offsetof(gvfg_frame_t, frame_id) == 32);
+#endif
+
     void copy_cstr(char *dst, size_t dstSize, const char *src)
     {
         if (!dst || dstSize == 0)
@@ -129,7 +143,7 @@ namespace
         }
     }
 
-    const char *gvfg_pixel_format_name(int fmt)
+    const char *pixel_format_name(int fmt)
     {
         switch (fmt)
         {
@@ -159,8 +173,6 @@ namespace
         std::memset(layout.plane_stride, 0, sizeof(layout.plane_stride));
         std::memset(layout.plane_size, 0, sizeof(layout.plane_size));
         std::memset(layout.plane_offset, 0, sizeof(layout.plane_offset));
-        std::memset(layout.reserved, 0, sizeof(layout.reserved));
-
         if (!frame.data || frame.data_size == 0 || frame.width <= 0 || frame.height <= 0)
             return GVFG_EINVAL;
 
@@ -263,6 +275,7 @@ struct gvfg_handle_t
     gvfg_status_t stop()
     {
         running = false;
+        eventCv.notify_all();
         releaseHeldFrameForStop();
         if (backend)
             backend->stop_stream();
@@ -284,6 +297,7 @@ struct gvfg_handle_t
     gvfg_status_t getSignalStatus(gvfg_signal_status_t &out)
     {
         std::memset(&out, 0, sizeof(out));
+        out.struct_size = sizeof(out);
         const pcies2mm_status_t status = querySignal();
         {
             std::lock_guard<std::mutex> lock(stateMutex);
@@ -291,16 +305,18 @@ struct gvfg_handle_t
             out.channel = static_cast<int>(selectedChannel);
             out.width = static_cast<int>(width);
             out.height = static_cast<int>(height);
-            copy_cstr(out.pixel_format, sizeof(out.pixel_format), gvfg_pixel_format_name(to_gvfg_pixel_format(pixelFormat)));
+            out.pixel_format = to_gvfg_pixel_format(pixelFormat);
             out.bit_depth = static_cast<int>(bitDepth);
         }
-        return map_status(status);
+        // A disconnected input is a normal query result, not a missing-device
+        // error. The opened device remains usable for plug-in monitoring.
+        return status == PCIES2MM_ENODEV ? GVFG_OK : map_status(status);
     }
 
     gvfg_status_t getRuntimeInfo(gvfg_runtime_info_t &out)
     {
         std::memset(&out, 0, sizeof(out));
-        getSignalStatus(out.input_signal);
+        out.struct_size = sizeof(out);
         const uint64_t frames = deliveredFrames.load(std::memory_order_relaxed);
         const bool deliveredValid = running.load(std::memory_order_relaxed) && frames > 0;
 
@@ -310,9 +326,7 @@ struct gvfg_handle_t
             out.last_frame.width = static_cast<int>(deliveredWidth.load(std::memory_order_relaxed));
             out.last_frame.height = static_cast<int>(deliveredHeight.load(std::memory_order_relaxed));
             out.last_frame.bit_depth = static_cast<int>(deliveredBitDepth.load(std::memory_order_relaxed));
-            copy_cstr(out.last_frame.pixel_format,
-                      sizeof(out.last_frame.pixel_format),
-                      gvfg_pixel_format_name(deliveredPixelFormat.load(std::memory_order_relaxed)));
+            out.last_frame.pixel_format = deliveredPixelFormat.load(std::memory_order_relaxed);
         }
         out.capture_fps = runtimeFps.load(std::memory_order_relaxed);
         out.delivered_frames = frames;
@@ -509,10 +523,13 @@ struct gvfg_handle_t
 
     gvfg_status_t pollEvent(gvfg_event_t &out, uint32_t timeoutMs)
     {
+        if (!backend || !running.load(std::memory_order_acquire))
+            return GVFG_ESTATE;
+
         std::unique_lock<std::mutex> lock(eventMutex);
         const auto hasEvent = [this]()
         {
-            return !eventQueue.empty();
+            return !eventQueue.empty() || !running.load(std::memory_order_acquire);
         };
 
         if (timeoutMs == 0)
@@ -520,10 +537,17 @@ struct gvfg_handle_t
             if (!hasEvent())
                 return GVFG_ETIMEOUT;
         }
+        else if (timeoutMs == GVFG_TIMEOUT_INFINITE)
+        {
+            eventCv.wait(lock, hasEvent);
+        }
         else if (!eventCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), hasEvent))
         {
             return GVFG_ETIMEOUT;
         }
+
+        if (eventQueue.empty())
+            return GVFG_ESTATE;
 
         out = eventQueue.front();
         eventQueue.pop_front();
@@ -734,13 +758,21 @@ extern "C"
     {
         if (!frame || !out_layout)
             return GVFG_EINVAL;
-        if (out_layout->struct_size < sizeof(gvfg_frame_layout_t))
+        constexpr uint32_t kFrameLayoutV1Size =
+            static_cast<uint32_t>(offsetof(gvfg_frame_layout_t, plane_offset) + sizeof(out_layout->plane_offset));
+        const uint32_t callerSize = out_layout->struct_size;
+        if (callerSize < kFrameLayoutV1Size)
             return GVFG_EINVAL;
 
-        const uint32_t callerSize = out_layout->struct_size;
-        std::memset(out_layout, 0, sizeof(*out_layout));
+        gvfg_frame_layout_t layout{};
+        layout.struct_size = sizeof(layout);
+        const gvfg_status_t status = populate_frame_layout(*frame, layout);
+        if (status != GVFG_OK)
+            return status;
+
+        std::memcpy(out_layout, &layout, std::min<size_t>(callerSize, sizeof(layout)));
         out_layout->struct_size = callerSize;
-        return populate_frame_layout(*frame, *out_layout);
+        return GVFG_OK;
     }
 
     gvfg_status_t gvfg_release_frame(gvfg_handle handle, const gvfg_frame_t *frame)
@@ -768,14 +800,47 @@ extern "C"
     {
         if (!handle || !out_status)
             return GVFG_EINVAL;
-        return handle->getSignalStatus(*out_status);
+        constexpr uint32_t kSignalStatusV1Size =
+            static_cast<uint32_t>(offsetof(gvfg_signal_status_t, bit_depth) + sizeof(out_status->bit_depth));
+        const uint32_t callerSize = out_status->struct_size;
+        if (callerSize < kSignalStatusV1Size)
+            return GVFG_EINVAL;
+
+        gvfg_signal_status_t statusInfo{};
+        statusInfo.struct_size = sizeof(statusInfo);
+        const gvfg_status_t status = handle->getSignalStatus(statusInfo);
+        if (status != GVFG_OK)
+            return status;
+
+        std::memcpy(out_status, &statusInfo, std::min<size_t>(callerSize, sizeof(statusInfo)));
+        out_status->struct_size = callerSize;
+        return GVFG_OK;
     }
 
     gvfg_status_t gvfg_get_runtime_info(gvfg_handle handle, gvfg_runtime_info_t *out_info)
     {
         if (!handle || !out_info)
             return GVFG_EINVAL;
-        return handle->getRuntimeInfo(*out_info);
+        constexpr uint32_t kRuntimeInfoV1Size =
+            static_cast<uint32_t>(offsetof(gvfg_runtime_info_t, delivered_frames) + sizeof(out_info->delivered_frames));
+        const uint32_t callerSize = out_info->struct_size;
+        if (callerSize < kRuntimeInfoV1Size)
+            return GVFG_EINVAL;
+
+        gvfg_runtime_info_t runtimeInfo{};
+        runtimeInfo.struct_size = sizeof(runtimeInfo);
+        const gvfg_status_t status = handle->getRuntimeInfo(runtimeInfo);
+        if (status != GVFG_OK)
+            return status;
+
+        std::memcpy(out_info, &runtimeInfo, std::min<size_t>(callerSize, sizeof(runtimeInfo)));
+        out_info->struct_size = callerSize;
+        return GVFG_OK;
+    }
+
+    const char *gvfg_pixel_format_name(int pixel_format)
+    {
+        return pixel_format_name(pixel_format);
     }
 
     const char *gvfg_strerror(gvfg_status_t status)

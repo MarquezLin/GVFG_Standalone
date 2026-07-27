@@ -9,12 +9,18 @@
  * Minimal capture flow:
  *
  *   gvfg_device_info_t devices[GVFG_MAX_DEVICES] = {};
- *   int count = gvfg_enumerate_devices(devices, GVFG_MAX_DEVICES);
+ *   const int count = gvfg_enumerate_devices(devices, GVFG_MAX_DEVICES);
+ *   if (count <= 0)
+ *       return;
  *
  *   gvfg_handle h = NULL;
- *   gvfg_create(&h);
- *   gvfg_open(h, devices[0].index);
- *   gvfg_start(h);
+ *   if (gvfg_create(&h) != GVFG_OK)
+ *       return;
+ *   if (gvfg_open(h, devices[0].index) != GVFG_OK ||
+ *       gvfg_start(h) != GVFG_OK) {
+ *       gvfg_destroy(h);
+ *       return;
+ *   }
  *
  *   while (running) {
  *       gvfg_frame_t frame = {};
@@ -33,6 +39,18 @@
  * - The frame data pointer remains valid until gvfg_release_frame() is called.
  *   Copy the data if it must outlive that call.
  * - At most one frame may be held by a handle at a time.
+ * - Query functions and gvfg_poll_event() may run concurrently with the single
+ *   frame-reading thread. Lifecycle calls must be serialized by the application.
+ *   gvfg_stop() may cancel a blocked read/poll, but no thread may access a held
+ *   frame while stop/destroy invalidates it.
+ *
+ * ABI policy:
+ * - gvfg_handle remains opaque.
+ * - gvfg_frame_t contains only mandatory per-frame fields and is frozen after
+ *   the first stable SDK release.
+ * - Extensible metadata is returned by dedicated query APIs whose output
+ *   structures begin with struct_size.
+ * - Breaking existing ABI requires a new major SDK version.
  */
 
 #ifdef _WIN32
@@ -69,6 +87,9 @@
 
 #include <stdint.h>
 
+/* Consistent timeout value for an indefinite wait. A timeout of 0 never waits. */
+#define GVFG_TIMEOUT_INFINITE UINT32_MAX
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -83,7 +104,7 @@ typedef enum
 {
     GVFG_OK = 0,
     GVFG_EINVAL = -1,  /* Invalid argument, such as NULL handle/output pointer. */
-    GVFG_ENODEV = -2,  /* No GVFG device, no signal, or device open failed. */
+    GVFG_ENODEV = -2,  /* No GVFG capture device, or the device cannot be opened. */
     GVFG_ESTATE = -3,  /* API was called in the wrong state. */
     GVFG_EIO = -4,     /* Driver/backend I/O failure. */
     GVFG_ENOTSUP = -5, /* Requested feature or format is not supported. */
@@ -117,11 +138,12 @@ typedef struct
 
 typedef struct
 {
+    uint32_t struct_size;       /* Set to sizeof(gvfg_signal_status_t) before calling. */
     int connected;             /* Non-zero while the selected channel has a valid input signal. */
     int channel;               /* gvfg_channel_t selected when the device was opened. */
     int width;                 /* Signal width in pixels when connected. */
     int height;                /* Signal height in pixels when connected. */
-    char pixel_format[16];     /* Actual DMA payload format, for example Y210. */
+    int pixel_format;          /* gvfg_pixel_format_t value for the actual DMA payload. */
     int bit_depth;             /* Signal bit depth derived from the payload format. */
 } gvfg_signal_status_t;
 
@@ -130,13 +152,13 @@ typedef struct
     int width;              /* Width of the most recent frame returned by gvfg_read_frame(). */
     int height;             /* Height of the most recent frame returned by gvfg_read_frame(). */
     int bit_depth;          /* Bits per color channel of the frame buffer. */
-    char pixel_format[32];  /* Native frame buffer format: YUY2 or Y210. */
+    int pixel_format;       /* gvfg_pixel_format_t value: YUY2 or Y210. */
     int valid;              /* Non-zero while capture is running after at least one frame read. */
 } gvfg_last_frame_info_t;
 
 typedef struct
 {
-    gvfg_signal_status_t input_signal; /* Decoded input signal metadata. */
+    uint32_t struct_size;                  /* Set to sizeof(gvfg_runtime_info_t) before calling. */
     gvfg_last_frame_info_t last_frame;           /* Last frame returned by gvfg_read_frame(). */
     double capture_fps;                /* Runtime FPS measured from frames returned by gvfg_read_frame(). */
     uint64_t delivered_frames;         /* Number of frames returned by gvfg_read_frame(). */
@@ -150,7 +172,7 @@ typedef struct
     int height;             /* Frame height in pixels. */
     int pixel_format;       /* gvfg_pixel_format_t value. */
     int bit_depth;          /* Bits per color channel of the native frame. */
-    uint64_t frame_id;      /* Monotonic frame identifier from the backend. */
+    uint64_t frame_id;      /* Monotonic identifier within the current gvfg_start()/stop() run. */
 } gvfg_frame_t;
 
 typedef struct
@@ -163,7 +185,6 @@ typedef struct
     int plane_stride[GVFG_MAX_PLANES];       /* Bytes from one row to the next for each plane. */
     uint64_t plane_size[GVFG_MAX_PLANES];    /* Bytes available in each plane. */
     uint64_t plane_offset[GVFG_MAX_PLANES];  /* Byte offset from frame.data to each plane. */
-    uint64_t reserved[8];                    /* Reserved for future SDK/driver layout metadata. Must be ignored. */
 } gvfg_frame_layout_t;
 
 typedef enum
@@ -183,7 +204,7 @@ typedef enum
 typedef struct
 {
     gvfg_event_type_t type;
-    uint64_t timestamp_ns;
+    uint64_t timestamp_ns; /* Monotonic timestamp for ordering; not Unix/wall-clock time. */
 } gvfg_event_t;
 
 /* Opaque session handle created by gvfg_create() and released by gvfg_destroy(). */
@@ -268,7 +289,7 @@ GVFG_API gvfg_status_t gvfg_open_channel(
  * Configure and start capture on an opened device.
  *
  * Parameters:
- * - handle: Opened session handle.
+ * - handle: Running session handle.
  *
  * Returns:
  * - GVFG_OK on success, including when capture is already running or the SDK
@@ -290,7 +311,8 @@ GVFG_API gvfg_status_t gvfg_start(
  * Parameters:
  * - handle: Running capture session.
  * - out_frame: Receives a frame descriptor. Must not be NULL.
- * - timeout_ms: Maximum time to wait. Use 0 to wait indefinitely.
+ * - timeout_ms: Maximum time to wait. Use 0 for a non-blocking read or
+ *   GVFG_TIMEOUT_INFINITE to wait indefinitely.
  *
  * Returns:
  * - GVFG_OK on success.
@@ -352,11 +374,13 @@ GVFG_API gvfg_status_t gvfg_release_frame(
  * Parameters:
  * - handle: Opened session handle.
  * - out_event: Receives the event. Must not be NULL.
- * - timeout_ms: Maximum time to wait. Use 0 to return immediately.
+ * - timeout_ms: Maximum time to wait. Use 0 to return immediately or
+ *   GVFG_TIMEOUT_INFINITE to wait indefinitely.
  *
  * Returns:
  * - GVFG_OK on success.
  * - GVFG_EINVAL if handle or out_event is NULL.
+ * - GVFG_ESTATE if capture is not running or is stopped while waiting.
  * - GVFG_ETIMEOUT if no event is available before timeout_ms expires.
  */
 GVFG_API gvfg_status_t gvfg_poll_event(
@@ -389,16 +413,18 @@ GVFG_API gvfg_status_t gvfg_stop(
  * Returns:
  * - GVFG_OK on success.
  * - GVFG_EINVAL if handle or out_status is NULL.
- * - GVFG_ENODEV if no valid signal information is available.
+ * - GVFG_EINVAL if out_status->struct_size is too small.
+ * - GVFG_ESTATE if no capture device is open.
  *
- * Use gvfg_runtime_info_t::last_frame for the frame buffer format.
+ * No input signal is a normal state: the function returns GVFG_OK with
+ * out_status->connected set to 0. Set out_status->struct_size before calling.
  */
 GVFG_API gvfg_status_t gvfg_get_signal_status(
     _In_ gvfg_handle handle,
-    _Out_ gvfg_signal_status_t *out_status);
+    _Inout_ gvfg_signal_status_t *out_status);
 
 /*
- * Query runtime capture diagnostics.
+ * Query runtime frame-delivery diagnostics.
  *
  * Parameters:
  * - handle: Opened or running session handle.
@@ -407,13 +433,20 @@ GVFG_API gvfg_status_t gvfg_get_signal_status(
  * Returns:
  * - GVFG_OK on success.
  * - GVFG_EINVAL if handle or out_info is NULL.
+ * - GVFG_EINVAL if out_info->struct_size is too small.
  *
- * The result includes current signal status, SDK-measured capture FPS, and the
- * number of frames delivered by the SDK.
+ * The result includes the latest delivered frame, SDK-measured capture FPS,
+ * and the number of frames delivered by the SDK. Query current input signal
+ * metadata separately with gvfg_get_signal_status(). Set out_info->struct_size
+ * before calling.
  */
 GVFG_API gvfg_status_t gvfg_get_runtime_info(
     _In_ gvfg_handle handle,
-    _Out_ gvfg_runtime_info_t *out_info);
+    _Inout_ gvfg_runtime_info_t *out_info);
+
+/* Convert a gvfg_pixel_format_t value to a static English format name. */
+GVFG_API const char *gvfg_pixel_format_name(
+    _In_ int pixel_format);
 
 /*
  * Convert a GVFG status code to a static English error string.

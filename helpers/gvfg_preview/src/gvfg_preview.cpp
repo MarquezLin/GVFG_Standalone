@@ -5,7 +5,10 @@
 #include <d3d11_4.h>
 #include <dxgi1_2.h>
 #include <atomic>
+#include <chrono>
+#include <cstddef>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <wrl/client.h>
@@ -21,6 +24,7 @@ public:
     bool configure(void *hwnd)
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        resetPresentStats();
         hwnd_ = hwnd;
         configured_ = hwnd_ != nullptr;
         if (pipeline_)
@@ -103,11 +107,14 @@ public:
             return false;
         }
 
-        if (!pipeline_->present_preview(frame.width, frame.height))
+        const gvfg::internal::gvfg_preview_present_result_t presentResult =
+            pipeline_->present_preview(frame.width, frame.height);
+        if (presentResult == gvfg::internal::GVFG_PREVIEW_PRESENT_FAILED)
         {
             clearActiveInfo();
             return false;
         }
+        recordPresentResult(presentResult);
 
         width_.store(pipeline_->preview_w_, std::memory_order_relaxed);
         height_.store(pipeline_->preview_h_, std::memory_order_relaxed);
@@ -127,6 +134,7 @@ public:
         configured_ = false;
         hwnd_ = nullptr;
         clearActiveInfo();
+        resetPresentStats();
     }
 
     bool active() const
@@ -164,6 +172,16 @@ public:
         return adapterIndex_;
     }
 
+    void getStats(gvfg_preview_stats_t &stats) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stats.presented_frames = presentedFrames_;
+        stats.skipped_presents = skippedPresents_;
+        stats.present_fps = active_.load(std::memory_order_relaxed)
+                                ? calculatePresentFps(std::chrono::steady_clock::now())
+                                : 0.0;
+    }
+
 private:
     struct D3DState
     {
@@ -178,6 +196,46 @@ private:
         bitDepth_.store(0, std::memory_order_relaxed);
         swapchain10Bit_.store(false, std::memory_order_relaxed);
         active_.store(false, std::memory_order_relaxed);
+    }
+
+    using PresentClock = std::chrono::steady_clock;
+
+    void resetPresentStats()
+    {
+        presentTimes_.clear();
+        presentedFrames_ = 0;
+        skippedPresents_ = 0;
+    }
+
+    void recordPresentResult(gvfg::internal::gvfg_preview_present_result_t result)
+    {
+        if (result == gvfg::internal::GVFG_PREVIEW_PRESENT_SKIPPED)
+        {
+            ++skippedPresents_;
+            return;
+        }
+        if (result != gvfg::internal::GVFG_PREVIEW_PRESENTED)
+            return;
+
+        ++presentedFrames_;
+        const PresentClock::time_point now = PresentClock::now();
+        presentTimes_.push_back(now);
+        const auto windowStart = now - std::chrono::seconds(5);
+        while (presentTimes_.size() > 2 && presentTimes_.front() < windowStart)
+            presentTimes_.pop_front();
+    }
+
+    double calculatePresentFps(PresentClock::time_point now) const
+    {
+        if (presentTimes_.size() < 2 ||
+            now - presentTimes_.back() > std::chrono::seconds(1))
+            return 0.0;
+
+        const double elapsed =
+            std::chrono::duration<double>(presentTimes_.back() - presentTimes_.front()).count();
+        if (elapsed < 2.0)
+            return 0.0;
+        return static_cast<double>(presentTimes_.size() - 1) / elapsed;
     }
 
     static bool sameLuid(const LUID &a, const LUID &b)
@@ -309,6 +367,9 @@ private:
     std::atomic<bool> active_{false};
     char adapterName_[160] = {};
     int adapterIndex_ = -1;
+    std::deque<PresentClock::time_point> presentTimes_;
+    uint64_t presentedFrames_ = 0;
+    uint64_t skippedPresents_ = 0;
     std::unique_ptr<D3DState> d3d_;
     std::unique_ptr<gvfg::internal::D3DPreviewPipeline> pipeline_;
 };
@@ -414,6 +475,24 @@ extern "C"
                   sizeof(out_info->adapter_name),
                   handle->renderer.adapterName());
         out_info->adapter_index = handle->renderer.adapterIndex();
+        return GVFG_PREVIEW_OK;
+    }
+
+    gvfg_preview_status_t gvfg_preview_get_stats(gvfg_preview_handle handle,
+                                                 gvfg_preview_stats_t *out_stats)
+    {
+        constexpr size_t kMinimumSize =
+            offsetof(gvfg_preview_stats_t, skipped_presents) +
+            sizeof(uint64_t);
+        if (!handle || !out_stats || out_stats->struct_size < kMinimumSize)
+            return GVFG_PREVIEW_EINVAL;
+
+        const uint32_t callerSize = out_stats->struct_size;
+        gvfg_preview_stats_t stats{};
+        stats.struct_size = sizeof(stats);
+        handle->renderer.getStats(stats);
+        std::memcpy(out_stats, &stats, (callerSize < sizeof(stats)) ? callerSize : sizeof(stats));
+        out_stats->struct_size = callerSize;
         return GVFG_PREVIEW_OK;
     }
 
