@@ -16,7 +16,7 @@ preview failures，不顯示硬體或 backend implementation details。
 ```text
 gvfg_enumerate_devices
 -> gvfg_create
--> gvfg_open
+-> gvfg_open_channel
 -> gvfg_start
 -> loop:
    gvfg_read_frame
@@ -146,28 +146,16 @@ Memory layout、color metadata 與 timestamp metadata 不會繼續塞進這個 s
 typedef struct
 {
     uint32_t struct_size;
-    uint32_t layout_flags;
-    int row_bytes;
     int plane_count;
     const void *plane_data[GVFG_MAX_PLANES];
     int plane_stride[GVFG_MAX_PLANES];
     uint64_t plane_size[GVFG_MAX_PLANES];
-    uint64_t plane_offset[GVFG_MAX_PLANES];
 } gvfg_frame_layout_t;
 ```
 
 需要 row pitch 或 plane offset 的 application，應該在 `gvfg_read_frame()` 後呼叫
 `gvfg_get_frame_layout()`，並使用 `plane_data[]`、`plane_stride[]`、
 `plane_size[]`，不要自己用 width 和 pixel format 猜 stride。
-
-`gvfg_frame_t::data` 和 `data_size` 仍然描述整個 native buffer。`plane_offset[]`
-是從 `data` 開始算的 byte offset，未來 driver 如果回報 padded 或 non-default
-DMA layout，也可以在不改 `gvfg_frame_t` 的情況下支援。
-
-`layout_flags` 是 `gvfg_frame_layout_flags_t` bitmask。目前 backend 會設
-`GVFG_FRAME_LAYOUT_CONTIGUOUS` 和 `GVFG_FRAME_LAYOUT_SDK_DERIVED`，表示 planes
-位在同一個 native DMA buffer 裡，而且 pitch 是 SDK 依照 known native format
-推導出來的。
 
 ### ABI 與 metadata 擴充規則
 
@@ -240,9 +228,6 @@ Customer event 保持 driver-neutral：
 - `GVFG_EVENT_CAPTURE_PAUSED`
 - `GVFG_EVENT_CAPTURE_RESUMED`
 
-`GVFG_EVENT_PLUG_IN` 與 `GVFG_EVENT_PLUG_OUT` 保留為 source-compatible aliases；
-它們表示所選 channel 的 input signal 插拔，不是 PCIe capture device 的實體插拔。
-
 Frame interrupts、IRQ bit numbers、IRQ masks 都是 internal details，不應出現在
 `gvfg_capture.h`。
 
@@ -269,17 +254,16 @@ gvfg_status_t gvfg_destroy(gvfg_handle handle);
 
 建立或銷毀 session handle。銷毀 running handle 時會先 stop capture。
 
-### `gvfg_open` / `gvfg_open_channel`
+### `gvfg_open_channel`
 
 ```c
-gvfg_status_t gvfg_open(gvfg_handle handle, int device_index);
 gvfg_status_t gvfg_open_channel(gvfg_handle handle,
                                 int device_index,
                                 int channel_index);
 ```
 
-用 `gvfg_enumerate_devices()` 得到的 device index 開啟 device。`gvfg_open()` 預設
-開啟 CH0；需要明確選擇 CaptureDemo 的 CH0/CH1 時使用 `gvfg_open_channel()`。
+用 `gvfg_enumerate_devices()` 得到的 device index 開啟 device，並明確選擇
+`GVFG_CHANNEL_0` 或 `GVFG_CHANNEL_1`。
 選定的 channel 會一致套用到 signal status、signal 插拔事件、DMA done index 與
 frame buffer。
 

@@ -297,7 +297,7 @@ bool MainWindow::openDevice()
     st = gvfg_open_channel(handle_, deviceIndex, channelIndex);
     if (st != GVFG_OK)
     {
-        showError(QStringLiteral("gvfg_open"), st);
+        showError(QStringLiteral("gvfg_open_channel"), st);
         closeDevice();
         return false;
     }
@@ -795,9 +795,13 @@ void MainWindow::captureReadLoop()
                 if (gvfg_get_frame_layout(&frame, &layout) == GVFG_OK &&
                     layout.plane_count > 0 &&
                     layout.plane_data[0] &&
-                    layout.plane_stride[0] > 0)
+                    layout.plane_stride[0] > 0 &&
+                    layout.plane_size[0] >=
+                        static_cast<uint64_t>(layout.plane_stride[0]) *
+                            static_cast<uint64_t>(frame.height))
                 {
                     previewFrame.data = layout.plane_data[0];
+                    previewFrame.data_size = layout.plane_size[0];
                     previewFrame.row_bytes = layout.plane_stride[0];
                 }
 

@@ -34,6 +34,14 @@ namespace
     static_assert(offsetof(gvfg_frame_t, pixel_format) == 24);
     static_assert(offsetof(gvfg_frame_t, bit_depth) == 28);
     static_assert(offsetof(gvfg_frame_t, frame_id) == 32);
+
+    static_assert(std::is_standard_layout_v<gvfg_frame_layout_t>);
+    static_assert(sizeof(gvfg_frame_layout_t) == 32, "gvfg_frame_layout_t x64 ABI must remain stable");
+    static_assert(offsetof(gvfg_frame_layout_t, struct_size) == 0);
+    static_assert(offsetof(gvfg_frame_layout_t, plane_count) == 4);
+    static_assert(offsetof(gvfg_frame_layout_t, plane_data) == 8);
+    static_assert(offsetof(gvfg_frame_layout_t, plane_stride) == 16);
+    static_assert(offsetof(gvfg_frame_layout_t, plane_size) == 24);
 #endif
 
     void copy_cstr(char *dst, size_t dstSize, const char *src)
@@ -168,13 +176,10 @@ namespace
 
     gvfg_status_t populate_frame_layout(const gvfg_frame_t &frame, gvfg_frame_layout_t &layout)
     {
-        layout.layout_flags = 0;
-        layout.row_bytes = 0;
         layout.plane_count = 0;
         std::memset(layout.plane_data, 0, sizeof(layout.plane_data));
         std::memset(layout.plane_stride, 0, sizeof(layout.plane_stride));
         std::memset(layout.plane_size, 0, sizeof(layout.plane_size));
-        std::memset(layout.plane_offset, 0, sizeof(layout.plane_offset));
         if (!frame.data || frame.data_size == 0 || frame.width <= 0 || frame.height <= 0)
             return GVFG_EINVAL;
 
@@ -196,13 +201,10 @@ namespace
             size > frame.data_size)
             return GVFG_EINVAL;
 
-        layout.row_bytes = static_cast<int>(row);
         layout.plane_count = 1;
         layout.plane_data[0] = frame.data;
         layout.plane_stride[0] = static_cast<int>(row);
         layout.plane_size[0] = size;
-        layout.plane_offset[0] = 0;
-        layout.layout_flags = GVFG_FRAME_LAYOUT_CONTIGUOUS | GVFG_FRAME_LAYOUT_SDK_DERIVED;
         return GVFG_OK;
     }
 
@@ -317,6 +319,9 @@ struct gvfg_handle_t
 
     gvfg_status_t getRuntimeInfo(gvfg_runtime_info_t &out)
     {
+        if (!backend)
+            return GVFG_ESTATE;
+
         std::memset(&out, 0, sizeof(out));
         out.struct_size = sizeof(out);
         const uint64_t frames = deliveredFrames.load(std::memory_order_relaxed);
@@ -445,8 +450,6 @@ struct gvfg_handle_t
             return map_status(st);
         }
 
-        updateRuntimeFps(now_ns());
-
         if (!frame.data || frame.width == 0 || frame.height == 0)
         {
             backend->release_frame(frame);
@@ -454,6 +457,29 @@ struct gvfg_handle_t
             readInProgress = false;
             return GVFG_EIO;
         }
+
+        bool stoppedWhileWaiting = false;
+        {
+            std::lock_guard<std::mutex> lock(frameMutex);
+            if (!running.load(std::memory_order_acquire))
+            {
+                readInProgress = false;
+                stoppedWhileWaiting = true;
+            }
+            else
+            {
+                heldBackendFrame = frame;
+                readInProgress = false;
+                frameHeld = true;
+            }
+        }
+        if (stoppedWhileWaiting)
+        {
+            backend->release_frame(frame);
+            return GVFG_ESTATE;
+        }
+
+        updateRuntimeFps(now_ns());
 
         out.data = frame.data;
         out.data_size = static_cast<uint64_t>(frame.data_size_bytes);
@@ -464,10 +490,6 @@ struct gvfg_handle_t
         out.frame_id = frame.frame_id;
         noteDeliveredFrame(out.width, out.height, out.bit_depth, out.pixel_format);
 
-        std::lock_guard<std::mutex> lock(frameMutex);
-        heldBackendFrame = frame;
-        readInProgress = false;
-        frameHeld = true;
         return GVFG_OK;
     }
 
@@ -690,7 +712,8 @@ extern "C"
 {
     int gvfg_enumerate_devices(gvfg_device_info_t *out_devices, int max_devices)
     {
-        const std::vector<gvfg::internal::PcieS2mmDevice> devices = gvfg::internal::enumerate_pcies2mm_devices();
+        const std::vector<gvfg::internal::PcieS2mmDevice> devices =
+            gvfg::internal::enumerate_pcies2mm_devices();
         const int n = static_cast<int>(devices.size());
         if (n <= 0)
             return n;
@@ -698,7 +721,8 @@ extern "C"
         if (!out_devices || max_devices <= 0)
             return n;
 
-        const int written = (std::min)(n, max_devices);
+        const int written = (std::min)((std::min)(n, max_devices),
+                                       static_cast<int>(GVFG_MAX_DEVICES));
         for (int i = 0; i < written; ++i)
         {
             out_devices[i] = {};
@@ -718,6 +742,7 @@ extern "C"
     {
         if (!out_handle)
             return GVFG_EINVAL;
+
         auto h = std::make_unique<gvfg_handle_t>();
         *out_handle = h.release();
         return GVFG_OK;
@@ -727,13 +752,6 @@ extern "C"
     {
         delete handle;
         return GVFG_OK;
-    }
-
-    gvfg_status_t gvfg_open(gvfg_handle handle, int device_index)
-    {
-        if (!handle)
-            return GVFG_EINVAL;
-        return handle->open(device_index, GVFG_CHANNEL_0);
     }
 
     gvfg_status_t gvfg_open_channel(gvfg_handle handle, int device_index, int channel_index)
@@ -763,7 +781,7 @@ extern "C"
         if (!frame || !out_layout)
             return GVFG_EINVAL;
         constexpr uint32_t kFrameLayoutV1Size =
-            static_cast<uint32_t>(offsetof(gvfg_frame_layout_t, plane_offset) + sizeof(out_layout->plane_offset));
+            static_cast<uint32_t>(offsetof(gvfg_frame_layout_t, plane_size) + sizeof(out_layout->plane_size));
         const uint32_t callerSize = out_layout->struct_size;
         if (callerSize < kFrameLayoutV1Size)
             return GVFG_EINVAL;

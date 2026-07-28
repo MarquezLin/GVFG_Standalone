@@ -161,13 +161,10 @@ struct gvfg_convert_frame_t
 
         layout = {};
         layout.struct_size = sizeof(layout);
-        layout.layout_flags = GVFG_FRAME_LAYOUT_CONTIGUOUS | GVFG_FRAME_LAYOUT_SDK_DERIVED;
-        layout.row_bytes = actualStride;
         layout.plane_count = 1;
         layout.plane_data[0] = buffer.data();
         layout.plane_stride[0] = actualStride;
         layout.plane_size[0] = size;
-        layout.plane_offset[0] = 0;
         return GVFG_OK;
     }
 };

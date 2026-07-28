@@ -110,7 +110,7 @@ Core capture API 的基本模式是 FFmpeg-style pull model：
 ```text
 gvfg_enumerate_devices
 -> gvfg_create
--> gvfg_open / gvfg_open_channel(CH0 or CH1)
+-> gvfg_open_channel(CH0 or CH1)
 -> gvfg_start
 -> loop:
    gvfg_read_frame
@@ -142,9 +142,8 @@ event 或成功取得第一張完整 frame 後，public signal status 才能回�
 - `gvfg_handle` 永遠 opaque；stable release 後 `gvfg_frame_t` 凍結，只有 major
   version 可以破壞既有 ABI。
 - `gvfg_get_frame_layout()` 回傳 SDK-filled layout metadata：`plane_data`、
-  `plane_stride`、`plane_size`、`plane_offset`。目前 PCIES2MM backend 先用
-  width/height/format 推導 tightly packed layout；未來 driver 如果能回報真實
-  pitch 或 plane offsets，應該更新 layout query path，而不是改既有 frame struct。
+  `plane_stride`、`plane_size`。目前 PCIES2MM backend 使用
+  width/height/format 推導 tightly packed layout。
 - 未來 color/timestamp metadata 應新增各自帶 `struct_size` 的 query output，例如
   `gvfg_get_frame_color_info()` 與 `gvfg_get_frame_timestamp_info()`。不要預先在每個
   struct 放大型 reserved array；等 metadata 類型真的很多再考慮 side data。
@@ -178,9 +177,6 @@ GVFG_EVENT_SIGNAL_DISCONNECTED
 GVFG_EVENT_CAPTURE_PAUSED
 GVFG_EVENT_CAPTURE_RESUMED
 ```
-
-舊名稱 `GVFG_EVENT_PLUG_IN/OUT` 僅為 aliases；事件代表 input signal cable，
-不是 PCIe capture device hotplug。
 
 Video IRQ handling 是 `sdk/gvfg/src/backend/pcies2mm` 內部細節。IRQ bit numbers、
 IRQ masks 與 DMA counters 不應出現在
