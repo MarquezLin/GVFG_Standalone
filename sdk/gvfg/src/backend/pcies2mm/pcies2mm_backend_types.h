@@ -83,33 +83,21 @@ typedef struct pcies2mm_debug_state_t
 
 typedef enum pcies2mm_event_type_t
 {
-    PCIES2MM_EVENT_VIDEO_IRQ = 1,
-    PCIES2MM_EVENT_PLUG_IN = 2,
-    PCIES2MM_EVENT_PLUG_OUT = 3,
-    PCIES2MM_EVENT_CAPTURE_PAUSED = 4,
-    PCIES2MM_EVENT_CAPTURE_RESUMED = 5
+    PCIES2MM_EVENT_PLUG_IN = 1,
+    PCIES2MM_EVENT_PLUG_OUT = 2
 } pcies2mm_event_type_t;
 
 enum
 {
-    PCIES2MM_EVENT_MASK_VIDEO_IRQ = 1u << 0,
-    PCIES2MM_EVENT_MASK_PLUG_IN = 1u << 1,
-    PCIES2MM_EVENT_MASK_PLUG_OUT = 1u << 2,
-    PCIES2MM_EVENT_MASK_CAPTURE_PAUSED = 1u << 3,
-    PCIES2MM_EVENT_MASK_CAPTURE_RESUMED = 1u << 4,
-    PCIES2MM_EVENT_MASK_HOTPLUG = PCIES2MM_EVENT_MASK_PLUG_IN |
-                              PCIES2MM_EVENT_MASK_PLUG_OUT |
-                              PCIES2MM_EVENT_MASK_CAPTURE_PAUSED |
-                              PCIES2MM_EVENT_MASK_CAPTURE_RESUMED,
-    PCIES2MM_EVENT_MASK_DEFAULT = PCIES2MM_EVENT_MASK_HOTPLUG,
-    PCIES2MM_EVENT_MASK_ALL = PCIES2MM_EVENT_MASK_VIDEO_IRQ | PCIES2MM_EVENT_MASK_HOTPLUG
+    PCIES2MM_EVENT_MASK_PLUG_IN = 1u << 0,
+    PCIES2MM_EVENT_MASK_PLUG_OUT = 1u << 1,
+    PCIES2MM_EVENT_MASK_DEFAULT = PCIES2MM_EVENT_MASK_PLUG_IN |
+                                 PCIES2MM_EVENT_MASK_PLUG_OUT
 };
 
 typedef struct pcies2mm_event_t
 {
     pcies2mm_event_type_t type;
-    uint32_t irq_bit;
-    uint32_t irq_mask;
     uint64_t timestamp_ns;
 } pcies2mm_event_t;
 

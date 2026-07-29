@@ -131,10 +131,6 @@ namespace
             return GVFG_EVENT_SIGNAL_CONNECTED;
         case PCIES2MM_EVENT_PLUG_OUT:
             return GVFG_EVENT_SIGNAL_DISCONNECTED;
-        case PCIES2MM_EVENT_CAPTURE_PAUSED:
-            return GVFG_EVENT_CAPTURE_PAUSED;
-        case PCIES2MM_EVENT_CAPTURE_RESUMED:
-            return GVFG_EVENT_CAPTURE_RESUMED;
         default:
             return GVFG_EVENT_UNKNOWN;
         }

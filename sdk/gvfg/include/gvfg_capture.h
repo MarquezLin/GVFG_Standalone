@@ -168,9 +168,7 @@ extern "C"
     {
         GVFG_EVENT_UNKNOWN = 0,
         GVFG_EVENT_SIGNAL_CONNECTED = 1,
-        GVFG_EVENT_SIGNAL_DISCONNECTED = 2,
-        GVFG_EVENT_CAPTURE_PAUSED = 3,
-        GVFG_EVENT_CAPTURE_RESUMED = 4
+        GVFG_EVENT_SIGNAL_DISCONNECTED = 2
     } gvfg_event_type_t;
 
     typedef struct

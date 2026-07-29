@@ -105,16 +105,10 @@ namespace
     {
         switch (type)
         {
-        case PCIES2MM_EVENT_VIDEO_IRQ:
-            return PCIES2MM_EVENT_MASK_VIDEO_IRQ;
         case PCIES2MM_EVENT_PLUG_IN:
             return PCIES2MM_EVENT_MASK_PLUG_IN;
         case PCIES2MM_EVENT_PLUG_OUT:
             return PCIES2MM_EVENT_MASK_PLUG_OUT;
-        case PCIES2MM_EVENT_CAPTURE_PAUSED:
-            return PCIES2MM_EVENT_MASK_CAPTURE_PAUSED;
-        case PCIES2MM_EVENT_CAPTURE_RESUMED:
-            return PCIES2MM_EVENT_MASK_CAPTURE_RESUMED;
         default:
             return 0;
         }
@@ -795,8 +789,6 @@ namespace gvfg::internal
             return;
         }
 
-        emit_event(PCIES2MM_EVENT_VIDEO_IRQ, channel == 0 ? 0 : 4, video_irq_mask_bit());
-
         const DWORD bytes = static_cast<DWORD>(frame_size_bytes());
         size_t slotIndex = frame_ring_.size();
         uint8_t *slotData = nullptr;
@@ -869,8 +861,7 @@ namespace gvfg::internal
         {
             signal_present_.store(true, std::memory_order_release);
             signal_presence_known_.store(true, std::memory_order_release);
-            emit_event(PCIES2MM_EVENT_PLUG_IN, channel == 0 ? 0 : 4, video_irq_mask_bit());
-            emit_event(PCIES2MM_EVENT_CAPTURE_RESUMED, channel == 0 ? 0 : 4, video_irq_mask_bit());
+            emit_event(PCIES2MM_EVENT_PLUG_IN);
         }
 
         {
@@ -886,8 +877,6 @@ namespace gvfg::internal
         write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
         write_reg(video_base() + VIDEO_EN_OFFSET, 0);
         capture_active_ = false;
-        emit_event(PCIES2MM_EVENT_CAPTURE_PAUSED, channel == 0 ? 0 : 4, video_irq_mask_bit());
-
         resume_capture_from_signal(channel);
 
         frame_cv_.notify_all();
@@ -908,7 +897,7 @@ namespace gvfg::internal
         signal_probe_active_.store(false, std::memory_order_release);
         signal_present_.store(true, std::memory_order_release);
         signal_presence_known_.store(true, std::memory_order_release);
-        emit_event(PCIES2MM_EVENT_PLUG_IN, channel == 0 ? 0 : 4, video_irq_mask_bit());
+        emit_event(PCIES2MM_EVENT_PLUG_IN);
         resume_capture_from_signal(channel);
         frame_cv_.notify_all();
         data_cv_.notify_all();
@@ -922,8 +911,7 @@ namespace gvfg::internal
         write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
         write_reg(video_base() + VIDEO_EN_OFFSET, 0);
         capture_active_ = false;
-        emit_event(PCIES2MM_EVENT_PLUG_OUT, channel == 0 ? 0 : 4, video_irq_mask_bit());
-        emit_event(PCIES2MM_EVENT_CAPTURE_PAUSED, channel == 0 ? 0 : 4, video_irq_mask_bit());
+        emit_event(PCIES2MM_EVENT_PLUG_OUT);
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -973,7 +961,6 @@ namespace gvfg::internal
             stream_error_ = false;
             stats_.state = PCIES2MM_STREAM_RUNNING;
         }
-        emit_event(PCIES2MM_EVENT_CAPTURE_RESUMED, channel == 0 ? 0 : 4, video_irq_mask_bit());
         frame_cv_.notify_all();
         data_cv_.notify_all();
         return true;
@@ -1055,7 +1042,7 @@ namespace gvfg::internal
         data_cv_.notify_all();
     }
 
-    void PcieS2mmCaptureSession::emit_event(pcies2mm_event_type_t type, uint32_t irqBit, uint32_t irqMask) const
+    void PcieS2mmCaptureSession::emit_event(pcies2mm_event_type_t type) const
     {
         pcies2mm_event_callback_t callback = nullptr;
         void *user = nullptr;
@@ -1070,8 +1057,6 @@ namespace gvfg::internal
 
         pcies2mm_event_t event{};
         event.type = type;
-        event.irq_bit = irqBit;
-        event.irq_mask = irqMask;
         event.timestamp_ns = steady_now_ns();
         callback(&event, user);
     }

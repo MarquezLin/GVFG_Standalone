@@ -46,7 +46,6 @@ namespace
         void highlightBlock(const QString &text) override
         {
             if (text.contains(QStringLiteral("SIGNAL_DISCONNECTED")) ||
-                text.contains(QStringLiteral("CAPTURE_PAUSED")) ||
                 text.contains(QStringLiteral("failed"), Qt::CaseInsensitive) ||
                 text.contains(QStringLiteral("error"), Qt::CaseInsensitive))
             {
@@ -61,7 +60,6 @@ namespace
             }
 
             if (text.contains(QStringLiteral("SIGNAL_CONNECTED")) ||
-                text.contains(QStringLiteral("CAPTURE_RESUMED")) ||
                 text.contains(QStringLiteral("recovered"), Qt::CaseInsensitive))
                 setFormat(0, text.size(), recoveryFormat_);
         }
@@ -145,10 +143,6 @@ namespace
             return QStringLiteral("SIGNAL_CONNECTED");
         case GVFG_EVENT_SIGNAL_DISCONNECTED:
             return QStringLiteral("SIGNAL_DISCONNECTED");
-        case GVFG_EVENT_CAPTURE_PAUSED:
-            return QStringLiteral("CAPTURE_PAUSED");
-        case GVFG_EVENT_CAPTURE_RESUMED:
-            return QStringLiteral("CAPTURE_RESUMED");
         default:
             return QStringLiteral("UNKNOWN");
         }

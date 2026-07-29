@@ -225,8 +225,6 @@ Customer event 保持 driver-neutral：
 
 - `GVFG_EVENT_SIGNAL_CONNECTED`
 - `GVFG_EVENT_SIGNAL_DISCONNECTED`
-- `GVFG_EVENT_CAPTURE_PAUSED`
-- `GVFG_EVENT_CAPTURE_RESUMED`
 
 Frame interrupts、IRQ bit numbers、IRQ masks 都是 internal details，不應出現在
 `gvfg_capture.h`。

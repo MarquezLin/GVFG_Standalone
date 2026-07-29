@@ -174,8 +174,6 @@ Customer event 保持 driver-neutral：
 ```text
 GVFG_EVENT_SIGNAL_CONNECTED
 GVFG_EVENT_SIGNAL_DISCONNECTED
-GVFG_EVENT_CAPTURE_PAUSED
-GVFG_EVENT_CAPTURE_RESUMED
 ```
 
 Video IRQ handling 是 `sdk/gvfg/src/backend/pcies2mm` 內部細節。IRQ bit numbers、

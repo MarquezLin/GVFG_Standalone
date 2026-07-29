@@ -64,7 +64,7 @@ namespace gvfg::internal
         bool resume_capture_from_signal(uint32_t channel);
         bool refresh_stream_from_registers(bool resizeRing);
         void publish_frame(size_t slotIndex, size_t bytes);
-        void emit_event(pcies2mm_event_type_t type, uint32_t irqBit, uint32_t irqMask) const;
+        void emit_event(pcies2mm_event_type_t type) const;
 
         pcies2mm_status_t fail(pcies2mm_status_t status, const char *where, DWORD winerr = GetLastError()) const;
         void set_last_error(const std::string &message) const;
