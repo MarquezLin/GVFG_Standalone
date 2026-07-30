@@ -43,7 +43,6 @@ typedef enum
 
 typedef struct
 {
-    uint32_t struct_size; /* Set to sizeof(gvfg_preview_frame_t). */
     const void *data;
     uint64_t data_size;
     int width;
@@ -74,7 +73,6 @@ typedef struct
  */
 typedef struct
 {
-    uint32_t struct_size; /* Set to sizeof(gvfg_preview_stats_t). */
     double present_fps;
     uint64_t presented_frames;
     uint64_t skipped_presents;

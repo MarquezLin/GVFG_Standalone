@@ -44,8 +44,7 @@ private:
     void startCapture();
     void stopCapture();
     bool applyPreview();
-    void updatePreviewSourceSize(const gvfg_runtime_info_t &info,
-                                 const gvfg_signal_status_t &signal);
+    void updatePreviewSourceSize(const gvfg_signal_status_t &signal);
     void updatePreviewSourceSize();
     void updateSignalStatus();
     void updateUiState();

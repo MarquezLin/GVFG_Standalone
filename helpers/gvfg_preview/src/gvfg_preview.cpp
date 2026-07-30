@@ -429,8 +429,7 @@ extern "C"
     {
         if (!handle || !frame)
             return GVFG_PREVIEW_EINVAL;
-        if (frame->struct_size < sizeof(gvfg_preview_frame_t) ||
-            !frame->data ||
+        if (!frame->data ||
             frame->width <= 0 ||
             frame->height <= 0 ||
             frame->row_bytes <= 0)
@@ -481,18 +480,12 @@ extern "C"
     gvfg_preview_status_t gvfg_preview_get_stats(gvfg_preview_handle handle,
                                                  gvfg_preview_stats_t *out_stats)
     {
-        constexpr size_t kMinimumSize =
-            offsetof(gvfg_preview_stats_t, skipped_presents) +
-            sizeof(uint64_t);
-        if (!handle || !out_stats || out_stats->struct_size < kMinimumSize)
+        if (!handle || !out_stats)
             return GVFG_PREVIEW_EINVAL;
 
-        const uint32_t callerSize = out_stats->struct_size;
         gvfg_preview_stats_t stats{};
-        stats.struct_size = sizeof(stats);
         handle->renderer.getStats(stats);
-        std::memcpy(out_stats, &stats, (callerSize < sizeof(stats)) ? callerSize : sizeof(stats));
-        out_stats->struct_size = callerSize;
+        *out_stats = stats;
         return GVFG_PREVIEW_OK;
     }
 

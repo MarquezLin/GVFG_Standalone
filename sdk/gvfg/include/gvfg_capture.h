@@ -118,7 +118,6 @@ extern "C"
 
     typedef struct
     {
-        uint32_t struct_size; /* Set to sizeof(gvfg_signal_status_t) before calling. */
         int connected;        /* Non-zero while the selected channel has a valid input signal. */
         int channel;          /* gvfg_channel_t selected when the device was opened. */
         int width;            /* Signal width in pixels when connected. */
@@ -129,19 +128,8 @@ extern "C"
 
     typedef struct
     {
-        int width;        /* Width of the most recent frame returned by gvfg_read_frame(). */
-        int height;       /* Height of the most recent frame returned by gvfg_read_frame(). */
-        int bit_depth;    /* Bits per color channel of the frame buffer. */
-        int pixel_format; /* gvfg_pixel_format_t value: YUY2 or Y210. */
-        int valid;        /* Non-zero while capture is running after at least one frame read. */
-    } gvfg_last_frame_info_t;
-
-    typedef struct
-    {
-        uint32_t struct_size;              /* Set to sizeof(gvfg_runtime_info_t) before calling. */
-        gvfg_last_frame_info_t last_frame; /* Last frame returned by gvfg_read_frame(). */
-        double capture_fps;                /* Runtime FPS measured from frames returned by gvfg_read_frame(). */
-        uint64_t delivered_frames;         /* Number of frames returned by gvfg_read_frame(). */
+        double capture_fps;        /* Runtime FPS measured from frames returned by gvfg_read_frame(). */
+        uint64_t delivered_frames; /* Number of frames returned by gvfg_read_frame(). */
     } gvfg_runtime_info_t;
 
     typedef struct
@@ -157,7 +145,6 @@ extern "C"
 
     typedef struct
     {
-        uint32_t struct_size;                    /* Set to sizeof(gvfg_frame_layout_t) before calling. */
         int plane_count;                         /* Number of valid entries in plane_data/plane_stride/plane_size. */
         const void *plane_data[GVFG_MAX_PLANES]; /* Plane pointers inside frame.data, valid until gvfg_release_frame(). */
         int plane_stride[GVFG_MAX_PLANES];       /* Bytes from one row to the next for each plane. */
@@ -168,14 +155,12 @@ extern "C"
     {
         GVFG_EVENT_UNKNOWN = 0,
         GVFG_EVENT_SIGNAL_CONNECTED = 1,
-        GVFG_EVENT_SIGNAL_DISCONNECTED = 2
+        GVFG_EVENT_SIGNAL_DISCONNECTED = 2,
+        /* First complete frame after stream start, plug-in, or format recovery is ready. */
+        GVFG_EVENT_STREAM_READY = 3,
+        /* Input format is changing; pause use of resources created for the old format. */
+        GVFG_EVENT_FORMAT_CHANGE_BEGIN = 4
     } gvfg_event_type_t;
-
-    typedef struct
-    {
-        gvfg_event_type_t type;
-        uint64_t timestamp_ns; /* Monotonic timestamp for ordering; not Unix/wall-clock time. */
-    } gvfg_event_t;
 
     /* Opaque session handle created by gvfg_create() and released by gvfg_destroy(). */
     typedef struct gvfg_handle_t *gvfg_handle;
@@ -299,13 +284,11 @@ extern "C"
      *
      * Parameters:
      * - frame: Frame descriptor returned by gvfg_read_frame(). Must not be NULL.
-     * - out_layout: Receives plane pointers, strides, and sizes. Must not
-     *   be NULL. Set out_layout->struct_size to sizeof(gvfg_frame_layout_t) before
-     *   calling so future SDKs can safely extend this struct.
+     * - out_layout: Receives plane pointers, strides, and sizes. Must not be NULL.
      *
      * Returns:
      * - GVFG_OK on success.
-     * - GVFG_EINVAL if frame/out_layout is NULL or struct_size is too small.
+     * - GVFG_EINVAL if frame or out_layout is NULL.
      * - GVFG_ENOTSUP if the SDK cannot describe the frame layout.
      *
      * The returned plane_data pointers are owned by the SDK and remain valid only
@@ -313,7 +296,7 @@ extern "C"
      */
     GVFG_API gvfg_status_t gvfg_get_frame_layout(
         _In_ const gvfg_frame_t *frame,
-        _Inout_ gvfg_frame_layout_t *out_layout);
+        _Out_ gvfg_frame_layout_t *out_layout);
 
     /*
      * Release a frame returned by gvfg_read_frame().
@@ -349,7 +332,7 @@ extern "C"
      */
     GVFG_API gvfg_status_t gvfg_poll_event(
         _In_ gvfg_handle handle,
-        _Out_ gvfg_event_t *out_event,
+        _Out_ gvfg_event_type_t *out_event,
         _In_ uint32_t timeout_ms);
 
     /*
@@ -377,15 +360,14 @@ extern "C"
      * Returns:
      * - GVFG_OK on success.
      * - GVFG_EINVAL if handle or out_status is NULL.
-     * - GVFG_EINVAL if out_status->struct_size is too small.
      * - GVFG_ESTATE if no capture device is open.
      *
      * No input signal is a normal state: the function returns GVFG_OK with
-     * out_status->connected set to 0. Set out_status->struct_size before calling.
+     * out_status->connected set to 0.
      */
     GVFG_API gvfg_status_t gvfg_get_signal_status(
         _In_ gvfg_handle handle,
-        _Inout_ gvfg_signal_status_t *out_status);
+        _Out_ gvfg_signal_status_t *out_status);
 
     /*
      * Query runtime frame-delivery diagnostics.
@@ -397,16 +379,14 @@ extern "C"
      * Returns:
      * - GVFG_OK on success.
      * - GVFG_EINVAL if handle or out_info is NULL.
-     * - GVFG_EINVAL if out_info->struct_size is too small.
      *
      * The result includes the latest delivered frame, SDK-measured capture FPS,
      * and the number of frames delivered by the SDK. Query current input signal
-     * metadata separately with gvfg_get_signal_status(). Set out_info->struct_size
-     * before calling.
+     * metadata separately with gvfg_get_signal_status().
      */
     GVFG_API gvfg_status_t gvfg_get_runtime_info(
         _In_ gvfg_handle handle,
-        _Inout_ gvfg_runtime_info_t *out_info);
+        _Out_ gvfg_runtime_info_t *out_info);
 
     /* Convert a gvfg_pixel_format_t value to a static English format name. */
     GVFG_API const char *gvfg_pixel_format_name(

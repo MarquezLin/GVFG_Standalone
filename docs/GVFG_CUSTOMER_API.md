@@ -108,12 +108,10 @@ Customer-readable input signal status：
 新 driver 未提供 frame-rate、SDI/HDMI lock、DDR status 或舊 FPGA validity
 register，因此 SDK 不再合成或公開這些欄位。
 
-這是可擴充的 query output，呼叫前必須設定 `struct_size`。沒有 input signal 是正常
-狀態：API 回傳 `GVFG_OK`，同時 `connected == 0`。
+沒有 input signal 是正常狀態：API 回傳 `GVFG_OK`，同時 `connected == 0`。
 
 ```c
 gvfg_signal_status_t signal = {};
-signal.struct_size = sizeof(signal);
 gvfg_get_signal_status(h, &signal);
 ```
 
@@ -145,7 +143,6 @@ Memory layout、color metadata 與 timestamp metadata 不會繼續塞進這個 s
 ```c
 typedef struct
 {
-    uint32_t struct_size;
     int plane_count;
     const void *plane_data[GVFG_MAX_PLANES];
     int plane_stride[GVFG_MAX_PLANES];
@@ -161,7 +158,7 @@ typedef struct
 
 - `gvfg_handle` 永遠保持 opaque。
 - `gvfg_frame_t` 保持極小，stable release 後凍結。
-- 真正可擴充的 query output 使用 `struct_size`。
+- 第一版 API 不做跨版本 struct 相容；DLL、header 與 application 必須整套更新。
 - Layout 使用 `gvfg_get_frame_layout()`。
 - 未來 color metadata 使用獨立的 `gvfg_get_frame_color_info()`。
 - 未來 timestamp metadata 使用獨立的 `gvfg_get_frame_timestamp_info()`。
@@ -184,15 +181,11 @@ typedef struct gvfg_convert_frame_t *gvfg_convert_frame;
 
 typedef struct
 {
-    uint32_t struct_size;
     int width;
     int height;
     int pixel_format;
     int row_bytes;
-    uint32_t flags;
-    uint32_t reserved0;
     uint64_t data_size;
-    uint64_t reserved[8];
 } gvfg_convert_frame_desc_t;
 ```
 
@@ -217,9 +210,9 @@ captured source frame 自動決定大小。
 Conversion 使用 BT.709 limited-range YUV to RGB，和 preview path 對齊。其他
 source 或 destination format 會回傳 `GVFG_ENOTSUP`。
 
-### `gvfg_event_t`
+### `gvfg_event_type_t`
 
-`gvfg_poll_event()` 回傳的 capture event。
+`gvfg_poll_event()` 直接回傳 capture event 類型。
 
 Customer event 保持 driver-neutral：
 
@@ -302,11 +295,8 @@ gvfg_status_t gvfg_get_frame_layout(const gvfg_frame_t *frame,
 
 回傳 `gvfg_read_frame()` 取得 frame 的 per-plane layout。
 
-呼叫前先初始化 `out_layout->struct_size`：
-
 ```c
 gvfg_frame_layout_t layout = {};
-layout.struct_size = sizeof(layout);
 gvfg_get_frame_layout(&frame, &layout);
 ```
 
@@ -343,7 +333,6 @@ Snapshot buffer flow 範例：
 gvfg_frame_t frame = {};
 if (gvfg_read_frame(h, &frame, 1000) == GVFG_OK) {
     gvfg_convert_frame_desc_t desc = {};
-    desc.struct_size = sizeof(desc);
     desc.pixel_format = GVFG_CONVERT_FMT_RGB48;
 
     gvfg_convert_frame image = NULL;
@@ -388,7 +377,7 @@ Release `gvfg_read_frame()` 回傳的 frame。
 
 ```c
 gvfg_status_t gvfg_poll_event(gvfg_handle handle,
-                              gvfg_event_t *out_event,
+                              gvfg_event_type_t *out_event,
                               uint32_t timeout_ms);
 ```
 
@@ -408,7 +397,6 @@ gvfg_status_t gvfg_get_signal_status(gvfg_handle handle,
 
 ```c
 gvfg_signal_status_t status = {};
-status.struct_size = sizeof(status);
 gvfg_get_signal_status(h, &status);
 ```
 
@@ -421,13 +409,12 @@ gvfg_status_t gvfg_get_runtime_info(gvfg_handle handle,
                                     gvfg_runtime_info_t *out_info);
 ```
 
-查詢 last read frame format、FPS、delivered frame count。Input signal metadata 請另外
-呼叫 `gvfg_get_signal_status()`；不要把可擴充的 signal struct 內嵌進 runtime struct，
-避免未來欄位位移破壞 ABI。
+查詢 FPS 與 delivered frame count。Input signal metadata 請另外呼叫
+`gvfg_get_signal_status()`；每張實際交付的 frame metadata 由 `gvfg_frame_t`
+提供。Last-delivered frame metadata 僅保留於 internal debug API。
 
 ```c
 gvfg_runtime_info_t info = {};
-info.struct_size = sizeof(info);
 gvfg_get_runtime_info(h, &info);
 ```
 

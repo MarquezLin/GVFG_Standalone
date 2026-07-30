@@ -1,4 +1,4 @@
-<mxfile host="Electron">
+<mxfile host="Electron" modified="2026-07-30T00:00:00.000Z">
   <diagram id="gvfg-architecture-overview" name="Architecture Overview">
     <mxGraphModel dx="1230" dy="1558" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1280" pageHeight="820" math="0" shadow="0">
       <root>
@@ -30,7 +30,7 @@
         <mxCell id="backendTypes" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="pcies2mm_backend_types.h&lt;br&gt;internal frame/event/status types" vertex="1">
           <mxGeometry height="58" width="285" x="30" y="95" as="geometry" />
         </mxCell>
-        <mxCell id="workers" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="single driver event + DMA worker&lt;br&gt;publish frames and events" vertex="1">
+        <mxCell id="workers" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="single capture thread&lt;br&gt;WaitForMultipleObjects: DMA / format / plug events" vertex="1">
           <mxGeometry height="52" width="280" x="510" y="173" as="geometry" />
         </mxCell>
         <mxCell id="pcies2mmSession" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="sdk/gvfg/src/backend/pcies2mm/pcies2mm_capture_session.cpp&lt;br&gt;internal session / workers / frame ring" vertex="1">
@@ -56,6 +56,9 @@
         <mxCell id="ring" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="frame_ring_&lt;br&gt;ready / in_use / sequence" vertex="1">
           <mxGeometry height="58" width="270" x="880" y="610" as="geometry" />
         </mxCell>
+        <mxCell id="eventFlow" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=13;" value="Public event flow&lt;br&gt;driver format IRQ -&gt; FORMAT_CHANGE_BEGIN&lt;br&gt;first new frame published -&gt; STREAM_READY" vertex="1">
+          <mxGeometry height="82" width="330" x="850" y="690" as="geometry" />
+        </mxCell>
         <mxCell id="externalBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;fontColor=#333333;fontSize=14;" value="External frame/event source" vertex="1">
           <mxGeometry height="52" width="280" x="410" y="900" as="geometry" />
         </mxCell>
@@ -72,6 +75,9 @@
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="e8" edge="1" parent="1" source="workers" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="ring" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="workers" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="eventFlow" value="callback / queue">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="e9" edge="1" parent="1" source="pcies2mmSession" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;dashed=1;" target="facade" value="frames / events / status">

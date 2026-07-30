@@ -103,6 +103,7 @@ namespace gvfg::internal
         std::atomic<bool> running_{false};
         std::atomic<bool> capture_active_{false};
         std::atomic<bool> signal_probe_active_{false};
+        std::atomic<bool> stream_ready_pending_{false};
         mutable std::atomic<bool> signal_presence_known_{false};
         mutable std::atomic<bool> signal_present_{false};
         std::thread capture_thread_;

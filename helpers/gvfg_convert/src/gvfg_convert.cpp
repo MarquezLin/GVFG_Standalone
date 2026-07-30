@@ -160,7 +160,6 @@ struct gvfg_convert_frame_t
         }
 
         layout = {};
-        layout.struct_size = sizeof(layout);
         layout.plane_count = 1;
         layout.plane_data[0] = buffer.data();
         layout.plane_stride[0] = actualStride;
@@ -323,17 +322,13 @@ extern "C"
             return GVFG_EINVAL;
         *out_frame = nullptr;
 
-        if (desc->struct_size < sizeof(gvfg_convert_frame_desc_t) ||
-            desc->flags != 0 ||
-            desc->reserved0 != 0 ||
-            convert_format_bytes_per_pixel(desc->pixel_format) <= 0)
+        if (convert_format_bytes_per_pixel(desc->pixel_format) <= 0)
             return GVFG_EINVAL;
         if (desc->width < 0 || desc->height < 0 || desc->row_bytes < 0)
             return GVFG_EINVAL;
 
         auto frame = std::make_unique<gvfg_convert_frame_t>();
         frame->request = {};
-        frame->request.struct_size = sizeof(gvfg_convert_frame_desc_t);
         frame->request.width = desc->width;
         frame->request.height = desc->height;
         frame->request.pixel_format = desc->pixel_format;
@@ -374,7 +369,6 @@ extern "C"
             return cfg;
 
         gvfg_frame_layout_t srcLayout{};
-        srcLayout.struct_size = sizeof(srcLayout);
         const gvfg_status_t layoutStatus = gvfg_get_frame_layout(src, &srcLayout);
         if (layoutStatus != GVFG_OK)
             return layoutStatus;
@@ -395,13 +389,7 @@ extern "C"
     {
         if (!frame || !out_desc)
             return GVFG_EINVAL;
-        if (out_desc->struct_size < sizeof(gvfg_convert_frame_desc_t))
-            return GVFG_EINVAL;
-
-        const uint32_t callerSize = out_desc->struct_size;
-        std::memset(out_desc, 0, sizeof(*out_desc));
         *out_desc = frame->desc;
-        out_desc->struct_size = callerSize;
         return GVFG_OK;
     }
 
@@ -421,15 +409,10 @@ extern "C"
     {
         if (!frame || !out_layout)
             return GVFG_EINVAL;
-        if (out_layout->struct_size < sizeof(gvfg_frame_layout_t))
-            return GVFG_EINVAL;
         if (frame->buffer.empty() || frame->layout.plane_count <= 0)
             return GVFG_ESTATE;
 
-        const uint32_t callerSize = out_layout->struct_size;
-        std::memset(out_layout, 0, sizeof(*out_layout));
         *out_layout = frame->layout;
-        out_layout->struct_size = callerSize;
         return GVFG_OK;
     }
 

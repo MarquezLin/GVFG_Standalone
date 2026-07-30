@@ -13,6 +13,8 @@ PreviewWindow::PreviewWindow(QWidget *parent)
     : QWidget(parent), ui_(new Ui::PreviewWindow)
 {
     ui_->setupUi(this);
+    ui_->verticalLayout->setContentsMargins(0, 0, 0, 0);
+    ui_->verticalLayout->setSpacing(0);
     ui_->previewHost->setAttribute(Qt::WA_NativeWindow, true);
     ui_->previewHost->setStyleSheet(QStringLiteral("background: black;"));
 }

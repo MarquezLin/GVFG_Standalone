@@ -35,15 +35,11 @@ typedef struct gvfg_convert_frame_t *gvfg_convert_frame;
 
 typedef struct
 {
-    uint32_t struct_size; /* Set to sizeof(gvfg_convert_frame_desc_t) before calling. */
     int width;            /* Frame width in pixels. Use 0 to size from source during conversion. */
     int height;           /* Frame height in pixels. Use 0 to size from source during conversion. */
     int pixel_format;     /* gvfg_convert_format_t destination format. */
     int row_bytes;        /* Destination row stride in bytes. Use 0 for helper default. */
-    uint32_t flags;       /* Reserved for future conversion options. Must be 0. */
-    uint32_t reserved0;   /* Reserved. Must be 0. */
     uint64_t data_size;   /* Output buffer size in bytes, filled after create/convert. */
-    uint64_t reserved[8]; /* Reserved for future helper metadata. Must be ignored. */
 } gvfg_convert_frame_desc_t;
 
 GVFG_CONVERT_API gvfg_status_t gvfg_convert_create_frame(
@@ -59,7 +55,7 @@ GVFG_CONVERT_API gvfg_status_t gvfg_convert_frame_from_capture(
 
 GVFG_CONVERT_API gvfg_status_t gvfg_convert_get_frame_desc(
     _In_ gvfg_convert_frame frame,
-    _Inout_ gvfg_convert_frame_desc_t *out_desc);
+    _Out_ gvfg_convert_frame_desc_t *out_desc);
 
 GVFG_CONVERT_API gvfg_status_t gvfg_convert_get_buffer(
     _In_ gvfg_convert_frame frame,
@@ -68,7 +64,7 @@ GVFG_CONVERT_API gvfg_status_t gvfg_convert_get_buffer(
 
 GVFG_CONVERT_API gvfg_status_t gvfg_convert_get_layout(
     _In_ gvfg_convert_frame frame,
-    _Inout_ gvfg_frame_layout_t *out_layout);
+    _Out_ gvfg_frame_layout_t *out_layout);
 
 GVFG_CONVERT_API const char *gvfg_convert_strerror(
     _In_ gvfg_status_t status);

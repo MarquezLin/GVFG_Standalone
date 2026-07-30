@@ -84,21 +84,21 @@ typedef struct pcies2mm_debug_state_t
 typedef enum pcies2mm_event_type_t
 {
     PCIES2MM_EVENT_PLUG_IN = 1,
-    PCIES2MM_EVENT_PLUG_OUT = 2
+    PCIES2MM_EVENT_PLUG_OUT = 2,
+    PCIES2MM_EVENT_STREAM_READY = 3,
+    PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN = 4
 } pcies2mm_event_type_t;
 
 enum
 {
     PCIES2MM_EVENT_MASK_PLUG_IN = 1u << 0,
     PCIES2MM_EVENT_MASK_PLUG_OUT = 1u << 1,
+    PCIES2MM_EVENT_MASK_STREAM_READY = 1u << 2,
+    PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN = 1u << 3,
     PCIES2MM_EVENT_MASK_DEFAULT = PCIES2MM_EVENT_MASK_PLUG_IN |
-                                 PCIES2MM_EVENT_MASK_PLUG_OUT
+                                 PCIES2MM_EVENT_MASK_PLUG_OUT |
+                                 PCIES2MM_EVENT_MASK_STREAM_READY |
+                                 PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN
 };
 
-typedef struct pcies2mm_event_t
-{
-    pcies2mm_event_type_t type;
-    uint64_t timestamp_ns;
-} pcies2mm_event_t;
-
-typedef void (*pcies2mm_event_callback_t)(const pcies2mm_event_t *event, void *user);
+typedef void (*pcies2mm_event_callback_t)(pcies2mm_event_type_t event, void *user);

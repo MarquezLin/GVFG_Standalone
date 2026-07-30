@@ -37,7 +37,6 @@ extern "C"
 
     typedef struct
     {
-        uint32_t struct_size; /* Set to sizeof(gvfg_preview_frame_t). */
         const void *data;
         uint64_t data_size;
         int width;

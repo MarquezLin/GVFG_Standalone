@@ -461,7 +461,6 @@ void MainWindow::init()
                         const uint64_t frameSize =
                             (uint64_t)video_width * 4u * (uint64_t)video_height;
                         gvfg_preview_frame_t frame{};
-                        frame.struct_size = sizeof(frame);
                         frame.data = data;
                         frame.data_size = frameSize;
                         frame.width = video_width;

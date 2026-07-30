@@ -20,12 +20,6 @@ namespace
     constexpr uint32_t kDefaultRingBufferCount = 3;
     constexpr uint32_t kMaxRingBufferCount = 16;
 
-    static uint64_t steady_now_ns()
-    {
-        const auto now = std::chrono::steady_clock::now().time_since_epoch();
-        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
-    }
-
     static bool should_log_counter(uint64_t count)
     {
         return count <= 5 || (count % 60) == 0;
@@ -109,6 +103,10 @@ namespace
             return PCIES2MM_EVENT_MASK_PLUG_IN;
         case PCIES2MM_EVENT_PLUG_OUT:
             return PCIES2MM_EVENT_MASK_PLUG_OUT;
+        case PCIES2MM_EVENT_STREAM_READY:
+            return PCIES2MM_EVENT_MASK_STREAM_READY;
+        case PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN:
+            return PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN;
         default:
             return 0;
         }
@@ -354,6 +352,7 @@ namespace gvfg::internal
         running_ = true;
         capture_active_ = startProbeNow;
         signal_probe_active_ = startProbeNow;
+        stream_ready_pending_ = startProbeNow;
         try
         {
             capture_thread_ = std::thread(&PcieS2mmCaptureSession::capture_thread_proc, this);
@@ -363,6 +362,7 @@ namespace gvfg::internal
             running_ = false;
             capture_active_ = false;
             signal_probe_active_ = false;
+            stream_ready_pending_ = false;
             if (startProbeNow)
             {
                 write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
@@ -390,6 +390,7 @@ namespace gvfg::internal
         running_ = false;
         capture_active_ = false;
         signal_probe_active_ = false;
+        stream_ready_pending_ = false;
 
         if (device_ != INVALID_HANDLE_VALUE)
         {
@@ -731,6 +732,7 @@ namespace gvfg::internal
                     if (dmaEnableOk && videoEnableOk)
                     {
                         signal_probe_active_.store(true, std::memory_order_release);
+                        stream_ready_pending_.store(true, std::memory_order_release);
                         capture_active_.store(true, std::memory_order_release);
                     }
                     else
@@ -861,7 +863,6 @@ namespace gvfg::internal
         {
             signal_present_.store(true, std::memory_order_release);
             signal_presence_known_.store(true, std::memory_order_release);
-            emit_event(PCIES2MM_EVENT_PLUG_IN);
         }
 
         {
@@ -870,10 +871,14 @@ namespace gvfg::internal
                 --pending_events_;
             publish_frame(slotIndex, static_cast<size_t>(ret));
         }
+
+        if (stream_ready_pending_.exchange(false, std::memory_order_acq_rel))
+            emit_event(PCIES2MM_EVENT_STREAM_READY);
     }
 
     void PcieS2mmCaptureSession::handle_format_change_event(uint32_t channel)
     {
+        emit_event(PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN);
         write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
         write_reg(video_base() + VIDEO_EN_OFFSET, 0);
         capture_active_ = false;
@@ -906,6 +911,7 @@ namespace gvfg::internal
     void PcieS2mmCaptureSession::handle_unplug_event(uint32_t channel)
     {
         signal_probe_active_.store(false, std::memory_order_release);
+        stream_ready_pending_.store(false, std::memory_order_release);
         signal_present_.store(false, std::memory_order_release);
         signal_presence_known_.store(true, std::memory_order_release);
         write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
@@ -942,6 +948,7 @@ namespace gvfg::internal
             write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
             write_reg(video_base() + VIDEO_EN_OFFSET, 0);
             capture_active_.store(false, std::memory_order_release);
+            stream_ready_pending_.store(false, std::memory_order_release);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 stream_error_ = false;
@@ -956,6 +963,7 @@ namespace gvfg::internal
 
         capture_active_.store(true, std::memory_order_release);
         signal_probe_active_.store(false, std::memory_order_release);
+        stream_ready_pending_.store(true, std::memory_order_release);
         {
             std::lock_guard<std::mutex> lock(mutex_);
             stream_error_ = false;
@@ -1055,10 +1063,7 @@ namespace gvfg::internal
             user = event_callback_user_;
         }
 
-        pcies2mm_event_t event{};
-        event.type = type;
-        event.timestamp_ns = steady_now_ns();
-        callback(&event, user);
+        callback(type, user);
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::fail(pcies2mm_status_t status, const char *where, DWORD winerr) const

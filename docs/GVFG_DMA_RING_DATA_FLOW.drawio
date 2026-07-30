@@ -1,42 +1,42 @@
-<mxfile host="app.diagrams.net" modified="2026-06-10T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
+<mxfile host="app.diagrams.net" modified="2026-07-30T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
   <diagram id="gvfg-dma-ring-flow" name="GVFG DMA Ring Data Flow">
     <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1100" math="0" shadow="0">
       <root>
         <mxCell id="0"/>
         <mxCell id="1" parent="0"/>
-        <mxCell id="title" value="GVFG user-space DMA ring data flow" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=28;fontStyle=1" vertex="1" parent="1">
+        <mxCell id="title" value="GVFG driver DMA buffer to SDK ring data flow" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=28;fontStyle=1" vertex="1" parent="1">
           <mxGeometry x="360" y="30" width="880" height="40" as="geometry"/>
         </mxCell>
 
-        <mxCell id="hw" value="FPGA / PCIES2MM hardware&#xa;VIDEO IRQ" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=14;fontStyle=1" vertex="1" parent="1">
+        <mxCell id="hw" value="Video source / FPGA&#xa;writes DMA buffer N&#xa;DMA complete interrupt" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=14;fontStyle=1" vertex="1" parent="1">
           <mxGeometry x="80" y="130" width="210" height="80" as="geometry"/>
         </mxCell>
-        <mxCell id="event" value="event_thread_proc()&#xa;ReadFile(event_N) returns" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1" vertex="1" parent="1">
+        <mxCell id="event" value="Kernel driver&#xa;SetEvent(dma_event_)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1" vertex="1" parent="1">
           <mxGeometry x="360" y="130" width="230" height="80" as="geometry"/>
         </mxCell>
-        <mxCell id="pending" value="pending_events_++&#xa;data_cv_.notify_one()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14" vertex="1" parent="1">
+        <mxCell id="pending" value="single capture_thread_proc()&#xa;WaitForMultipleObjects() wakes&#xa;dispatches DMA event" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14" vertex="1" parent="1">
           <mxGeometry x="660" y="130" width="230" height="80" as="geometry"/>
         </mxCell>
-        <mxCell id="datawait" value="data_thread_proc()&#xa;waits for pending_events_ &gt; 0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;fontStyle=1" vertex="1" parent="1">
+        <mxCell id="datawait" value="handle_dma_event()&#xa;IOCTL_GET_VIDEO_DONE_INDEX" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;fontStyle=1" vertex="1" parent="1">
           <mxGeometry x="960" y="130" width="260" height="80" as="geometry"/>
         </mxCell>
-        <mxCell id="clear" value="Clear VIDEO IRQ&#xa;write INT_CLR high/low&#xa;enable_user_event()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14" vertex="1" parent="1">
+        <mxCell id="clear" value="frameIndex = doneIndex % 16&#xa;select completed driver DMA buffer N" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14" vertex="1" parent="1">
           <mxGeometry x="1280" y="130" width="240" height="90" as="geometry"/>
         </mxCell>
 
-        <mxCell id="findslot" value="Find free FrameSlot&#xa;slot.in_use == false" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;fontStyle=1" vertex="1" parent="1">
+        <mxCell id="findslot" value="SDK 3-slot frame_ring_&#xa;search slot.in_use == false" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;fontStyle=1" vertex="1" parent="1">
           <mxGeometry x="80" y="310" width="240" height="80" as="geometry"/>
         </mxCell>
-        <mxCell id="droptest" value="Slot already ready?&#xa;ready == true and newer than delivered" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13" vertex="1" parent="1">
+        <mxCell id="droptest" value="Free slot available?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13" vertex="1" parent="1">
           <mxGeometry x="390" y="300" width="190" height="100" as="geometry"/>
         </mxCell>
-        <mxCell id="drop" value="Drop old ready frame&#xa;stats_.frames_dropped++" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14" vertex="1" parent="1">
+        <mxCell id="drop" value="No: capture thread waits&#xa;data_cv_.wait_for()&#xa;driver buffers may advance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14" vertex="1" parent="1">
           <mxGeometry x="650" y="290" width="230" height="70" as="geometry"/>
         </mxCell>
         <mxCell id="markwriting" value="Mark slot writing&#xa;ready = false&#xa;in_use = true" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14" vertex="1" parent="1">
           <mxGeometry x="650" y="390" width="230" height="90" as="geometry"/>
         </mxCell>
-        <mxCell id="readc2h" value="ReadFile(c2h_N)&#xa;directly into slot.data" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;fontStyle=1" vertex="1" parent="1">
+        <mxCell id="readc2h" value="IOCTL_GET_FRAME&#xa;driver DMA buffer N -&gt; one copy -&gt; slot.data&#xa;validate bytesReturned == expected" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;fontStyle=1" vertex="1" parent="1">
           <mxGeometry x="960" y="330" width="260" height="80" as="geometry"/>
         </mxCell>
         <mxCell id="publish" value="publish_frame(slotIndex, bytes)&#xa;slot.ready = true&#xa;slot.in_use = false&#xa;frame_cv_.notify_one()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14" vertex="1" parent="1">
@@ -84,9 +84,9 @@
         <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="datawait" target="clear"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="clear" target="findslot"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1400" y="260"/><mxPoint x="200" y="260"/></Array></mxGeometry></mxCell>
         <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="findslot" target="droptest"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e7" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="droptest" target="drop"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e8" value="no / after drop" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="droptest" target="markwriting"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="drop" target="markwriting"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e7" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="droptest" target="markwriting"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e8" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="droptest" target="drop"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e9" value="release wakes waiter" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;dashed=1" edge="1" parent="1" source="drop" target="findslot"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="markwriting" target="readc2h"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="readc2h" target="publish"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="publish" target="wait"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1410" y="500"/><mxPoint x="220" y="500"/></Array></mxGeometry></mxCell>

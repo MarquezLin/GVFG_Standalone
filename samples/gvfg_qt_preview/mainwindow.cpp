@@ -143,6 +143,10 @@ namespace
             return QStringLiteral("SIGNAL_CONNECTED");
         case GVFG_EVENT_SIGNAL_DISCONNECTED:
             return QStringLiteral("SIGNAL_DISCONNECTED");
+        case GVFG_EVENT_STREAM_READY:
+            return QStringLiteral("STREAM_READY");
+        case GVFG_EVENT_FORMAT_CHANGE_BEGIN:
+            return QStringLiteral("FORMAT_CHANGE_BEGIN");
         default:
             return QStringLiteral("UNKNOWN");
         }
@@ -412,19 +416,10 @@ bool MainWindow::applyPreview()
     return true;
 }
 
-void MainWindow::updatePreviewSourceSize(const gvfg_runtime_info_t &info,
-                                         const gvfg_signal_status_t &signal)
+void MainWindow::updatePreviewSourceSize(const gvfg_signal_status_t &signal)
 {
-    const auto &readFrame = info.last_frame;
-
     if (signal.width > 0 && signal.height > 0)
-    {
         previewWindow_->setSourceSize(signal.width, signal.height);
-        return;
-    }
-
-    if (readFrame.valid && readFrame.width > 0 && readFrame.height > 0)
-        previewWindow_->setSourceSize(readFrame.width, readFrame.height);
 }
 
 void MainWindow::updatePreviewSourceSize()
@@ -432,13 +427,9 @@ void MainWindow::updatePreviewSourceSize()
     if (!handle_)
         return;
 
-    gvfg_runtime_info_t info{};
-    info.struct_size = sizeof(info);
     gvfg_signal_status_t signal{};
-    signal.struct_size = sizeof(signal);
-    if (gvfg_get_runtime_info(handle_, &info) == GVFG_OK &&
-        gvfg_get_signal_status(handle_, &signal) == GVFG_OK)
-        updatePreviewSourceSize(info, signal);
+    if (gvfg_get_signal_status(handle_, &signal) == GVFG_OK)
+        updatePreviewSourceSize(signal);
 }
 
 void MainWindow::updateSignalStatus()
@@ -446,30 +437,22 @@ void MainWindow::updateSignalStatus()
     if (!handle_)
         return;
 
-    gvfg_runtime_info_t info{};
-    info.struct_size = sizeof(info);
-    if (gvfg_get_runtime_info(handle_, &info) != GVFG_OK)
-        return;
-
     gvfg_signal_status_t signal{};
-    signal.struct_size = sizeof(signal);
     if (gvfg_get_signal_status(handle_, &signal) != GVFG_OK)
         return;
 
 #if GVFG_INTERNAL_DIAGNOSTICS
     gvfg_debug_backend_stats_t backendStats{};
-    backendStats.struct_size = sizeof(backendStats);
     const bool haveBackendStats = gvfg_debug_get_backend_stats(handle_, &backendStats) == GVFG_OK;
 #endif
     if (previewWindow_->isVisible())
-        updatePreviewSourceSize(info, signal);
+        updatePreviewSourceSize(signal);
 
     gvfg_preview_info_t previewInfo{};
     const bool previewInfoOk = previewHandle_ &&
                                gvfg_preview_get_info(previewHandle_, &previewInfo) == GVFG_PREVIEW_OK &&
                                previewInfo.active;
     gvfg_preview_stats_t previewStats{};
-    previewStats.struct_size = sizeof(previewStats);
     const bool previewStatsOk = previewHandle_ &&
                                 gvfg_preview_get_stats(previewHandle_, &previewStats) == GVFG_PREVIEW_OK;
     const QString previewFps = previewStatsOk && previewStats.present_fps > 0.0
@@ -482,6 +465,11 @@ void MainWindow::updateSignalStatus()
                                                  previewInfo.pixel_format,
                                                  previewInfo.bit_depth)
                                      : QStringLiteral("--");
+    const QString previewState = !captureRunning_
+                                     ? QStringLiteral("Stopped")
+                                     : previewFps == QStringLiteral("--")
+                                         ? QStringLiteral("Measuring")
+                                         : QStringLiteral("%1 FPS").arg(previewFps);
     QStringList statusLines;
     statusLines << (signal.connected
                         ? QStringLiteral("Input   | CH%1 | Connected | %2")
@@ -491,10 +479,7 @@ void MainWindow::updateSignalStatus()
                               .arg(signal.channel));
     statusLines << (previewInfoOk
                         ? QStringLiteral("Preview | %1 | %2")
-                              .arg(previewFps == QStringLiteral("--")
-                                       ? QStringLiteral("Measuring")
-                                       : QStringLiteral("%1 FPS").arg(previewFps),
-                                   previewFrame)
+                              .arg(previewState, previewFrame)
                         : QStringLiteral("Preview | Inactive"));
 
 #if GVFG_INTERNAL_DIAGNOSTICS
@@ -728,21 +713,13 @@ void MainWindow::captureReadLoop()
 
     while (!captureStop_.load(std::memory_order_acquire))
     {
-        gvfg_event_t event{};
+        gvfg_event_type_t event = GVFG_EVENT_UNKNOWN;
         while (gvfg_poll_event(handle_, &event, 0) == GVFG_OK)
         {
-            const QString type = eventTypeText(event.type);
-#if GVFG_INTERNAL_DIAGNOSTICS
-            const uint64_t timestampNs = event.timestamp_ns;
-            QMetaObject::invokeMethod(this, [this, type, timestampNs]()
-                                      { appendLog(QStringLiteral("event %1 ts=%2")
-                                                      .arg(type)
-                                                      .arg(static_cast<qulonglong>(timestampNs))); }, Qt::QueuedConnection);
-#else
+            const QString type = eventTypeText(event);
             QMetaObject::invokeMethod(this, [this, type]()
                                       { appendLog(QStringLiteral("EVENT %1").arg(type)); },
                                       Qt::QueuedConnection);
-#endif
         }
 
         gvfg_frame_t frame{};
@@ -761,7 +738,6 @@ void MainWindow::captureReadLoop()
             if (previewHandle_)
             {
                 gvfg_preview_frame_t previewFrame{};
-                previewFrame.struct_size = sizeof(previewFrame);
                 previewFrame.data = frame.data;
                 previewFrame.data_size = frame.data_size;
                 previewFrame.width = frame.width;
@@ -785,7 +761,6 @@ void MainWindow::captureReadLoop()
                 }
 
                 gvfg_frame_layout_t layout{};
-                layout.struct_size = sizeof(layout);
                 if (gvfg_get_frame_layout(&frame, &layout) == GVFG_OK &&
                     layout.plane_count > 0 &&
                     layout.plane_data[0] &&
@@ -834,7 +809,6 @@ void MainWindow::captureReadLoop()
                 (consecutiveTimeouts % 5) == 0)
             {
                 gvfg_signal_status_t signal{};
-                signal.struct_size = sizeof(signal);
                 if (gvfg_get_signal_status(handle_, &signal) == GVFG_OK && signal.connected)
                 {
                     captureStalledLogged = true;

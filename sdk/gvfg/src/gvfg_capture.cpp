@@ -36,9 +36,8 @@ namespace
     static_assert(offsetof(gvfg_frame_t, frame_id) == 32);
 
     static_assert(std::is_standard_layout_v<gvfg_frame_layout_t>);
-    static_assert(sizeof(gvfg_frame_layout_t) == 32, "gvfg_frame_layout_t x64 ABI must remain stable");
-    static_assert(offsetof(gvfg_frame_layout_t, struct_size) == 0);
-    static_assert(offsetof(gvfg_frame_layout_t, plane_count) == 4);
+    static_assert(sizeof(gvfg_frame_layout_t) == 32, "gvfg_frame_layout_t x64 ABI must remain frozen");
+    static_assert(offsetof(gvfg_frame_layout_t, plane_count) == 0);
     static_assert(offsetof(gvfg_frame_layout_t, plane_data) == 8);
     static_assert(offsetof(gvfg_frame_layout_t, plane_stride) == 16);
     static_assert(offsetof(gvfg_frame_layout_t, plane_size) == 24);
@@ -131,6 +130,10 @@ namespace
             return GVFG_EVENT_SIGNAL_CONNECTED;
         case PCIES2MM_EVENT_PLUG_OUT:
             return GVFG_EVENT_SIGNAL_DISCONNECTED;
+        case PCIES2MM_EVENT_STREAM_READY:
+            return GVFG_EVENT_STREAM_READY;
+        case PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN:
+            return GVFG_EVENT_FORMAT_CHANGE_BEGIN;
         default:
             return GVFG_EVENT_UNKNOWN;
         }
@@ -297,7 +300,6 @@ struct gvfg_handle_t
     gvfg_status_t getSignalStatus(gvfg_signal_status_t &out)
     {
         std::memset(&out, 0, sizeof(out));
-        out.struct_size = sizeof(out);
         const pcies2mm_status_t status = querySignal();
         {
             std::lock_guard<std::mutex> lock(stateMutex);
@@ -319,20 +321,8 @@ struct gvfg_handle_t
             return GVFG_ESTATE;
 
         std::memset(&out, 0, sizeof(out));
-        out.struct_size = sizeof(out);
-        const uint64_t frames = deliveredFrames.load(std::memory_order_relaxed);
-        const bool deliveredValid = running.load(std::memory_order_relaxed) && frames > 0;
-
-        out.last_frame.valid = deliveredValid ? 1 : 0;
-        if (deliveredValid)
-        {
-            out.last_frame.width = static_cast<int>(deliveredWidth.load(std::memory_order_relaxed));
-            out.last_frame.height = static_cast<int>(deliveredHeight.load(std::memory_order_relaxed));
-            out.last_frame.bit_depth = static_cast<int>(deliveredBitDepth.load(std::memory_order_relaxed));
-            out.last_frame.pixel_format = deliveredPixelFormat.load(std::memory_order_relaxed);
-        }
         out.capture_fps = runtimeFps.load(std::memory_order_relaxed);
-        out.delivered_frames = frames;
+        out.delivered_frames = deliveredFrames.load(std::memory_order_relaxed);
         return GVFG_OK;
     }
 
@@ -345,19 +335,17 @@ struct gvfg_handle_t
                                     PCIES2MM_EVENT_MASK_DEFAULT);
     }
 
-    static void onBackendEvent(const pcies2mm_event_t *event, void *user)
+    static void onBackendEvent(pcies2mm_event_type_t event, void *user)
     {
         auto *self = static_cast<gvfg_handle_t *>(user);
-        if (!self || !event)
+        if (!self)
             return;
-        self->emitEvent(*event);
+        self->emitEvent(event);
     }
 
-    void emitEvent(const pcies2mm_event_t &event)
+    void emitEvent(pcies2mm_event_type_t event)
     {
-        gvfg_event_t out{};
-        out.type = map_event_type(event.type);
-        out.timestamp_ns = event.timestamp_ns;
+        const gvfg_event_type_t out = map_event_type(event);
         {
             std::lock_guard<std::mutex> lock(eventMutex);
             if (eventQueue.size() >= 64)
@@ -541,31 +529,40 @@ struct gvfg_handle_t
             backend->release_frame(frame);
     }
 
-    gvfg_status_t pollEvent(gvfg_event_t &out, uint32_t timeoutMs)
+    gvfg_status_t pollEvent(gvfg_event_type_t &out, uint32_t timeoutMs)
     {
         if (!backend || !running.load(std::memory_order_acquire))
             return GVFG_ESTATE;
 
         std::unique_lock<std::mutex> lock(eventMutex);
-        const auto hasEvent = [this]()
+        const auto eventAvailableOrStopped = [this]()
         {
             return !eventQueue.empty() || !running.load(std::memory_order_acquire);
         };
 
+        bool waitConditionMet = false;
         if (timeoutMs == 0)
         {
-            if (!hasEvent())
-                return GVFG_ETIMEOUT;
+            // Non-blocking: inspect the current state without sleeping.
+            waitConditionMet = eventAvailableOrStopped();
         }
         else if (timeoutMs == GVFG_TIMEOUT_INFINITE)
         {
-            eventCv.wait(lock, hasEvent);
+            // Wake when an event arrives or capture is stopped.
+            eventCv.wait(lock, eventAvailableOrStopped);
+            waitConditionMet = true;
         }
-        else if (!eventCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), hasEvent))
+        else
         {
-            return GVFG_ETIMEOUT;
+            waitConditionMet = eventCv.wait_for(lock,
+                                                std::chrono::milliseconds(timeoutMs),
+                                                eventAvailableOrStopped);
         }
 
+        if (!waitConditionMet)
+            return GVFG_ETIMEOUT;
+
+        // A wake-up without an event means capture was stopped while waiting.
         if (eventQueue.empty())
             return GVFG_ESTATE;
 
@@ -581,10 +578,14 @@ struct gvfg_handle_t
         out.sdk_running = running.load(std::memory_order_relaxed) ? 1 : 0;
         out.runtime_fps = runtimeFps.load(std::memory_order_relaxed);
         out.frames_returned = deliveredFrames.load(std::memory_order_relaxed);
-        out.last_frame_width = static_cast<int>(deliveredWidth.load(std::memory_order_relaxed));
-        out.last_frame_height = static_cast<int>(deliveredHeight.load(std::memory_order_relaxed));
-        out.last_frame_pixel_format = deliveredPixelFormat.load(std::memory_order_relaxed);
-        out.last_frame_bit_depth = static_cast<int>(deliveredBitDepth.load(std::memory_order_relaxed));
+        out.last_frame.valid = out.sdk_running && out.frames_returned > 0 ? 1 : 0;
+        if (out.last_frame.valid)
+        {
+            out.last_frame.width = static_cast<int>(deliveredWidth.load(std::memory_order_relaxed));
+            out.last_frame.height = static_cast<int>(deliveredHeight.load(std::memory_order_relaxed));
+            out.last_frame.bit_depth = static_cast<int>(deliveredBitDepth.load(std::memory_order_relaxed));
+            out.last_frame.pixel_format = deliveredPixelFormat.load(std::memory_order_relaxed);
+        }
 
         {
             std::lock_guard<std::mutex> lock(frameMutex);
@@ -701,7 +702,7 @@ struct gvfg_handle_t
     pcies2mm_frame_t heldBackendFrame{};
     std::mutex eventMutex;
     std::condition_variable eventCv;
-    std::deque<gvfg_event_t> eventQueue;
+    std::deque<gvfg_event_type_t> eventQueue;
 };
 
 extern "C"
@@ -776,20 +777,12 @@ extern "C"
     {
         if (!frame || !out_layout)
             return GVFG_EINVAL;
-        constexpr uint32_t kFrameLayoutV1Size =
-            static_cast<uint32_t>(offsetof(gvfg_frame_layout_t, plane_size) + sizeof(out_layout->plane_size));
-        const uint32_t callerSize = out_layout->struct_size;
-        if (callerSize < kFrameLayoutV1Size)
-            return GVFG_EINVAL;
-
         gvfg_frame_layout_t layout{};
-        layout.struct_size = sizeof(layout);
         const gvfg_status_t status = populate_frame_layout(*frame, layout);
         if (status != GVFG_OK)
             return status;
 
-        std::memcpy(out_layout, &layout, std::min<size_t>(callerSize, sizeof(layout)));
-        out_layout->struct_size = callerSize;
+        *out_layout = layout;
         return GVFG_OK;
     }
 
@@ -800,7 +793,7 @@ extern "C"
         return handle->releaseFrame(*frame);
     }
 
-    gvfg_status_t gvfg_poll_event(gvfg_handle handle, gvfg_event_t *out_event, uint32_t timeout_ms)
+    gvfg_status_t gvfg_poll_event(gvfg_handle handle, gvfg_event_type_t *out_event, uint32_t timeout_ms)
     {
         if (!handle || !out_event)
             return GVFG_EINVAL;
@@ -818,20 +811,12 @@ extern "C"
     {
         if (!handle || !out_status)
             return GVFG_EINVAL;
-        constexpr uint32_t kSignalStatusV1Size =
-            static_cast<uint32_t>(offsetof(gvfg_signal_status_t, bit_depth) + sizeof(out_status->bit_depth));
-        const uint32_t callerSize = out_status->struct_size;
-        if (callerSize < kSignalStatusV1Size)
-            return GVFG_EINVAL;
-
         gvfg_signal_status_t statusInfo{};
-        statusInfo.struct_size = sizeof(statusInfo);
         const gvfg_status_t status = handle->getSignalStatus(statusInfo);
         if (status != GVFG_OK)
             return status;
 
-        std::memcpy(out_status, &statusInfo, std::min<size_t>(callerSize, sizeof(statusInfo)));
-        out_status->struct_size = callerSize;
+        *out_status = statusInfo;
         return GVFG_OK;
     }
 
@@ -839,20 +824,12 @@ extern "C"
     {
         if (!handle || !out_info)
             return GVFG_EINVAL;
-        constexpr uint32_t kRuntimeInfoV1Size =
-            static_cast<uint32_t>(offsetof(gvfg_runtime_info_t, delivered_frames) + sizeof(out_info->delivered_frames));
-        const uint32_t callerSize = out_info->struct_size;
-        if (callerSize < kRuntimeInfoV1Size)
-            return GVFG_EINVAL;
-
         gvfg_runtime_info_t runtimeInfo{};
-        runtimeInfo.struct_size = sizeof(runtimeInfo);
         const gvfg_status_t status = handle->getRuntimeInfo(runtimeInfo);
         if (status != GVFG_OK)
             return status;
 
-        std::memcpy(out_info, &runtimeInfo, std::min<size_t>(callerSize, sizeof(runtimeInfo)));
-        out_info->struct_size = callerSize;
+        *out_info = runtimeInfo;
         return GVFG_OK;
     }
 
@@ -891,18 +868,12 @@ extern "C"
         if (!handle || !out_stats)
             return GVFG_EINVAL;
 
-        const uint32_t callerSize = out_stats->struct_size;
-        if (callerSize < sizeof(uint32_t) || callerSize > sizeof(gvfg_debug_backend_stats_t))
-            return GVFG_EINVAL;
-
         gvfg_debug_backend_stats_t stats{};
         const gvfg_status_t status = handle->getDebugBackendStats(stats);
         if (status != GVFG_OK)
             return status;
 
-        stats.struct_size = sizeof(stats);
-        std::memcpy(out_stats, &stats, callerSize);
-        out_stats->struct_size = callerSize;
+        *out_stats = stats;
         return GVFG_OK;
     }
 
