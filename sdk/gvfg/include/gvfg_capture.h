@@ -83,7 +83,6 @@ extern "C"
     enum
     {
         GVFG_MAX_DEVICES = 16,
-        GVFG_MAX_PLANES = 1
     };
 
     typedef enum
@@ -138,18 +137,11 @@ extern "C"
         uint64_t data_size; /* Total bytes available from data. */
         int width;          /* Frame width in pixels. */
         int height;         /* Frame height in pixels. */
+        int row_stride_bytes; /* Byte distance between the starts of adjacent rows. */
         int pixel_format;   /* gvfg_pixel_format_t value. */
         int bit_depth;      /* Bits per color channel of the native frame. */
         uint64_t frame_id;  /* Monotonic identifier within the current gvfg_start()/stop() run. */
     } gvfg_frame_t;
-
-    typedef struct
-    {
-        int plane_count;                         /* Number of valid entries in plane_data/plane_stride/plane_size. */
-        const void *plane_data[GVFG_MAX_PLANES]; /* Plane pointers inside frame.data, valid until gvfg_release_frame(). */
-        int plane_stride[GVFG_MAX_PLANES];       /* Bytes from one row to the next for each plane. */
-        uint64_t plane_size[GVFG_MAX_PLANES];    /* Bytes available in each plane. */
-    } gvfg_frame_layout_t;
 
     typedef enum
     {
@@ -278,25 +270,6 @@ extern "C"
         _In_ gvfg_handle handle,
         _Out_ gvfg_frame_t *out_frame,
         _In_ uint32_t timeout_ms);
-
-    /*
-     * Query per-plane layout for a frame returned by gvfg_read_frame().
-     *
-     * Parameters:
-     * - frame: Frame descriptor returned by gvfg_read_frame(). Must not be NULL.
-     * - out_layout: Receives plane pointers, strides, and sizes. Must not be NULL.
-     *
-     * Returns:
-     * - GVFG_OK on success.
-     * - GVFG_EINVAL if frame or out_layout is NULL.
-     * - GVFG_ENOTSUP if the SDK cannot describe the frame layout.
-     *
-     * The returned plane_data pointers are owned by the SDK and remain valid only
-     * until gvfg_release_frame() is called for the source frame.
-     */
-    GVFG_API gvfg_status_t gvfg_get_frame_layout(
-        _In_ const gvfg_frame_t *frame,
-        _Out_ gvfg_frame_layout_t *out_layout);
 
     /*
      * Release a frame returned by gvfg_read_frame().

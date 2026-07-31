@@ -113,7 +113,6 @@ struct gvfg_convert_frame_t
 {
     gvfg_convert_frame_desc_t request{};
     gvfg_convert_frame_desc_t desc{};
-    gvfg_frame_layout_t layout{};
     std::vector<uint8_t> buffer;
 
     gvfg_status_t configure(int width, int height, int pixelFormat, int rowBytes)
@@ -159,11 +158,6 @@ struct gvfg_convert_frame_t
             return GVFG_EIO;
         }
 
-        layout = {};
-        layout.plane_count = 1;
-        layout.plane_data[0] = buffer.data();
-        layout.plane_stride[0] = actualStride;
-        layout.plane_size[0] = size;
         return GVFG_OK;
     }
 };
@@ -192,14 +186,19 @@ namespace
     }
 
     gvfg_status_t convert_yuy2_to_frame(const gvfg_frame_t &src,
-                                        const gvfg_frame_layout_t &srcLayout,
                                         gvfg_convert_frame_t &dst)
     {
-        if (srcLayout.plane_count < 1 || !srcLayout.plane_data[0] || srcLayout.plane_stride[0] < src.width * 2)
+        if (!src.data || src.row_stride_bytes < src.width * 2)
+            return GVFG_EINVAL;
+        uint64_t requiredSize = 0;
+        if (!checked_mul_u64(static_cast<uint64_t>(src.row_stride_bytes),
+                             static_cast<uint64_t>(src.height),
+                             requiredSize) ||
+            requiredSize > src.data_size)
             return GVFG_EINVAL;
 
-        const auto *srcBase = static_cast<const uint8_t *>(srcLayout.plane_data[0]);
-        const int srcStride = srcLayout.plane_stride[0];
+        const auto *srcBase = static_cast<const uint8_t *>(src.data);
+        const int srcStride = src.row_stride_bytes;
         const int bytesPerPixel = convert_format_bytes_per_pixel(dst.desc.pixel_format);
         if (bytesPerPixel <= 0)
             return GVFG_ENOTSUP;
@@ -251,14 +250,19 @@ namespace
     }
 
     gvfg_status_t convert_y210_to_frame(const gvfg_frame_t &src,
-                                        const gvfg_frame_layout_t &srcLayout,
                                         gvfg_convert_frame_t &dst)
     {
-        if (srcLayout.plane_count < 1 || !srcLayout.plane_data[0] || srcLayout.plane_stride[0] < src.width * 4)
+        if (!src.data || src.row_stride_bytes < src.width * 4)
+            return GVFG_EINVAL;
+        uint64_t requiredSize = 0;
+        if (!checked_mul_u64(static_cast<uint64_t>(src.row_stride_bytes),
+                             static_cast<uint64_t>(src.height),
+                             requiredSize) ||
+            requiredSize > src.data_size)
             return GVFG_EINVAL;
 
-        const auto *srcBase = static_cast<const uint8_t *>(srcLayout.plane_data[0]);
-        const int srcStride = srcLayout.plane_stride[0];
+        const auto *srcBase = static_cast<const uint8_t *>(src.data);
+        const int srcStride = src.row_stride_bytes;
         const int bytesPerPixel = convert_format_bytes_per_pixel(dst.desc.pixel_format);
         if (bytesPerPixel <= 0)
             return GVFG_ENOTSUP;
@@ -368,17 +372,12 @@ extern "C"
         if (cfg != GVFG_OK)
             return cfg;
 
-        gvfg_frame_layout_t srcLayout{};
-        const gvfg_status_t layoutStatus = gvfg_get_frame_layout(src, &srcLayout);
-        if (layoutStatus != GVFG_OK)
-            return layoutStatus;
-
         switch (src->pixel_format)
         {
         case GVFG_PIXFMT_YUY2:
-            return convert_yuy2_to_frame(*src, srcLayout, *dst_frame);
+            return convert_yuy2_to_frame(*src, *dst_frame);
         case GVFG_PIXFMT_Y210:
-            return convert_y210_to_frame(*src, srcLayout, *dst_frame);
+            return convert_y210_to_frame(*src, *dst_frame);
         default:
             return GVFG_ENOTSUP;
         }
@@ -402,18 +401,6 @@ extern "C"
         *out_data = frame->buffer.empty() ? nullptr : frame->buffer.data();
         *out_size = static_cast<uint64_t>(frame->buffer.size());
         return frame->buffer.empty() ? GVFG_ESTATE : GVFG_OK;
-    }
-
-    gvfg_status_t gvfg_convert_get_layout(gvfg_convert_frame frame,
-                                          gvfg_frame_layout_t *out_layout)
-    {
-        if (!frame || !out_layout)
-            return GVFG_EINVAL;
-        if (frame->buffer.empty() || frame->layout.plane_count <= 0)
-            return GVFG_ESTATE;
-
-        *out_layout = frame->layout;
-        return GVFG_OK;
     }
 
     const char *gvfg_convert_strerror(gvfg_status_t status)

@@ -126,49 +126,34 @@ typedef struct
     uint64_t data_size;
     int width;
     int height;
+    int row_stride_bytes;
     int pixel_format;
     int bit_depth;
     uint64_t frame_id;
 } gvfg_frame_t;
 ```
 
-`gvfg_frame_t` 只保存每張 frame 必定存在的核心欄位；stable release 後凍結此 ABI。
-Memory layout、color metadata 與 timestamp metadata 不會繼續塞進這個 struct，而是
-分別透過 query API 取得。
-
-### `gvfg_frame_layout_t`
-
-由 `gvfg_get_frame_layout()` 回傳的 optional per-plane layout。
-
-```c
-typedef struct
-{
-    int plane_count;
-    const void *plane_data[GVFG_MAX_PLANES];
-    int plane_stride[GVFG_MAX_PLANES];
-    uint64_t plane_size[GVFG_MAX_PLANES];
-} gvfg_frame_layout_t;
-```
-
-需要 row pitch 或 plane offset 的 application，應該在 `gvfg_read_frame()` 後呼叫
-`gvfg_get_frame_layout()`，並使用 `plane_data[]`、`plane_stride[]`、
-`plane_size[]`，不要自己用 width 和 pixel format 猜 stride。
+`row_stride_bytes` 是相鄰兩列起點之間的 byte 距離。Application 應使用此欄位
+逐列存取影像，不要自行用 width 和 pixel format 猜 stride。`data`、
+`data_size` 與 `row_stride_bytes` 都由 SDK 填入。
 
 ### ABI 與 metadata 擴充規則
 
 - `gvfg_handle` 永遠保持 opaque。
 - `gvfg_frame_t` 保持極小，stable release 後凍結。
 - 第一版 API 不做跨版本 struct 相容；DLL、header 與 application 必須整套更新。
-- Layout 使用 `gvfg_get_frame_layout()`。
+- 現行 native formats 都是 single-plane packed buffers；row stride 直接放在
+  `gvfg_frame_t`。
+- 未來真的加入 multi-plane format 時，再新增獨立 plane-layout API。
 - 未來 color metadata 使用獨立的 `gvfg_get_frame_color_info()`。
 - 未來 timestamp metadata 使用獨立的 `gvfg_get_frame_timestamp_info()`。
 - Metadata 類型真的大量增加時，才考慮 side data。
 - 只有 major version 可以破壞既有 ABI。
 
-板子只提供兩種 native capture layout：
+板子只提供兩種 tightly packed native capture layout：
 
-- `YUY2`：one plane，`plane_stride[0] = width * 2`。
-- `Y210`：one plane，`plane_stride[0] = width * 4`。
+- `YUY2`：`row_stride_bytes = width * 2`。
+- `Y210`：`row_stride_bytes = width * 4`。
 
 其他 native input format 不在 SDK 支援範圍，會回傳 `GVFG_ENOTSUP`。
 
@@ -286,22 +271,6 @@ gvfg_status_t gvfg_read_frame(gvfg_handle handle,
 - `GVFG_ETIMEOUT`：timeout 前沒有 frame。
 - `GVFG_ESTATE`：capture 尚未 running，或上一個 frame 還沒 release。
 
-### `gvfg_get_frame_layout`
-
-```c
-gvfg_status_t gvfg_get_frame_layout(const gvfg_frame_t *frame,
-                                    gvfg_frame_layout_t *out_layout);
-```
-
-回傳 `gvfg_read_frame()` 取得 frame 的 per-plane layout。
-
-```c
-gvfg_frame_layout_t layout = {};
-gvfg_get_frame_layout(&frame, &layout);
-```
-
-回傳的 `plane_data[]` pointers 只在 `gvfg_release_frame()` 前有效。
-
 ### `gvfg_convert_create_frame` / `gvfg_convert_destroy_frame`
 
 ```c
@@ -341,7 +310,9 @@ if (gvfg_read_frame(h, &frame, 1000) == GVFG_OK) {
         const void *data = NULL;
         uint64_t size = 0;
         gvfg_convert_get_buffer(image, &data, &size);
-        /* data contains RGB48 rows; query layout for row_bytes. */
+        gvfg_convert_frame_desc_t actual = {};
+        gvfg_convert_get_frame_desc(image, &actual);
+        /* data contains RGB48 rows using actual.row_bytes. */
     }
 
     gvfg_convert_destroy_frame(image);
@@ -349,7 +320,7 @@ if (gvfg_read_frame(h, &frame, 1000) == GVFG_OK) {
 }
 ```
 
-### `gvfg_convert_get_frame_desc` / `gvfg_convert_get_buffer` / `gvfg_convert_get_layout`
+### `gvfg_convert_get_frame_desc` / `gvfg_convert_get_buffer`
 
 ```c
 gvfg_status_t gvfg_convert_get_frame_desc(gvfg_convert_frame frame,
@@ -357,12 +328,11 @@ gvfg_status_t gvfg_convert_get_frame_desc(gvfg_convert_frame frame,
 gvfg_status_t gvfg_convert_get_buffer(gvfg_convert_frame frame,
                                       const void **out_data,
                                       uint64_t *out_size);
-gvfg_status_t gvfg_convert_get_layout(gvfg_convert_frame frame,
-                                      gvfg_frame_layout_t *out_layout);
 ```
 
 在 `gvfg_convert_frame_from_capture()` 後，用這些 API 取得 converted image
-buffer、metadata 和 row stride。
+buffer；width、height、format、`row_bytes` 與 data size 由 frame descriptor
+提供。
 
 ### `gvfg_release_frame`
 

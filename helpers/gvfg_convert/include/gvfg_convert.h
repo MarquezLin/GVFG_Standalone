@@ -62,10 +62,6 @@ GVFG_CONVERT_API gvfg_status_t gvfg_convert_get_buffer(
     _Out_ const void **out_data,
     _Out_ uint64_t *out_size);
 
-GVFG_CONVERT_API gvfg_status_t gvfg_convert_get_layout(
-    _In_ gvfg_convert_frame frame,
-    _Out_ gvfg_frame_layout_t *out_layout);
-
 GVFG_CONVERT_API const char *gvfg_convert_strerror(
     _In_ gvfg_status_t status);
 

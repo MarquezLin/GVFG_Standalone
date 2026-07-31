@@ -742,6 +742,7 @@ void MainWindow::captureReadLoop()
                 previewFrame.data_size = frame.data_size;
                 previewFrame.width = frame.width;
                 previewFrame.height = frame.height;
+                previewFrame.row_bytes = frame.row_stride_bytes;
                 previewFrame.bit_depth = frame.bit_depth;
                 previewFrame.frame_id = frame.frame_id;
 
@@ -749,29 +750,13 @@ void MainWindow::captureReadLoop()
                 {
                 case GVFG_PIXFMT_YUY2:
                     previewFrame.pixel_format = GVFG_PREVIEW_PIXFMT_YUY2;
-                    previewFrame.row_bytes = frame.width * 2;
                     break;
                 case GVFG_PIXFMT_Y210:
                     previewFrame.pixel_format = GVFG_PREVIEW_PIXFMT_Y210;
-                    previewFrame.row_bytes = frame.width * 4;
                     break;
                 default:
                     previewFrame.pixel_format = 0;
                     break;
-                }
-
-                gvfg_frame_layout_t layout{};
-                if (gvfg_get_frame_layout(&frame, &layout) == GVFG_OK &&
-                    layout.plane_count > 0 &&
-                    layout.plane_data[0] &&
-                    layout.plane_stride[0] > 0 &&
-                    layout.plane_size[0] >=
-                        static_cast<uint64_t>(layout.plane_stride[0]) *
-                            static_cast<uint64_t>(frame.height))
-                {
-                    previewFrame.data = layout.plane_data[0];
-                    previewFrame.data_size = layout.plane_size[0];
-                    previewFrame.row_bytes = layout.plane_stride[0];
                 }
 
                 const gvfg_preview_status_t previewStatus =

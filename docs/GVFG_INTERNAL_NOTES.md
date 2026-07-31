@@ -201,17 +201,16 @@ Released   : ready=false, in_use=false
 
 - `gvfg_read_frame()` 回傳一個 SDK-owned frame buffer。
 - `frame.data` 在 `gvfg_release_frame()` 前有效。
-- `gvfg_frame_t` 要保持 ABI-stable；不要為了 layout 直接 append fields。
+- `frame.row_stride_bytes` 是相鄰兩列起點之間的 byte 距離；consumer 不應自行
+  由 width/format 猜 stride。
+- 現行 YUY2/Y210 都是 single-plane packed buffers，因此不公開 plane-layout API。
+- 未來真的加入 multi-plane format 時，再新增獨立的 plane-layout query。
 - `gvfg_handle` 永遠 opaque；stable release 後 `gvfg_frame_t` 凍結，只有 major
   version 可以破壞既有 ABI。
-- `gvfg_get_frame_layout()` 回傳 SDK-filled layout metadata：`plane_data`、
-  `plane_stride`、`plane_size`。目前 PCIES2MM backend 使用
-  width/height/format 推導 tightly packed layout。
 - 未來 color/timestamp metadata 應新增獨立的 query output，例如
   `gvfg_get_frame_color_info()` 與 `gvfg_get_frame_timestamp_info()`。不要預先在每個
   struct 放大型 reserved array；等 metadata 類型真的很多再考慮 side data。
-- `gvfg_preview.dll` 應優先吃 `gvfg_get_frame_layout()`；layout query 不可用時才
-  fallback 到 width-derived stride。
+- `gvfg_preview.dll` 直接使用 capture frame 的 `row_stride_bytes`。
 - `gvfg_convert.dll` 負責 explicit snapshot/export conversion。不要把 color
   conversion、image export、GPU conversion policy 搬進 `gvfg.dll`。
 - 同一個 handle 一次最多 hold 一個 frame。

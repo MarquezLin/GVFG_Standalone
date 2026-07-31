@@ -26,21 +26,15 @@ namespace
 {
 #if INTPTR_MAX == INT64_MAX
     static_assert(std::is_standard_layout_v<gvfg_frame_t>);
-    static_assert(sizeof(gvfg_frame_t) == 40, "gvfg_frame_t x64 ABI must remain frozen");
+    static_assert(sizeof(gvfg_frame_t) == 48, "gvfg_frame_t x64 ABI must remain frozen");
     static_assert(offsetof(gvfg_frame_t, data) == 0);
     static_assert(offsetof(gvfg_frame_t, data_size) == 8);
     static_assert(offsetof(gvfg_frame_t, width) == 16);
     static_assert(offsetof(gvfg_frame_t, height) == 20);
-    static_assert(offsetof(gvfg_frame_t, pixel_format) == 24);
-    static_assert(offsetof(gvfg_frame_t, bit_depth) == 28);
-    static_assert(offsetof(gvfg_frame_t, frame_id) == 32);
-
-    static_assert(std::is_standard_layout_v<gvfg_frame_layout_t>);
-    static_assert(sizeof(gvfg_frame_layout_t) == 32, "gvfg_frame_layout_t x64 ABI must remain frozen");
-    static_assert(offsetof(gvfg_frame_layout_t, plane_count) == 0);
-    static_assert(offsetof(gvfg_frame_layout_t, plane_data) == 8);
-    static_assert(offsetof(gvfg_frame_layout_t, plane_stride) == 16);
-    static_assert(offsetof(gvfg_frame_layout_t, plane_size) == 24);
+    static_assert(offsetof(gvfg_frame_t, row_stride_bytes) == 24);
+    static_assert(offsetof(gvfg_frame_t, pixel_format) == 28);
+    static_assert(offsetof(gvfg_frame_t, bit_depth) == 32);
+    static_assert(offsetof(gvfg_frame_t, frame_id) == 40);
 #endif
 
     void copy_cstr(char *dst, size_t dstSize, const char *src)
@@ -173,37 +167,24 @@ namespace
         return true;
     }
 
-    gvfg_status_t populate_frame_layout(const gvfg_frame_t &frame, gvfg_frame_layout_t &layout)
+    gvfg_status_t native_row_stride_bytes(uint32_t width,
+                                          pcies2mm_pixel_format_t pixelFormat,
+                                          int &outStride)
     {
-        layout.plane_count = 0;
-        std::memset(layout.plane_data, 0, sizeof(layout.plane_data));
-        std::memset(layout.plane_stride, 0, sizeof(layout.plane_stride));
-        std::memset(layout.plane_size, 0, sizeof(layout.plane_size));
-        if (!frame.data || frame.data_size == 0 || frame.width <= 0 || frame.height <= 0)
-            return GVFG_EINVAL;
-
-        const uint64_t width = static_cast<uint64_t>(frame.width);
-        const uint64_t height = static_cast<uint64_t>(frame.height);
         uint64_t bytesPerPixel = 0;
-        if (frame.pixel_format == GVFG_PIXFMT_YUY2)
+        if (pixelFormat == PCIES2MM_PIXFMT_YUY2)
             bytesPerPixel = 2;
-        else if (frame.pixel_format == GVFG_PIXFMT_Y210)
+        else if (pixelFormat == PCIES2MM_PIXFMT_Y210)
             bytesPerPixel = 4;
         else
             return GVFG_ENOTSUP;
 
         uint64_t row = 0;
-        uint64_t size = 0;
-        if (!checked_mul_u64(width, bytesPerPixel, row) ||
-            !checked_mul_u64(row, height, size) ||
-            row > static_cast<uint64_t>(INT_MAX) ||
-            size > frame.data_size)
+        if (!checked_mul_u64(static_cast<uint64_t>(width), bytesPerPixel, row) ||
+            row > static_cast<uint64_t>(INT_MAX))
             return GVFG_EINVAL;
 
-        layout.plane_count = 1;
-        layout.plane_data[0] = frame.data;
-        layout.plane_stride[0] = static_cast<int>(row);
-        layout.plane_size[0] = size;
+        outStride = static_cast<int>(row);
         return GVFG_OK;
     }
 
@@ -469,6 +450,16 @@ struct gvfg_handle_t
         out.data_size = static_cast<uint64_t>(frame.data_size_bytes);
         out.width = static_cast<int>(frame.width);
         out.height = static_cast<int>(frame.height);
+        const gvfg_status_t strideStatus =
+            native_row_stride_bytes(frame.width, frame.pixel_format, out.row_stride_bytes);
+        if (strideStatus != GVFG_OK)
+        {
+            backend->release_frame(frame);
+            std::lock_guard<std::mutex> lock(frameMutex);
+            heldBackendFrame = {};
+            frameHeld = false;
+            return strideStatus;
+        }
         out.pixel_format = to_gvfg_pixel_format(frame.pixel_format);
         out.bit_depth = static_cast<int>(frame.bit_depth);
         out.frame_id = frame.frame_id;
@@ -487,10 +478,17 @@ struct gvfg_handle_t
             if (!frameHeld)
                 return GVFG_ESTATE;
 
+            int expectedStride = 0;
+            if (native_row_stride_bytes(heldBackendFrame.width,
+                                        heldBackendFrame.pixel_format,
+                                        expectedStride) != GVFG_OK)
+                return GVFG_ESTATE;
+
             if (frameToken.data != heldBackendFrame.data ||
                 frameToken.data_size != static_cast<uint64_t>(heldBackendFrame.data_size_bytes) ||
                 frameToken.width != static_cast<int>(heldBackendFrame.width) ||
                 frameToken.height != static_cast<int>(heldBackendFrame.height) ||
+                frameToken.row_stride_bytes != expectedStride ||
                 frameToken.pixel_format != to_gvfg_pixel_format(heldBackendFrame.pixel_format) ||
                 frameToken.bit_depth != static_cast<int>(heldBackendFrame.bit_depth) ||
                 frameToken.frame_id != heldBackendFrame.frame_id)
@@ -770,20 +768,6 @@ extern "C"
         if (!handle || !out_frame)
             return GVFG_EINVAL;
         return handle->readFrame(*out_frame, timeout_ms);
-    }
-
-    gvfg_status_t gvfg_get_frame_layout(const gvfg_frame_t *frame,
-                                        gvfg_frame_layout_t *out_layout)
-    {
-        if (!frame || !out_layout)
-            return GVFG_EINVAL;
-        gvfg_frame_layout_t layout{};
-        const gvfg_status_t status = populate_frame_layout(*frame, layout);
-        if (status != GVFG_OK)
-            return status;
-
-        *out_layout = layout;
-        return GVFG_OK;
     }
 
     gvfg_status_t gvfg_release_frame(gvfg_handle handle, const gvfg_frame_t *frame)
