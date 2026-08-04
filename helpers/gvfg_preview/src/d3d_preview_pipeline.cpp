@@ -18,13 +18,6 @@ static void d3d_preview_log_debug(const char *message)
     OutputDebugStringA(message ? message : "");
 }
 
-static inline uint16_t normalize_y210_word_for_upload(uint16_t v)
-{
-    // Y210 stores each 10-bit component left-aligned in a 16-bit WORD.
-    // Bits [15:6] are valid, bits [5:0] are padding.
-    return static_cast<uint16_t>((v >> 6) & 0x03FFu);
-}
-
 static const char *ss_dxgi_format_name(DXGI_FORMAT fmt)
 {
     switch (fmt)
@@ -57,8 +50,6 @@ VSOut main(VSIn i){
   VSOut o; o.pos=float4(i.pos,0,1); o.uv=i.uv; return o;
 }
 )";
-
-
 
 // YUY2 4:2:2 packed input.
 // Each upload texture texel stores two pixels as R=Y0, G=U, B=Y1, A=V.
@@ -170,11 +161,16 @@ float4 main(float4 pos:SV_Position, float2 uv:TEXCOORD0) : SV_Target
 }
 )";
 
-// Y210 4:2:2 packed input with each 10-bit component stored in a 16-bit word.
-// Each upload texture texel stores two pixels as R=Y0, G=U, B=Y1, A=V.
+// Raw FPGA Y210 payload with each 10-bit component left-aligned in a 16-bit word.
+// Each upload texture texel stores two pixels as R=Y0, G=V, B=Y1, A=U.
+// The shader performs the 10-bit normalization and U/V reorder.
 // texture width = ceil(w/2), format = R16G16B16A16_UINT
 static const char *g_ps_y210 = R"(
 Texture2D<uint4> texP : register(t0);
+
+// true: interpret the raw chroma words as Y0,V,Y1,U.
+// false: interpret them as standard Y210 Y0,U,Y1,V.
+static const bool kSwapUV = true;
 
 cbuffer ProcAmp : register(b0)
 {
@@ -231,7 +227,7 @@ float loadY(int x, int y)
     x = clamp(x, 0, (int)width - 1);
     y = clamp(y, 0, (int)height - 1);
     uint4 p = texP.Load(int3(x >> 1, y, 0));
-    uint yy = ((x & 1) != 0) ? p.b : p.r;
+    uint yy = (((x & 1) != 0) ? p.b : p.r) >> 6;
     return (float)(yy & 1023) / 1023.0;
 }
 
@@ -240,8 +236,21 @@ float2 loadUV01(int x, int y)
     x = clamp(x, 0, (int)width - 1);
     y = clamp(y, 0, (int)height - 1);
     uint4 p = texP.Load(int3(x >> 1, y, 0));
-    float u = (float)(p.g & 1023) / 1023.0;
-    float v = (float)(p.a & 1023) / 1023.0;
+    uint chroma1 = (p.g >> 6) & 1023;
+    uint chroma2 = (p.a >> 6) & 1023;
+    uint u10 = kSwapUV ? chroma2 : chroma1;
+    uint v10 = kSwapUV ? chroma1 : chroma2;
+    // An odd-width tail has no complete second chroma word; match the old
+    // upload behavior by reusing the available chroma component.
+    if (((width & 1) != 0) && x == (int)width - 1)
+    {
+        if (kSwapUV)
+            u10 = v10;
+        else
+            v10 = u10;
+    }
+    float u = (float)u10 / 1023.0;
+    float v = (float)v10 / 1023.0;
     return float2(u, v);
 }
 
@@ -267,7 +276,6 @@ float4 main(float4 pos:SV_Position, float2 uv:TEXCOORD0) : SV_Target
     return float4(rgb, 1.0);
 }
 )";
-
 
 static const char *g_ps_fp16_to_rgba8 = R"(
 Texture2D<float4> tex0 : register(t0);
@@ -322,7 +330,7 @@ float4 main(PSIn i) : SV_Target
 )";
 
 bool D3DPreviewPipeline::initialize(ID3D11Device *d3d,
-                                     ID3D11DeviceContext *ctx)
+                                    ID3D11DeviceContext *ctx)
 {
     d3d_ = d3d;
     ctx_ = ctx;
@@ -655,31 +663,17 @@ bool D3DPreviewPipeline::upload_y210_frame(const uint8_t *data, int src_stride, 
     if (FAILED(ctx_->Map(upload_y210_packed_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &m)))
         return false;
 
-    const size_t rowBytes = (size_t)frame_w * 4u;
+    const size_t sourceRowBytes = (size_t)frame_w * 4u;
+    const size_t textureRowBytes = (size_t)w2 * 8u;
     for (int row = 0; row < frame_h; ++row)
     {
         const uint8_t *srcRow = data + (size_t)row * (size_t)effectiveStride;
         uint8_t *dstRow = static_cast<uint8_t *>(m.pData) + (size_t)row * (size_t)m.RowPitch;
-        const uint16_t *src16 = reinterpret_cast<const uint16_t *>(srcRow);
-        uint16_t *dst16 = reinterpret_cast<uint16_t *>(dstRow);
-        const int rowWords = (int)(rowBytes / 2u);
-
-        for (int x = 0; x < w2; ++x)
-        {
-            const int srcX = x * 4;
-            // Standard Y210 is Y0, Cb(U), Y1, Cr(V). The current FPGA DMA
-            // payload arrives as Y0, Cr(V), Y1, Cb(U), so normalize it here.
-            const uint16_t Y0 = normalize_y210_word_for_upload(src16[srcX + 0]);
-            const uint16_t V = normalize_y210_word_for_upload(src16[srcX + 1]);
-            const uint16_t Y1 = (srcX + 2 < rowWords) ? normalize_y210_word_for_upload(src16[srcX + 2]) : Y0;
-            const uint16_t U = (srcX + 3 < rowWords) ? normalize_y210_word_for_upload(src16[srcX + 3]) : V;
-
-            uint16_t *d4 = dst16 + x * 4;
-            d4[0] = Y0;
-            d4[1] = U;
-            d4[2] = Y1;
-            d4[3] = V;
-        }
+        // Keep the FPGA payload unchanged. The pixel shader performs the
+        // left-aligned 10-bit normalization and U/V reorder on the GPU.
+        if (textureRowBytes > sourceRowBytes)
+            std::memset(dstRow, 0, textureRowBytes);
+        std::memcpy(dstRow, srcRow, sourceRowBytes);
     }
 
     ctx_->Unmap(upload_y210_packed_.Get(), 0);
@@ -1149,4 +1143,3 @@ DXGI_FORMAT D3DPreviewPipeline::linear_fp16_texture_format() const
     rt_fp16_->GetDesc(&d);
     return d.Format;
 }
-

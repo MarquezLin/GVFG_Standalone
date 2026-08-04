@@ -563,6 +563,16 @@ namespace gvfg::internal
         return true;
     }
 
+    pcies2mm_status_t PcieS2mmCaptureSession::debug_read_register(uint32_t offset,
+                                                                  uint32_t &outValue) const
+    {
+        if (!opened_ || device_ == INVALID_HANDLE_VALUE)
+            return PCIES2MM_ESTATE;
+        if ((offset & 0x3u) != 0)
+            return PCIES2MM_EINVAL;
+        return read_reg(offset, outValue) ? PCIES2MM_OK : fail(PCIES2MM_EIO, "debug_read_register");
+    }
+
     bool PcieS2mmCaptureSession::write_reg(uint32_t offset, uint32_t value) const
     {
         PCIES2MM_REG_ACCESS reg{};
@@ -577,6 +587,16 @@ namespace gvfg::internal
                                0,
                                &bytesReturned,
                                nullptr) != FALSE;
+    }
+
+    pcies2mm_status_t PcieS2mmCaptureSession::debug_write_register(uint32_t offset,
+                                                                   uint32_t value) const
+    {
+        if (!opened_ || device_ == INVALID_HANDLE_VALUE)
+            return PCIES2MM_ESTATE;
+        if ((offset & 0x3u) != 0)
+            return PCIES2MM_EINVAL;
+        return write_reg(offset, value) ? PCIES2MM_OK : fail(PCIES2MM_EIO, "debug_write_register");
     }
 
     bool PcieS2mmCaptureSession::register_event(uint32_t channelIndex, uint32_t eventType, HANDLE eventHandle)

@@ -41,6 +41,8 @@ namespace gvfg::internal
         void get_debug_stats(pcies2mm_stream_stats_t &outStats,
                              uint64_t &outWaitTimeouts,
                              pcies2mm_debug_state_t &outDebugState) const;
+        pcies2mm_status_t debug_read_register(uint32_t offset, uint32_t &outValue) const;
+        pcies2mm_status_t debug_write_register(uint32_t offset, uint32_t value) const;
 
     private:
         pcies2mm_status_t open_device(const PcieS2mmDevice &device);

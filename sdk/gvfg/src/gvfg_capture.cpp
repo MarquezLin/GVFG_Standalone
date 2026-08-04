@@ -1,8 +1,6 @@
 #include "gvfg_capture.h"
 
-#if GVFG_ENABLE_INTERNAL_DEBUG_API
 #include "gvfg_debug.h"
-#endif
 #include "pcies2mm_capture_session.h"
 
 #include <algorithm>
@@ -569,7 +567,6 @@ struct gvfg_handle_t
         return GVFG_OK;
     }
 
-#if GVFG_ENABLE_INTERNAL_DEBUG_API
     gvfg_status_t getDebugBackendStats(gvfg_debug_backend_stats_t &out)
     {
         std::memset(&out, 0, sizeof(out));
@@ -620,6 +617,20 @@ struct gvfg_handle_t
         return GVFG_OK;
     }
 
+    gvfg_status_t debugReadRegister(uint32_t offset, uint32_t &outValue)
+    {
+        if (!backend)
+            return GVFG_ESTATE;
+        return map_status(backend->debug_read_register(offset, outValue));
+    }
+
+    gvfg_status_t debugWriteRegister(uint32_t offset, uint32_t value)
+    {
+        if (!backend)
+            return GVFG_ESTATE;
+        return map_status(backend->debug_write_register(offset, value));
+    }
+
     gvfg_status_t getLastErrorDetail(char *outMessage, uint32_t outMessageSize)
     {
         if (!outMessage || outMessageSize == 0)
@@ -631,7 +642,6 @@ struct gvfg_handle_t
             copy_cstr(outMessage, outMessageSize, backend ? backend->last_error() : "");
         return GVFG_OK;
     }
-#endif
 
     void recordError(const char *msg)
     {
@@ -845,7 +855,6 @@ extern "C"
         }
     }
 
-#if GVFG_ENABLE_INTERNAL_DEBUG_API
     gvfg_status_t gvfg_debug_get_backend_stats(gvfg_handle handle,
                                                gvfg_debug_backend_stats_t *out_stats)
     {
@@ -869,7 +878,24 @@ extern "C"
             return GVFG_EINVAL;
         return handle->getLastErrorDetail(out_message, out_message_size);
     }
-#endif
+
+    gvfg_status_t gvfg_debug_read_register(gvfg_handle handle,
+                                           uint32_t offset,
+                                           uint32_t *out_value)
+    {
+        if (!handle || !out_value || (offset & 0x3u) != 0)
+            return GVFG_EINVAL;
+        return handle->debugReadRegister(offset, *out_value);
+    }
+
+    gvfg_status_t gvfg_debug_write_register(gvfg_handle handle,
+                                            uint32_t offset,
+                                            uint32_t value)
+    {
+        if (!handle || (offset & 0x3u) != 0)
+            return GVFG_EINVAL;
+        return handle->debugWriteRegister(offset, value);
+    }
 }
 
 

@@ -72,6 +72,22 @@ GVFG_API gvfg_status_t gvfg_debug_get_last_error_detail(
     _Out_writes_to_opt_(out_message_size, out_message_size) char *out_message,
     _In_ uint32_t out_message_size);
 
+/*
+ * Read or write one 32-bit BAR-relative hardware register.
+ *
+ * The offset must be 4-byte aligned. Register writes can disrupt active DMA,
+ * interrupt handling, or video capture and are intended for internal tools.
+ */
+GVFG_API gvfg_status_t gvfg_debug_read_register(
+    _In_ gvfg_handle handle,
+    _In_ uint32_t offset,
+    _Out_ uint32_t *out_value);
+
+GVFG_API gvfg_status_t gvfg_debug_write_register(
+    _In_ gvfg_handle handle,
+    _In_ uint32_t offset,
+    _In_ uint32_t value);
+
 #ifdef __cplusplus
 }
 #endif
