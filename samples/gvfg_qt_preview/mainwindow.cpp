@@ -17,6 +17,8 @@
 #include <QStringList>
 #include <QTimer>
 
+#include <chrono>
+
 namespace
 {
     QString logFilePrefix()
@@ -708,8 +710,14 @@ void MainWindow::appendLog(const QString &message)
 
 void MainWindow::captureReadLoop()
 {
+    constexpr uint64_t kPreviewTimingWarmupFrames = 30;
+    constexpr uint64_t kPreviewTimingSampleFrames = 300;
+
     uint32_t consecutiveTimeouts = 0;
     bool captureStalledLogged = false;
+    uint64_t previewTimingWarmupCount = 0;
+    uint64_t previewTimingSampleCount = 0;
+    double previewTimingTotalMs = 0.0;
 
     while (!captureStop_.load(std::memory_order_acquire))
     {
@@ -759,8 +767,12 @@ void MainWindow::captureReadLoop()
                     break;
                 }
 
+                const auto previewStart = std::chrono::steady_clock::now();
                 const gvfg_preview_status_t previewStatus =
                     gvfg_preview_render_frame(previewHandle_, &previewFrame);
+                const auto previewEnd = std::chrono::steady_clock::now();
+                const double previewElapsedMs =
+                    std::chrono::duration<double, std::milli>(previewEnd - previewStart).count();
                 if (previewStatus != GVFG_PREVIEW_OK)
                 {
                     const uint64_t failures = ++previewFailureCount_;
@@ -772,13 +784,39 @@ void MainWindow::captureReadLoop()
                                                                   .arg(QString::fromUtf8(gvfg_preview_strerror(previewStatus)))); }, Qt::QueuedConnection);
                     }
                 }
-                else if (previewFailureCount_ != 0)
+                else
                 {
-                    const uint64_t failures = previewFailureCount_;
-                    previewFailureCount_ = 0;
-                    QMetaObject::invokeMethod(this, [this, failures]()
-                                              { appendLog(QStringLiteral("preview render recovered after %1 failure(s)")
-                                                              .arg(static_cast<qulonglong>(failures))); }, Qt::QueuedConnection);
+                    if (previewFailureCount_ != 0)
+                    {
+                        const uint64_t failures = previewFailureCount_;
+                        previewFailureCount_ = 0;
+                        QMetaObject::invokeMethod(this, [this, failures]()
+                                                  { appendLog(QStringLiteral("preview render recovered after %1 failure(s)")
+                                                                  .arg(static_cast<qulonglong>(failures))); }, Qt::QueuedConnection);
+                    }
+
+                    if (previewTimingWarmupCount < kPreviewTimingWarmupFrames)
+                    {
+                        ++previewTimingWarmupCount;
+                    }
+                    else
+                    {
+                        previewTimingTotalMs += previewElapsedMs;
+                        ++previewTimingSampleCount;
+
+                        if (previewTimingSampleCount >= kPreviewTimingSampleFrames)
+                        {
+                            const double averageMs =
+                                previewTimingTotalMs / static_cast<double>(previewTimingSampleCount);
+                            QMetaObject::invokeMethod(this, [this, averageMs]()
+                                                      { appendLog(QStringLiteral("PERF GPU preview call: avg=%1 ms/frame, samples=%2")
+                                                                      .arg(averageMs, 0, 'f', 3)
+                                                                      .arg(kPreviewTimingSampleFrames)); }, Qt::QueuedConnection);
+
+                            previewTimingSampleCount = 0;
+                            previewTimingTotalMs = 0.0;
+                        }
+                    }
                 }
             }
             gvfg_release_frame(handle_, &frame);
