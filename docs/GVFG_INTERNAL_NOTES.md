@@ -10,19 +10,15 @@ GVFG 目前切成幾個清楚的模組：
 ```text
 sdk/gvfg/
   gvfg.dll
-  capture API, handle lifecycle, pull frame/event bridge, internal debug API
+  capture API, GPU buffer conversion, handle lifecycle, pull frame/event bridge,
+  internal debug API
 
 helpers/gvfg_preview/
   gvfg_preview.dll
   optional display helper; renders gvfg_frame_t after gvfg_read_frame()
 
-helpers/gvfg_convert/
-  gvfg_convert.dll
-  optional snapshot/export helper; converts native capture frames on request
-
 samples/gvfg_qt_preview/
-  gvfg_qt_preview: customer-facing, uses public APIs only
-  gvfg_qt_diagnostic: internal build, additionally uses gvfg_debug.h
+  gvfg_qt_preview: diagnostics are selected at configure time
 ```
 
 從 customer 角度看，core SDK 必須維持 driver-neutral。PCIES2MM、IRQ、DMA counters、
@@ -48,11 +44,11 @@ pcies2mm_reg.h
   FPGA register offsets and bit masks
 
 pcies2mm_video_format.{h,cpp}
-  native YUY2/Y210 layout rules and format-register decoding
+  native YVYU/Y210 layout rules and format-register decoding
 ```
 
 `pcies2mm_ioctl.h` 與 `pcies2mm_reg.h` 都不是 customer public header，不可放進
-SDK customer include package。目前板卡只接受 YUY2 與 Y210；這個 FPGA revision 即使
+SDK customer include package。目前板卡只輸出 YVYU 與 Y210；這個 FPGA revision 即使
 format register 回報 v210，DMA payload 仍由 `pcies2mm_video_format.cpp` 解讀為 Y210。
 上述拆分只分離程式責任，不會增加 capture thread。
 
@@ -70,11 +66,6 @@ flowchart TD
         PreviewPipe["private D3D preview pipeline"]
     end
 
-    subgraph Convert["Optional Convert Helper: gvfg_convert.dll"]
-        ConvertApi["helpers/gvfg_convert/include/gvfg_convert.h"]
-        ConvertPipe["private CPU/GPU conversion path"]
-    end
-
     subgraph SDK["Core SDK: gvfg.dll"]
         CaptureApi["sdk/gvfg/include/gvfg_capture.h"]
         DebugApi["sdk/gvfg/include/gvfg_debug.h\ninternal only"]
@@ -89,13 +80,11 @@ flowchart TD
 
     CustomerApp --> CaptureApi
     CustomerApp -. optional display .-> PreviewApi
-    CustomerApp -. optional snapshot .-> ConvertApi
+    CustomerApp -. GPU buffer conversion .-> CaptureApi
     QtApp --> CaptureApi
     QtApp --> DebugApi
     QtApp --> PreviewApi
     PreviewApi --> PreviewPipe
-    ConvertApi --> ConvertPipe
-    ConvertApi --> CaptureApi
     CaptureApi --> Facade
     DebugApi --> Facade
     Facade --> PcieS2mm
@@ -203,7 +192,7 @@ Released   : ready=false, in_use=false
 - `frame.data` 在 `gvfg_release_frame()` 前有效。
 - `frame.row_stride_bytes` 是相鄰兩列起點之間的 byte 距離；consumer 不應自行
   由 width/format 猜 stride。
-- 現行 YUY2/Y210 都是 single-plane packed buffers，因此不公開 plane-layout API。
+- 現行 YVYU/Y210 都是 single-plane packed buffers，因此不公開 plane-layout API。
 - 未來真的加入 multi-plane format 時，再新增獨立的 plane-layout query。
 - `gvfg_handle` 永遠 opaque；stable release 後 `gvfg_frame_t` 凍結，只有 major
   version 可以破壞既有 ABI。
@@ -211,8 +200,8 @@ Released   : ready=false, in_use=false
   `gvfg_get_frame_color_info()` 與 `gvfg_get_frame_timestamp_info()`。不要預先在每個
   struct 放大型 reserved array；等 metadata 類型真的很多再考慮 side data。
 - `gvfg_preview.dll` 直接使用 capture frame 的 `row_stride_bytes`。
-- `gvfg_convert.dll` 負責 explicit snapshot/export conversion。不要把 color
-  conversion、image export、GPU conversion policy 搬進 `gvfg.dll`。
+- `gvfg.dll` 提供 explicit GPU buffer conversion；API 不負責 image export、
+  thread、queue 或 frame ownership policy。
 - 同一個 handle 一次最多 hold 一個 frame。
 - Application 如果 release 後還要用 data，必須自己 copy frame。
 - `gvfg_preview_render_frame()` 是 synchronous，應該在 `gvfg_release_frame()` 前呼叫。
@@ -277,7 +266,6 @@ Customer/demo 可見：
 ```text
 include/gvfg_capture.h
 include/gvfg_preview.h when display helper is used
-include/gvfg_convert.h when snapshot/export conversion is used
 ```
 
 Internal debug only：
@@ -301,13 +289,10 @@ Include：
 ```text
 include/gvfg_capture.h
 include/gvfg_preview.h when the demo shows video
-include/gvfg_convert.h when the demo exports snapshots
 lib/gvfg.lib
 lib/gvfg_preview.lib when the demo shows video
-lib/gvfg_convert.lib when the demo exports snapshots
 bin/gvfg.dll
 bin/gvfg_preview.dll when the demo shows video
-bin/gvfg_convert.dll when the demo exports snapshots
 samples/customer-facing source
 docs/GVFG_CUSTOMER_API.md
 ```
@@ -332,22 +317,19 @@ Include：
 include/gvfg_capture.h
 include/gvfg_debug.h
 include/gvfg_preview.h
-include/gvfg_convert.h
 lib/gvfg.lib
 lib/gvfg_preview.lib
-lib/gvfg_convert.lib
 bin/gvfg.dll
 bin/gvfg_preview.dll
-bin/gvfg_convert.dll
-bin/gvfg_qt_diagnostic.exe
+bin/gvfg_qt_preview.exe
 PDB symbols
 internal debug notes
 ```
 
 ### Full Release Package
 
-Full application release 可以使用 `gvfg.dll`、`gvfg_preview.dll` 和
-`gvfg_convert.dll`，再加上 licensing 與 closed-source application integration。
+Full application release 可以使用 `gvfg.dll` 與 `gvfg_preview.dll`，再加上
+licensing 與 closed-source application integration。
 不要把 full release package 當成 daily driver/FPGA bring-up vehicle。
 
 ## Build
@@ -356,40 +338,28 @@ Top-level CMake 會 build core SDK、helpers 和 optional sample：
 
 ```text
 BUILD_GVFG_SAMPLES=ON
-GVFG_ENABLE_INTERNAL_DEBUG_API=OFF
-BUILD_GVFG_INTERNAL_TOOLS=OFF
-GVFG_PCIES2MM_DEBUG_LOG=OFF
 ```
 
-Customer build 使用 `GVFG_ENABLE_INTERNAL_DEBUG_API=OFF`。此時 `gvfg.dll`
-不 export `gvfg_debug_get_backend_stats()` 或
-`gvfg_debug_get_last_error_detail()`，install tree 也不包含
-`gvfg_debug.h`。
-
-Internal diagnostic build 使用：
+Internal diagnostic build 使用 Debug configuration：
 
 ```text
-BUILD_GVFG_SAMPLES=OFF
-GVFG_ENABLE_INTERNAL_DEBUG_API=ON
-BUILD_GVFG_INTERNAL_TOOLS=ON
+cmake --build build --target gvfg_qt_preview --config Debug
 ```
 
-只有這個 build 會產生 `gvfg_qt_diagnostic.exe` 並安裝
-`gvfg_debug.h`。
+這個 build 仍產生 `gvfg_qt_preview.exe`，但會把 internal diagnostics
+編譯進同一個執行檔。
 
 輸出產物：
 
 ```text
 bin/gvfg.dll
 bin/gvfg_preview.dll
-bin/gvfg_convert.dll
 lib/gvfg.lib
 lib/gvfg_preview.lib
-lib/gvfg_convert.lib
 bin/gvfg_qt_preview.exe
 ```
 
-`GVFG_PCIES2MM_DEBUG_LOG=ON` 會打開 internal backend 的 verbose PCIES2MM flow logging。
+Debug configuration 也會打開 internal backend 的 verbose PCIES2MM flow logging。
 
 ## Draw.io Files
 

@@ -3,9 +3,9 @@
 本文說明客戶端使用的 GVFG capture API，主要 public header 是
 `sdk/gvfg/include/gvfg_capture.h`。
 
-Customer SDK 的 core API 只負責 capture。它不 expose SDK-managed preview、
-driver registers、DMA internals 或 FPGA debug controls。Preview rendering、
-snapshot conversion 這類功能放在 helper DLL，使用者需要時再另外 link。
+Customer SDK 的 core `gvfg.dll` 負責 capture 與 explicit GPU buffer conversion。
+它不 expose SDK-managed preview、driver registers、DMA internals 或 FPGA debug
+controls。Preview rendering 仍由 optional `gvfg_preview.dll` 提供。
 
 Customer 交付內容只包含 public headers 與 public DLL functions。Customer
 sample 只記錄 signal events、API failures、capture stall/recovery 與
@@ -152,48 +152,28 @@ typedef struct
 
 板子只提供兩種 tightly packed native capture layout：
 
-- `YUY2`：`row_stride_bytes = width * 2`。
+- `YVYU`：`row_stride_bytes = width * 2`。
 - `Y210`：`row_stride_bytes = width * 4`。
 
 其他 native input format 不在 SDK 支援範圍，會回傳 `GVFG_ENOTSUP`。
 
-### `gvfg_convert_frame`
+### `gvfg_gpu_output_buffer_t`
 
-Optional `gvfg_convert.dll` 使用的 helper-owned destination frame。
+`gvfg.dll` 的 GPU conversion API 使用 caller-owned destination buffer：
 
 ```c
-typedef struct gvfg_convert_frame_t *gvfg_convert_frame;
-
 typedef struct
 {
-    int width;
-    int height;
-    int pixel_format;
-    int row_bytes;
+    void *data;
     uint64_t data_size;
-} gvfg_convert_frame_desc_t;
+    int row_bytes;
+    int pixel_format;
+} gvfg_gpu_output_buffer_t;
 ```
 
-這個設計接近 Blackmagic-style conversion：application 先建立 destination
-frame，再明確把 source frame convert 進去。Core capture API 仍然回傳
-hardware/native buffer，不會在 `gvfg_read_frame()` 裡偷偷轉格式。
-
-Snapshot 用途可以把 `width`、`height`、`row_bytes` 設成 0，讓 helper 依照
-captured source frame 自動決定大小。
-
-第一版 destination formats：
-
-- `GVFG_CONVERT_FMT_BGRA8`：8-bit BGRA，alpha 255。
-- `GVFG_CONVERT_FMT_RGB48`：16-bit RGB container，適合 10-bit-friendly snapshot。
-- `GVFG_CONVERT_FMT_RGBA64`：16-bit RGBA container，alpha 65535。
-
-第一版 conversions：
-
-- `YUY2 -> BGRA8 / RGB48 / RGBA64`
-- `Y210 -> BGRA8 / RGB48 / RGBA64`
-
-Conversion 使用 BT.709 limited-range YUV to RGB，和 preview path 對齊。其他
-source 或 destination format 會回傳 `GVFG_ENOTSUP`。
+支援 `GVFG_GPU_OUTPUT_BGRA8` 與 packed `GVFG_GPU_OUTPUT_RGB10A2`；兩者皆為
+每像素四 bytes。Core capture API 仍回傳 hardware/native buffer，不會在
+`gvfg_read_frame()` 裡自動轉換。
 
 ### `gvfg_event_type_t`
 
@@ -271,68 +251,30 @@ gvfg_status_t gvfg_read_frame(gvfg_handle handle,
 - `GVFG_ETIMEOUT`：timeout 前沒有 frame。
 - `GVFG_ESTATE`：capture 尚未 running，或上一個 frame 還沒 release。
 
-### `gvfg_convert_create_frame` / `gvfg_convert_destroy_frame`
+### `gvfg_gpu_convert_to_buffer`
 
 ```c
-gvfg_status_t gvfg_convert_create_frame(const gvfg_convert_frame_desc_t *desc,
-                                        gvfg_convert_frame *out_frame);
-gvfg_status_t gvfg_convert_destroy_frame(gvfg_convert_frame frame);
+gvfg_status_t gvfg_gpu_convert_to_buffer(const gvfg_frame_t *source,
+                                         const gvfg_gpu_output_buffer_t *output);
 ```
 
-建立或銷毀 helper-owned destination frame。Caller 主要設定
-`desc.pixel_format`；`width`、`height`、`row_bytes` 可以是 0，讓
-`gvfg_convert_frame_from_capture()` 依照 source frame 自動 configure。
-
-### `gvfg_convert_frame_from_capture`
-
-```c
-gvfg_status_t gvfg_convert_frame_from_capture(const gvfg_frame_t *src,
-                                              gvfg_convert_frame dst_frame);
-```
-
-把 captured native frame 轉進 helper-owned destination frame。這不會改變
-capture output format。
-
-Snapshot buffer flow 範例：
+用 D3D11 shader 同步轉換 captured YVYU/Y210 frame，並 readback 到 caller buffer。
+函式返回前 source 與 output memory 必須保持有效；SDK 不保留兩者的 pointer。
 
 ```c
 #include <gvfg_capture.h>
-#include <gvfg_convert.h>
 
 gvfg_frame_t frame = {};
 if (gvfg_read_frame(h, &frame, 1000) == GVFG_OK) {
-    gvfg_convert_frame_desc_t desc = {};
-    desc.pixel_format = GVFG_CONVERT_FMT_RGB48;
-
-    gvfg_convert_frame image = NULL;
-    if (gvfg_convert_create_frame(&desc, &image) == GVFG_OK &&
-        gvfg_convert_frame_from_capture(&frame, image) == GVFG_OK) {
-        const void *data = NULL;
-        uint64_t size = 0;
-        gvfg_convert_get_buffer(image, &data, &size);
-        gvfg_convert_frame_desc_t actual = {};
-        gvfg_convert_get_frame_desc(image, &actual);
-        /* data contains RGB48 rows using actual.row_bytes. */
-    }
-
-    gvfg_convert_destroy_frame(image);
+    gvfg_gpu_output_buffer_t output = {};
+    output.data = canvas_data;
+    output.data_size = canvas_size;
+    output.row_bytes = frame.width * 4;
+    output.pixel_format = GVFG_GPU_OUTPUT_BGRA8;
+    gvfg_gpu_convert_to_buffer(&frame, &output);
     gvfg_release_frame(h, &frame);
 }
 ```
-
-### `gvfg_convert_get_frame_desc` / `gvfg_convert_get_buffer`
-
-```c
-gvfg_status_t gvfg_convert_get_frame_desc(gvfg_convert_frame frame,
-                                          gvfg_convert_frame_desc_t *out_desc);
-gvfg_status_t gvfg_convert_get_buffer(gvfg_convert_frame frame,
-                                      const void **out_data,
-                                      uint64_t *out_size);
-```
-
-在 `gvfg_convert_frame_from_capture()` 後，用這些 API 取得 converted image
-buffer；width、height、format、`row_bytes` 與 data size 由 frame descriptor
-提供。
 
 ### `gvfg_release_frame`
 

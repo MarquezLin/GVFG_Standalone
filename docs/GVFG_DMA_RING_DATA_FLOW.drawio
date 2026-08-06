@@ -49,7 +49,7 @@
         <mxCell id="select" value="wait_frame() selects newest ready slot&#xa;slot.ready = false&#xa;slot.in_use = true&#xa;out.data = slot.data.data()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14" vertex="1" parent="1">
           <mxGeometry x="430" y="540" width="310" height="120" as="geometry"/>
         </mxCell>
-        <mxCell id="render" value="optional gvfg_preview.dll&#xa;uses frame before release" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14" vertex="1" parent="1">
+        <mxCell id="render" value="optional frame consumers before release&#xa;gvfg_preview_render_frame()&#xa;gvfg_gpu_convert_to_buffer()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14" vertex="1" parent="1">
           <mxGeometry x="820" y="540" width="270" height="90" as="geometry"/>
         </mxCell>
         <mxCell id="appUse" value="app uses frame&#xa;data valid until gvfg_release_frame()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14" vertex="1" parent="1">

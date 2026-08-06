@@ -99,8 +99,8 @@ extern "C"
     typedef enum
     {
         GVFG_PIXFMT_UNKNOWN = 0,
-        GVFG_PIXFMT_YUY2 = 1,
-        GVFG_PIXFMT_Y210 = 2
+        GVFG_PIXFMT_Y210 = 2,
+        GVFG_PIXFMT_YVYU = 3
     } gvfg_pixel_format_t;
 
     typedef enum
@@ -117,12 +117,12 @@ extern "C"
 
     typedef struct
     {
-        int connected;        /* Non-zero while the selected channel has a valid input signal. */
-        int channel;          /* gvfg_channel_t selected when the device was opened. */
-        int width;            /* Signal width in pixels when connected. */
-        int height;           /* Signal height in pixels when connected. */
-        int pixel_format;     /* gvfg_pixel_format_t value for the actual DMA payload. */
-        int bit_depth;        /* Signal bit depth derived from the payload format. */
+        int connected;    /* Non-zero while the selected channel has a valid input signal. */
+        int channel;      /* gvfg_channel_t selected when the device was opened. */
+        int width;        /* Signal width in pixels when connected. */
+        int height;       /* Signal height in pixels when connected. */
+        int pixel_format; /* gvfg_pixel_format_t value for the actual DMA payload. */
+        int bit_depth;    /* Signal bit depth derived from the payload format. */
     } gvfg_signal_status_t;
 
     typedef struct
@@ -133,15 +133,32 @@ extern "C"
 
     typedef struct
     {
-        const void *data;   /* Native frame buffer. Valid until gvfg_release_frame() is called. */
-        uint64_t data_size; /* Total bytes available from data. */
-        int width;          /* Frame width in pixels. */
-        int height;         /* Frame height in pixels. */
+        const void *data;     /* Native frame buffer. Valid until gvfg_release_frame() is called. */
+        uint64_t data_size;   /* Total bytes available from data. */
+        int width;            /* Frame width in pixels. */
+        int height;           /* Frame height in pixels. */
         int row_stride_bytes; /* Byte distance between the starts of adjacent rows. */
-        int pixel_format;   /* gvfg_pixel_format_t value. */
-        int bit_depth;      /* Bits per color channel of the native frame. */
-        uint64_t frame_id;  /* Monotonic identifier within the current gvfg_start()/stop() run. */
+        int pixel_format;     /* gvfg_pixel_format_t value. */
+        int bit_depth;        /* Bits per color channel of the native frame. */
+        uint64_t frame_id;    /* Monotonic identifier within the current gvfg_start()/stop() run. */
     } gvfg_frame_t;
+
+    /* Packed RGB formats produced by gvfg_gpu_convert_to_buffer(). */
+    typedef enum
+    {
+        /* DXGI-compatible B8G8R8A8_UNORM byte layout, alpha is 255. */
+        GVFG_GPU_OUTPUT_BGRA8 = 1,
+        /* DXGI-compatible R10G10B10A2_UNORM packed uint32 layout, alpha is 3. */
+        GVFG_GPU_OUTPUT_RGB10A2 = 2
+    } gvfg_gpu_output_format_t;
+
+    typedef struct
+    {
+        void *data;         /* Caller-owned destination memory. */
+        uint64_t data_size; /* Bytes available from data. */
+        int row_bytes;      /* Destination stride; must be at least width * 4. */
+        int pixel_format;   /* gvfg_gpu_output_format_t. */
+    } gvfg_gpu_output_buffer_t;
 
     typedef enum
     {
@@ -287,6 +304,22 @@ extern "C"
     GVFG_API gvfg_status_t gvfg_release_frame(
         _In_ gvfg_handle handle,
         _In_ const gvfg_frame_t *frame);
+
+    /*
+     * Convert a captured YVYU or Y210 frame with the GPU and copy the packed
+     * RGB result into caller-owned memory.
+     *
+     * This call is synchronous. The source frame and destination buffer must
+     * remain valid until it returns; the SDK retains neither pointer. A frame
+     * returned by gvfg_read_frame() must therefore be converted before
+     * gvfg_release_frame().
+     *
+     * BGRA8 and RGB10A2 both require at least width * 4 bytes per row and
+     * output->data_size of at least output->row_bytes * height bytes.
+     */
+    GVFG_API gvfg_status_t gvfg_gpu_convert_to_buffer(
+        _In_ const gvfg_frame_t *source,
+        _In_ const gvfg_gpu_output_buffer_t *output);
 
     /*
      * Poll one capture event.

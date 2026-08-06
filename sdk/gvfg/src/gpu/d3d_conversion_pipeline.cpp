@@ -1,4 +1,4 @@
-#include "d3d_preview_pipeline.h"
+#include "d3d_conversion_pipeline.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -51,12 +51,12 @@ VSOut main(VSIn i){
 }
 )";
 
-// YUY2 4:2:2 packed input.
+// YVYU 4:2:2 packed input.
 // Each upload texture texel stores two pixels as R=Y0, G=U, B=Y1, A=V.
 //   R=Y0, G=U, B=Y1, A=V
 // texture width = ceil(w/2)
 static const char *g_ps_yuy2 = R"(
-// YUY2 (4:2:2 packed):
+// YVYU (4:2:2 packed):
 // Each texel packs 2 pixels: R=Y0, G=U, B=Y1, A=V
 // texture width = ceil(w/2)
 Texture2D<uint4> texP : register(t0);
@@ -132,8 +132,8 @@ float2 loadUV01(int x, int y)
     x = clamp(x, 0, (int)width - 1);
     y = clamp(y, 0, (int)height - 1);
     uint4 p = texP.Load(int3(x >> 1, y, 0));
-    float u = (float)p.g / 255.0;
-    float v = (float)p.a / 255.0;
+    float u = (float)p.a / 255.0;
+    float v = (float)p.g / 255.0;
     return float2(u, v);
 }
 
@@ -469,7 +469,8 @@ bool D3DPreviewPipeline::ensure_rt_and_pipeline(int w, int h)
 {
     const bool hasAllTargets = rt_fp16_ && rtv_fp16_ && srv_fp16_ &&
                                rt_scene_fp16_ && rtv_scene_fp16_ && srv_scene_fp16_ &&
-                               rt_rgba_ && rtv_rgba_ && srv_rgba_;
+                               rt_rgba_ && rtv_rgba_ && srv_rgba_ &&
+                               rt_rgb10_ && rtv_rgb10_;
 
     if (hasAllTargets && rt_w_ == w && rt_h_ == h)
         return true;
@@ -483,6 +484,10 @@ bool D3DPreviewPipeline::ensure_rt_and_pipeline(int w, int h)
     rt_rgba_.Reset();
     rtv_rgba_.Reset();
     srv_rgba_.Reset();
+    rt_rgb10_.Reset();
+    rtv_rgb10_.Reset();
+    readback_bgra8_.Reset();
+    readback_rgb10_.Reset();
 
     // 1) High precision intermediate target
     D3D11_TEXTURE2D_DESC td{};
@@ -522,6 +527,14 @@ bool D3DPreviewPipeline::ensure_rt_and_pipeline(int w, int h)
     if (FAILED(d3d_->CreateRenderTargetView(rt_rgba_.Get(), nullptr, &rtv_rgba_)))
         return false;
     if (FAILED(d3d_->CreateShaderResourceView(rt_rgba_.Get(), nullptr, &srv_rgba_)))
+        return false;
+
+    // 4) Packed 10:10:10:2 RGB target used by the public 10-bit buffer API.
+    td.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+    td.BindFlags = D3D11_BIND_RENDER_TARGET;
+    if (FAILED(d3d_->CreateTexture2D(&td, nullptr, &rt_rgb10_)))
+        return false;
+    if (FAILED(d3d_->CreateRenderTargetView(rt_rgb10_.Get(), nullptr, &rtv_rgb10_)))
         return false;
 
     const bool ok = create_shaders_and_states();
@@ -576,7 +589,120 @@ bool D3DPreviewPipeline::blit_fp16_to_rgba8(int frame_w, int frame_h)
     return true;
 }
 
-bool D3DPreviewPipeline::upload_yuy2_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h)
+bool D3DPreviewPipeline::blit_fp16_to_rgb10a2(int frame_w, int frame_h)
+{
+    if (!rtv_rgb10_ || !srv_scene_fp16_ || !vs_ || !ps_fp16_to_rgba8_ || !ctx_)
+        return false;
+
+    UINT stride = sizeof(float) * 4, offset = 0;
+    ID3D11Buffer *pVB = vb_.Get();
+    ctx_->IASetVertexBuffers(0, 1, &pVB, &stride, &offset);
+    ctx_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ctx_->IASetInputLayout(il_.Get());
+
+    ID3D11RenderTargetView *rtv = rtv_rgb10_.Get();
+    ctx_->OMSetRenderTargets(1, &rtv, nullptr);
+
+    D3D11_VIEWPORT vp{};
+    vp.Width = static_cast<FLOAT>(frame_w);
+    vp.Height = static_cast<FLOAT>(frame_h);
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+    ctx_->RSSetViewports(1, &vp);
+
+    const float clear[4] = {0, 0, 0, 1};
+    ctx_->ClearRenderTargetView(rtv_rgb10_.Get(), clear);
+    ctx_->VSSetShader(vs_.Get(), nullptr, 0);
+    ctx_->PSSetShader(ps_fp16_to_rgba8_.Get(), nullptr, 0);
+
+    ID3D11ShaderResourceView *srvs[1] = {srv_scene_fp16_.Get()};
+    ctx_->PSSetShaderResources(0, 1, srvs);
+    ID3D11SamplerState *ss = samp_.Get();
+    ctx_->PSSetSamplers(0, 1, &ss);
+    ctx_->Draw(6, 0);
+
+    ID3D11ShaderResourceView *nullSrv[1] = {nullptr};
+    ctx_->PSSetShaderResources(0, 1, nullSrv);
+    return true;
+}
+
+bool D3DPreviewPipeline::readback_to_buffer(void *destination,
+                                            uint64_t destination_size,
+                                            int destination_row_bytes,
+                                            DXGI_FORMAT destination_format,
+                                            int frame_w,
+                                            int frame_h)
+{
+    if (!d3d_ || !ctx_ || !destination || frame_w <= 0 || frame_h <= 0)
+        return false;
+
+    ID3D11Texture2D *source = nullptr;
+    ComPtr<ID3D11Texture2D> *staging = nullptr;
+    if (destination_format == DXGI_FORMAT_B8G8R8A8_UNORM)
+    {
+        source = rt_rgba_.Get();
+        staging = &readback_bgra8_;
+    }
+    else if (destination_format == DXGI_FORMAT_R10G10B10A2_UNORM)
+    {
+        source = rt_rgb10_.Get();
+        staging = &readback_rgb10_;
+    }
+    else
+    {
+        return false;
+    }
+
+    const uint64_t minimumRowBytes = static_cast<uint64_t>(frame_w) * 4u;
+    if (!source || destination_row_bytes < minimumRowBytes ||
+        destination_size < static_cast<uint64_t>(destination_row_bytes) * static_cast<uint64_t>(frame_h))
+        return false;
+
+    bool recreate = !*staging;
+    if (*staging)
+    {
+        D3D11_TEXTURE2D_DESC existing{};
+        (*staging)->GetDesc(&existing);
+        recreate = existing.Width != static_cast<UINT>(frame_w) ||
+                   existing.Height != static_cast<UINT>(frame_h) ||
+                   existing.Format != destination_format;
+    }
+    if (recreate)
+    {
+        staging->Reset();
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = static_cast<UINT>(frame_w);
+        desc.Height = static_cast<UINT>(frame_h);
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = destination_format;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (FAILED(d3d_->CreateTexture2D(&desc, nullptr, staging->ReleaseAndGetAddressOf())))
+            return false;
+    }
+
+    ctx_->CopyResource(staging->Get(), source);
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(ctx_->Map(staging->Get(), 0, D3D11_MAP_READ, 0, &mapped)))
+        return false;
+
+    auto *dst = static_cast<uint8_t *>(destination);
+    const size_t copyBytes = static_cast<size_t>(minimumRowBytes);
+    for (int row = 0; row < frame_h; ++row)
+    {
+        const auto *srcRow = static_cast<const uint8_t *>(mapped.pData) +
+                             static_cast<size_t>(row) * mapped.RowPitch;
+        std::memcpy(dst + static_cast<size_t>(row) * static_cast<size_t>(destination_row_bytes),
+                    srcRow,
+                    copyBytes);
+    }
+    ctx_->Unmap(staging->Get(), 0);
+    return true;
+}
+
+bool D3DPreviewPipeline::upload_packed_422_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h)
 {
     if (!d3d_ || !ctx_ || !data || frame_w <= 0 || frame_h <= 0 || src_stride <= 0)
         return false;
@@ -604,7 +730,7 @@ bool D3DPreviewPipeline::upload_yuy2_frame(const uint8_t *data, int src_stride, 
         if ((int)td.Width != w2 || (int)td.Height != frame_h || td.Format != DXGI_FORMAT_R8G8B8A8_UINT)
         {
             upload_yuy2_packed_.Reset();
-            return upload_yuy2_frame(data, src_stride, frame_w, frame_h);
+            return upload_packed_422_frame(data, src_stride, frame_w, frame_h);
         }
     }
 
@@ -687,7 +813,7 @@ bool D3DPreviewPipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, i
 
     ID3D11PixelShader *ps = nullptr;
     ComPtr<ID3D11ShaderResourceView> srv0;
-    if (fmt == GVFG_RENDER_FMT_YUY2)
+    if (fmt == GVFG_RENDER_FMT_YVYU)
     {
         if (!upload_yuy2_packed_)
             return false;
@@ -745,6 +871,7 @@ bool D3DPreviewPipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, i
     cb.hueSin = 0.0f;
     cb.hueCos = 1.0f;
     cb.sharpAmount = 0.0f;
+    cb.pad0 = 0.0f;
 
     if (cs_params_)
     {

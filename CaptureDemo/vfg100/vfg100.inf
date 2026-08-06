@@ -1,0 +1,86 @@
+;
+; vfg100.inf
+;
+
+[Version]
+Signature="$WINDOWS NT$"
+Class=%ClassName%
+ClassGuid={78A1C341-4539-11d3-B88D-00C04FAD5171}
+Provider=%ManufacturerName%
+CatalogFile=vfg100.cat
+DriverVer = 08/05/2026,9.18.54.856
+PnpLockdown = 1
+
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+; ================= Class section =====================
+
+[ClassInstall32]
+Addreg=SampleClassReg
+
+[SampleClassReg]
+HKR,,,0,%ClassName%
+HKR,,Icon,,-5
+
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+vfg100.sys  = 1,,
+;
+
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName%=Standard,NTamd64
+
+[Standard.NTamd64]
+; DisplayName           Section           DeviceId
+; -----------           -------           --------
+%vfg100.DeviceDesc%=    vfg100_Inst,      PCI\VEN_10EE&DEV_7024 
+%vfg100.DeviceDesc%=    vfg100_Inst,      PCI\VEN_1458&DEV_7024
+
+[vfg100_Inst.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+vfg100.sys
+
+[vfg100_Inst.NT.HW]
+AddReg = AddInterruptReg
+
+[AddInterruptReg]
+HKR,"Interrupt Management",,0x00000010
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",,0x00000010
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",MSISupported,0x00010001,1
+HKR,"Interrupt Management\MessageSignaledInterruptPropperties",MessageNumberLimit,0x00010001,24
+
+;-------------- Service installation
+[vfg100_Inst.NT.Services]
+AddService = vfg100,%SPSVCINST_ASSOCSERVICE%,vfg100_Service_Inst
+
+[vfg100_Service_Inst]
+DisplayName    = %vfg100.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\vfg100.sys
+
+[vfg100_Inst.NT.Wdf]
+KmdfService =  vfg100, vfg100_wdfsect
+[vfg100_wdfsect]
+KmdfLibraryVersion = 1.15
+
+[Strings]
+SPSVCINST_ASSOCSERVICE= 0x00000002
+ManufacturerName="GIGABYTE" 
+ClassName="GIGABYTE Video Capture"
+DiskName = "GIGABYTE VFG100 WDF Installation Disk"
+vfg100.DeviceDesc = "GIGABYTE VFG100 WDF"
+vfg100.SVCDESC = "GIGABYTE VFG100 Service"

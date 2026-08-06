@@ -17,8 +17,8 @@ typedef enum pcies2mm_status_t
 typedef enum pcies2mm_pixel_format_t
 {
     PCIES2MM_PIXFMT_UNKNOWN = 0,
-    PCIES2MM_PIXFMT_YUY2 = 1,
-    PCIES2MM_PIXFMT_Y210 = 2
+    PCIES2MM_PIXFMT_Y210 = 2,
+    PCIES2MM_PIXFMT_YVYU = 3
 } pcies2mm_pixel_format_t;
 
 typedef enum pcies2mm_stream_state_t

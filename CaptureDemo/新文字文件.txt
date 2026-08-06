@@ -1,0 +1,1 @@
+pnputil /add-driver ".\pcie_s2mm_driver.inf" /install

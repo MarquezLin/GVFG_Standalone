@@ -74,6 +74,7 @@ private:
     uint64_t previewFailureCount_ = 0;
     QTimer *signalStatusTimer_ = nullptr;
     QString lastSignalStatusText_;
+    QString lastLoggedInputStatus_;
 #if GVFG_INTERNAL_DIAGNOSTICS
     QString lastLoggedBackendError_;
     uint64_t lastDebugDmaErrors_ = 0;

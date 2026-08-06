@@ -24,7 +24,7 @@ namespace
     QString logFilePrefix()
     {
 #if GVFG_INTERNAL_DIAGNOSTICS
-        return QStringLiteral("gvfg_qt_diagnostic");
+        return QStringLiteral("gvfg_qt_preview_debug");
 #else
         return QStringLiteral("gvfg_qt_preview");
 #endif
@@ -332,6 +332,7 @@ void MainWindow::closeDevice()
 
     ui_->statusLabel->setText(QStringLiteral("Idle"));
     lastSignalStatusText_.clear();
+    lastLoggedInputStatus_.clear();
     updateUiState();
 }
 
@@ -442,6 +443,18 @@ void MainWindow::updateSignalStatus()
     gvfg_signal_status_t signal{};
     if (gvfg_get_signal_status(handle_, &signal) != GVFG_OK)
         return;
+
+    const QString inputStatus = signal.connected
+                                    ? QStringLiteral("CH%1 Connected | %2")
+                                          .arg(signal.channel)
+                                          .arg(signalFrameText(signal))
+                                    : QStringLiteral("CH%1 No signal")
+                                          .arg(signal.channel);
+    if (inputStatus != lastLoggedInputStatus_)
+    {
+        appendLog(QStringLiteral("Input status | %1").arg(inputStatus));
+        lastLoggedInputStatus_ = inputStatus;
+    }
 
 #if GVFG_INTERNAL_DIAGNOSTICS
     gvfg_debug_backend_stats_t backendStats{};
@@ -756,8 +769,8 @@ void MainWindow::captureReadLoop()
 
                 switch (frame.pixel_format)
                 {
-                case GVFG_PIXFMT_YUY2:
-                    previewFrame.pixel_format = GVFG_PREVIEW_PIXFMT_YUY2;
+                case GVFG_PIXFMT_YVYU:
+                    previewFrame.pixel_format = GVFG_PREVIEW_PIXFMT_YVYU;
                     break;
                 case GVFG_PIXFMT_Y210:
                     previewFrame.pixel_format = GVFG_PREVIEW_PIXFMT_Y210;
@@ -827,18 +840,31 @@ void MainWindow::captureReadLoop()
         if (st == GVFG_ETIMEOUT)
         {
             ++consecutiveTimeouts;
-            if (!captureStalledLogged &&
-                consecutiveTimeouts >= 10 &&
-                (consecutiveTimeouts % 5) == 0)
+            const bool firstReport = !captureStalledLogged && consecutiveTimeouts >= 10;
+            const bool periodicReport = captureStalledLogged && (consecutiveTimeouts % 50) == 0;
+            if (firstReport || periodicReport)
             {
                 gvfg_signal_status_t signal{};
-                if (gvfg_get_signal_status(handle_, &signal) == GVFG_OK && signal.connected)
-                {
-                    captureStalledLogged = true;
-                    QMetaObject::invokeMethod(this, [this]()
-                                              { appendLog(QStringLiteral("ERROR capture stalled: no frame for at least 2 seconds")); },
-                                              Qt::QueuedConnection);
-                }
+                const gvfg_status_t signalStatus = gvfg_get_signal_status(handle_, &signal);
+                const QString detail = signalStatus != GVFG_OK
+                                           ? QStringLiteral("signal query failed: %1")
+                                                 .arg(QString::fromUtf8(gvfg_strerror(signalStatus)))
+                                           : signal.connected
+                                               ? signalFrameText(signal)
+                                               : QStringLiteral("No signal");
+                captureStalledLogged = true;
+                const uint32_t elapsedMs = consecutiveTimeouts * 200u;
+                QMetaObject::invokeMethod(this, [this, elapsedMs, detail]()
+                                          {
+                                              appendLog(QStringLiteral("ERROR no capture frame for %1 ms | %2")
+                                                            .arg(elapsedMs)
+                                                            .arg(detail));
+#if GVFG_INTERNAL_DIAGNOSTICS
+                                              updateSignalStatus();
+                                              writeDiagnosticSnapshot(lastSignalStatusText_);
+#endif
+                                          },
+                                          Qt::QueuedConnection);
             }
             continue;
         }

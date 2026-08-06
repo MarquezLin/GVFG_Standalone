@@ -1,6 +1,6 @@
 #include "gvfg_preview.h"
 
-#include "d3d_preview_pipeline.h"
+#include "d3d_conversion_pipeline.h"
 
 #include <d3d11_4.h>
 #include <dxgi1_2.h>
@@ -61,15 +61,15 @@ public:
             return false;
         }
 
-        gvfg::internal::gvfg_render_pixfmt_t renderFmt = gvfg::internal::GVFG_RENDER_FMT_YUY2;
+        gvfg::internal::gvfg_render_pixfmt_t renderFmt = gvfg::internal::GVFG_RENDER_FMT_YVYU;
         const uint8_t *base = static_cast<const uint8_t *>(frame.data);
         const int stride = frame.row_bytes;
         bool uploaded = false;
 
         switch (frame.pixel_format)
         {
-        case GVFG_PREVIEW_PIXFMT_YUY2:
-            renderFmt = gvfg::internal::GVFG_RENDER_FMT_YUY2;
+        case GVFG_PREVIEW_PIXFMT_YVYU:
+            renderFmt = gvfg::internal::GVFG_RENDER_FMT_YVYU;
             break;
         case GVFG_PREVIEW_PIXFMT_Y210:
             renderFmt = gvfg::internal::GVFG_RENDER_FMT_Y210;
@@ -80,8 +80,8 @@ public:
 
         switch (frame.pixel_format)
         {
-        case GVFG_PREVIEW_PIXFMT_YUY2:
-            uploaded = pipeline_->upload_yuy2_frame(base, stride, frame.width, frame.height);
+        case GVFG_PREVIEW_PIXFMT_YVYU:
+            uploaded = pipeline_->upload_packed_422_frame(base, stride, frame.width, frame.height);
             break;
         case GVFG_PREVIEW_PIXFMT_Y210:
             uploaded = pipeline_->upload_y210_frame(base, stride, frame.width, frame.height);
@@ -438,7 +438,7 @@ extern "C"
         uint64_t minimumRowBytes = 0;
         switch (frame->pixel_format)
         {
-        case GVFG_PREVIEW_PIXFMT_YUY2:
+        case GVFG_PREVIEW_PIXFMT_YVYU:
             minimumRowBytes = static_cast<uint64_t>(frame->width) * 2u;
             break;
         case GVFG_PREVIEW_PIXFMT_Y210:

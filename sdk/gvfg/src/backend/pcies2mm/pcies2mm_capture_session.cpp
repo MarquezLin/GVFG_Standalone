@@ -71,7 +71,7 @@ namespace
 
     static void trace_log(bool forceDebugOutput, const char *tag, const char *fmt, ...)
     {
-#if GVFG_PCIES2MM_DEBUG_LOG
+#if GVFG_INTERNAL_DIAGNOSTICS
         (void)forceDebugOutput;
 #else
         if (!forceDebugOutput)
@@ -126,7 +126,7 @@ namespace gvfg::internal
         stream_desc_.channel = 0;
         stream_desc_.width = kDefaultWidth;
         stream_desc_.height = kDefaultHeight;
-        stream_desc_.pixel_format = PCIES2MM_PIXFMT_YUY2;
+        stream_desc_.pixel_format = PCIES2MM_PIXFMT_YVYU;
         stream_desc_.buffer_count = kDefaultRingBufferCount;
         stream_bit_depth_ = 8;
         reset_stats(stats_, PCIES2MM_STREAM_STOPPED);
@@ -268,10 +268,10 @@ namespace gvfg::internal
         if (desc.width == 0 || desc.height == 0)
             return PCIES2MM_EINVAL;
 
-        pcies2mm_pixel_format_t fmt = desc.pixel_format == PCIES2MM_PIXFMT_UNKNOWN ? PCIES2MM_PIXFMT_YUY2 : desc.pixel_format;
+        pcies2mm_pixel_format_t fmt = desc.pixel_format == PCIES2MM_PIXFMT_UNKNOWN ? PCIES2MM_PIXFMT_YVYU : desc.pixel_format;
         switch (fmt)
         {
-        case PCIES2MM_PIXFMT_YUY2:
+        case PCIES2MM_PIXFMT_YVYU:
         case PCIES2MM_PIXFMT_Y210:
             break;
         default:
@@ -347,6 +347,18 @@ namespace gvfg::internal
                 close_event_handles();
                 return fail(PCIES2MM_EIO, "enable video capture", err);
             }
+
+            uint32_t dmaEnableReadback = 0;
+            uint32_t videoEnableReadback = 0;
+            const bool dmaReadOk = read_reg(video_base() + VIDEO_DMA_EN_OFFSET, dmaEnableReadback);
+            const bool videoReadOk = read_reg(video_base() + VIDEO_EN_OFFSET, videoEnableReadback);
+            PCIES2MM_LOG("capture enable: dma_write=%d video_write=%d dma_read=%s0x%08X video_read=%s0x%08X",
+                         dmaEnableOk ? 1 : 0,
+                         videoEnableOk ? 1 : 0,
+                         dmaReadOk ? "" : "FAILED/",
+                         dmaEnableReadback,
+                         videoReadOk ? "" : "FAILED/",
+                         videoEnableReadback);
         }
 
         running_ = true;
@@ -724,7 +736,15 @@ namespace gvfg::internal
     void PcieS2mmCaptureSession::capture_thread_proc()
     {
         const uint32_t channel = active_channel();
-        write_reg(INTERRUPT_BASE + IRQ_MASK_W1S_OFFSET, video_irq_mask_bit());
+        const uint32_t irqBit = video_irq_mask_bit();
+        const bool irqMaskWriteOk = write_reg(INTERRUPT_BASE + IRQ_MASK_W1S_OFFSET, irqBit);
+        uint32_t irqMaskReadback = 0;
+        const bool irqMaskReadOk = read_reg(INTERRUPT_BASE + IRQ_MASK_STATUS_OFFSET, irqMaskReadback);
+        PCIES2MM_LOG("capture wait start: irq_bit=0x%08X mask_write=%d mask_read=%s0x%08X",
+                     irqBit,
+                     irqMaskWriteOk ? 1 : 0,
+                     irqMaskReadOk ? "" : "FAILED/",
+                     irqMaskReadback);
         HANDLE waitHandles[] = {
             dma_event_,
             format_change_event_,
@@ -732,6 +752,7 @@ namespace gvfg::internal
             plug_out_event_,
         };
         constexpr DWORD waitHandleCount = 4;
+        uint64_t diagnosticTimeouts = 0;
 
         while (running_)
         {
@@ -743,6 +764,37 @@ namespace gvfg::internal
                 break;
             if (waitResult == WAIT_TIMEOUT)
             {
+                ++diagnosticTimeouts;
+                if (diagnosticTimeouts <= 5 || (diagnosticTimeouts % 10) == 0)
+                {
+                    uint32_t videoEnable = 0;
+                    uint32_t dmaEnable = 0;
+                    uint32_t videoIrqStatus = 0;
+                    uint32_t dmaIrqStatus = 0;
+                    uint32_t irqPending = 0;
+                    uint32_t irqMasked = 0;
+                    uint32_t irqMask = 0;
+                    const bool registersOk =
+                        read_reg(video_base() + VIDEO_EN_OFFSET, videoEnable) &&
+                        read_reg(video_base() + VIDEO_DMA_EN_OFFSET, dmaEnable) &&
+                        read_reg(video_base() + VIDEO_IRQ_STATUS_OFFSET, videoIrqStatus) &&
+                        read_reg(video_base() + VIDEO_DMA_IRQ_STATUS_OFFSET, dmaIrqStatus) &&
+                        read_reg(INTERRUPT_BASE + IRQ_PENDING_STATUS_OFFSET, irqPending) &&
+                        read_reg(INTERRUPT_BASE + IRQ_MASKED_STATUS_OFFSET, irqMasked) &&
+                        read_reg(INTERRUPT_BASE + IRQ_MASK_STATUS_OFFSET, irqMask);
+                    PCIES2MM_LOG("wait timeout #%llu: regs_ok=%d capture=%d probe=%d video_en=0x%08X dma_en=0x%08X video_irq=0x%08X dma_irq=0x%08X irq_pending=0x%08X irq_masked=0x%08X irq_mask=0x%08X",
+                                 static_cast<unsigned long long>(diagnosticTimeouts),
+                                 registersOk ? 1 : 0,
+                                 capture_active_.load(std::memory_order_acquire) ? 1 : 0,
+                                 signal_probe_active_.load(std::memory_order_acquire) ? 1 : 0,
+                                 videoEnable,
+                                 dmaEnable,
+                                 videoIrqStatus,
+                                 dmaIrqStatus,
+                                 irqPending,
+                                 irqMasked,
+                                 irqMask);
+                }
                 if (!signal_presence_known_.load(std::memory_order_acquire) &&
                     !capture_active_.load(std::memory_order_acquire) &&
                     refresh_stream_from_registers(true))
@@ -778,15 +830,19 @@ namespace gvfg::internal
             switch (waitResult - WAIT_OBJECT_0)
             {
             case 0:
+                PCIES2MM_LOG("event: DMA");
                 handle_dma_event(channel);
                 break;
             case 1:
+                PCIES2MM_LOG("event: FORMAT_CHANGE");
                 handle_format_change_event(channel);
                 break;
             case 2:
+                PCIES2MM_LOG("event: PLUG_IN");
                 handle_plugin_event(channel);
                 break;
             case 3:
+                PCIES2MM_LOG("event: PLUG_OUT");
                 handle_unplug_event(channel);
                 break;
             default:
@@ -805,9 +861,13 @@ namespace gvfg::internal
         uint32_t doneIndex = 0;
         if (!get_video_done_index(channel, doneIndex))
         {
+            const DWORD err = GetLastError();
             std::lock_guard<std::mutex> lock(mutex_);
             ++stats_.dma_errors;
             frame_cv_.notify_all();
+            PCIES2MM_ERROR_LOG("get_video_done_index failed channel=%u win32=%lu",
+                               channel,
+                               static_cast<unsigned long>(err));
             return;
         }
 
@@ -1006,6 +1066,38 @@ namespace gvfg::internal
             return false;
 
         const pcies2mm_pixel_format_t pixelFormat = decode_pixel_format(rawFormat);
+        const char fourccLe[5] = {
+            static_cast<char>(rawFormat & 0xffu),
+            static_cast<char>((rawFormat >> 8) & 0xffu),
+            static_cast<char>((rawFormat >> 16) & 0xffu),
+            static_cast<char>((rawFormat >> 24) & 0xffu),
+            '\0'};
+        const char *decodedFormat = "UNKNOWN";
+        switch (pixelFormat)
+        {
+        case PCIES2MM_PIXFMT_YVYU:
+            decodedFormat = "YVYU";
+            break;
+        case PCIES2MM_PIXFMT_Y210:
+            decodedFormat = "Y210";
+            break;
+        default:
+            break;
+        }
+        PCIES2MM_LOG("stream registers: width=%u height=%u VIDEO_FORMAT=0x%08X register_text='%c%c%c%c' fourcc_le='%c%c%c%c' decoded=%s frame_bytes=%zu",
+                     width,
+                     height,
+                     rawFormat,
+                     static_cast<char>((rawFormat >> 24) & 0xffu),
+                     static_cast<char>((rawFormat >> 16) & 0xffu),
+                     static_cast<char>((rawFormat >> 8) & 0xffu),
+                     static_cast<char>(rawFormat & 0xffu),
+                     fourccLe[0],
+                     fourccLe[1],
+                     fourccLe[2],
+                     fourccLe[3],
+                     decodedFormat,
+                     bytes_per_frame(width, height, pixelFormat));
         if (pixelFormat == PCIES2MM_PIXFMT_UNKNOWN)
             return false;
 

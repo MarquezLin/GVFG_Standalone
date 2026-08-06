@@ -22,6 +22,9 @@
         <mxCell id="publicHeader" parent="apiLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#82b366;fontSize=14;" value="sdk/gvfg/include/gvfg_capture.h&lt;br&gt;customer-facing C API" vertex="1">
           <mxGeometry height="58" width="280" x="450" y="50" as="geometry" />
         </mxCell>
+        <mxCell id="gpuConvert" parent="apiLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#82b366;fontSize=14;" value="sdk/gvfg/src/gpu&lt;br&gt;D3D11 YUY2/Y210 conversion&lt;br&gt;BGRA8 / RGB10A2 readback" vertex="1">
+          <mxGeometry height="72" width="300" x="820" y="45" as="geometry" />
+        </mxCell>
         <mxCell id="backendLayer" parent="1" style="swimlane;html=1;startSize=34;horizontal=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;align=left;" value="3. SDK Internal Backend / Data Flow" vertex="1">
           <mxGeometry height="275" width="1180" x="50" y="515" as="geometry">
             <mxRectangle height="34" width="240" x="50" y="515" as="alternateBounds" />
@@ -66,6 +69,12 @@
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="e3" edge="1" parent="1" source="publicHeader" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="facade" value="exports">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="eGpu" edge="1" parent="1" source="publicHeader" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="gpuConvert" value="gvfg_gpu_convert_to_buffer">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ePreviewGpu" edge="1" parent="1" source="render" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;dashed=1;" target="gpuConvert" value="shared pipeline source">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="e4" edge="1" parent="1" source="qtSample" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="render" value="private preview">

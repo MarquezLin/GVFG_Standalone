@@ -2,8 +2,6 @@ if (NOT DEFINED GVFG_SDK_VERSION)
   set(GVFG_SDK_VERSION "0.1.0" CACHE STRING "GVFG SDK version")
 endif()
 
-option(GVFG_PCIES2MM_DEBUG_LOG "Write verbose PCIES2MM backend trace logs" OFF)
-
 project(gvfg VERSION ${GVFG_SDK_VERSION} LANGUAGES CXX)
 
 add_library(gvfg SHARED
@@ -18,6 +16,9 @@ add_library(gvfg SHARED
     src/backend/pcies2mm/pcies2mm_reg.h
     src/backend/pcies2mm/pcies2mm_video_format.cpp
     src/backend/pcies2mm/pcies2mm_video_format.h
+    src/gpu/d3d_conversion_pipeline.cpp
+    src/gpu/d3d_conversion_pipeline.h
+    src/gpu/gvfg_gpu_convert.cpp
     src/gvfg_capture.cpp
 )
 
@@ -32,6 +33,7 @@ target_include_directories(gvfg
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/pcies2mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu
 )
 
 target_compile_definitions(gvfg PRIVATE
@@ -39,14 +41,16 @@ target_compile_definitions(gvfg PRIVATE
     GVFG_SDK_VERSION="${GVFG_SDK_VERSION}"
 )
 
-if (GVFG_PCIES2MM_DEBUG_LOG)
-  target_compile_definitions(gvfg PRIVATE GVFG_PCIES2MM_DEBUG_LOG=1)
-else()
-  target_compile_definitions(gvfg PRIVATE GVFG_PCIES2MM_DEBUG_LOG=0)
-endif()
+target_compile_definitions(gvfg PRIVATE
+  GVFG_INTERNAL_DIAGNOSTICS=$<IF:$<CONFIG:Debug>,1,0>
+)
 
 target_link_libraries(gvfg PRIVATE
     setupapi
+    user32
+    dxgi
+    d3d11
+    D3DCompiler
 )
 
 if (MSVC)

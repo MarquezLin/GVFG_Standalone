@@ -2,8 +2,8 @@ project(gvfg_preview LANGUAGES CXX)
 
 add_library(gvfg_preview SHARED
     include/gvfg_preview.h
-    src/d3d_preview_pipeline.cpp
-    src/d3d_preview_pipeline.h
+    ../../sdk/gvfg/src/gpu/d3d_conversion_pipeline.cpp
+    ../../sdk/gvfg/src/gpu/d3d_conversion_pipeline.h
     src/gvfg_preview.cpp
 )
 
@@ -18,6 +18,7 @@ target_include_directories(gvfg_preview
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../sdk/gvfg/src/gpu
 )
 
 target_compile_definitions(gvfg_preview PRIVATE
