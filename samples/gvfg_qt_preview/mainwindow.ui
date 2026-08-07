@@ -41,20 +41,6 @@
       </widget>
      </item>
      <item>
-      <widget class="QPushButton" name="showPreviewButton">
-       <property name="text">
-        <string>Show Preview</string>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QPushButton" name="fullscreenPreviewButton">
-       <property name="text">
-        <string>Fullscreen Preview</string>
-       </property>
-      </widget>
-     </item>
-     <item>
       <widget class="QPushButton" name="startButton">
        <property name="text">
         <string>Start</string>
@@ -65,6 +51,20 @@
       <widget class="QPushButton" name="stopButton">
        <property name="text">
         <string>Stop</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="showPreviewButton">
+       <property name="text">
+        <string>Open view window</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="fullscreenPreviewButton">
+       <property name="text">
+        <string>Fullscreen window</string>
        </property>
       </widget>
      </item>
