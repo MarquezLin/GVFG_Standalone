@@ -143,20 +143,22 @@ extern "C"
         uint64_t frame_id;    /* Monotonic identifier within the current gvfg_start()/stop() run. */
     } gvfg_frame_t;
 
-    /* Packed RGB formats produced by gvfg_gpu_convert_to_buffer(). */
+    /* Formats produced by gvfg_gpu_convert_to_buffer(). */
     typedef enum
     {
         /* DXGI-compatible B8G8R8A8_UNORM byte layout, alpha is 255. */
         GVFG_GPU_OUTPUT_BGRA8 = 1,
         /* DXGI-compatible R10G10B10A2_UNORM packed uint32 layout, alpha is 3. */
-        GVFG_GPU_OUTPUT_RGB10A2 = 2
+        GVFG_GPU_OUTPUT_RGB10A2 = 2,
+        /* 8-bit BT.709 limited-range 4:2:0: Y plane followed by interleaved UV. */
+        GVFG_GPU_OUTPUT_NV12 = 3
     } gvfg_gpu_output_format_t;
 
     typedef struct
     {
         void *data;         /* Caller-owned destination memory. */
         uint64_t data_size; /* Bytes available from data. */
-        int row_bytes;      /* Destination stride; must be at least width * 4. */
+        int row_bytes;      /* Destination stride. For NV12, shared by Y and UV planes. */
         int pixel_format;   /* gvfg_gpu_output_format_t. */
     } gvfg_gpu_output_buffer_t;
 
@@ -306,20 +308,54 @@ extern "C"
         _In_ const gvfg_frame_t *frame);
 
     /*
-     * Convert a captured YVYU or Y210 frame with the GPU and copy the packed
-     * RGB result into caller-owned memory.
+     * Convert a captured YVYU or Y210 frame with the GPU and copy the result
+     * into caller-owned memory.
      *
      * This call is synchronous. The source frame and destination buffer must
      * remain valid until it returns; the SDK retains neither pointer. A frame
      * returned by gvfg_read_frame() must therefore be converted before
      * gvfg_release_frame().
      *
-     * BGRA8 and RGB10A2 both require at least width * 4 bytes per row and
-     * output->data_size of at least output->row_bytes * height bytes.
+     * BGRA8 and RGB10A2 require at least width * 4 bytes per row and
+     * output->data_size >= output->row_bytes * height.
+     * NV12 requires even width and height, row_bytes >= width, and
+     * output->data_size >= output->row_bytes * (height + height / 2). Its
+     * layout is height rows of Y followed by height / 2 rows of interleaved UV.
      */
     GVFG_API gvfg_status_t gvfg_gpu_convert_to_buffer(
         _In_ const gvfg_frame_t *source,
         _In_ const gvfg_gpu_output_buffer_t *output);
+
+    /*
+     * Convenience wrappers for the corresponding gvfg_gpu_output_format_t.
+     * These calls have the same synchronous lifetime rules as
+     * gvfg_gpu_convert_to_buffer().
+     *
+     * BGRA8 and RGB10A2 require row_bytes >= source->width * 4 and
+     * destination_size >= row_bytes * source->height.
+     */
+    GVFG_API gvfg_status_t gvfg_gpu_convert_to_bgra8(
+        _In_ const gvfg_frame_t *source,
+        _Out_writes_bytes_(destination_size) void *destination,
+        _In_ uint64_t destination_size,
+        _In_ int row_bytes);
+
+    GVFG_API gvfg_status_t gvfg_gpu_convert_to_rgb10a2(
+        _In_ const gvfg_frame_t *source,
+        _Out_writes_bytes_(destination_size) void *destination,
+        _In_ uint64_t destination_size,
+        _In_ int row_bytes);
+
+    /*
+     * Convert to BT.709 limited-range NV12. Width and height must be even.
+     * row_bytes must be at least source->width and is shared by both planes.
+     * destination_size must be at least row_bytes * (height + height / 2).
+     */
+    GVFG_API gvfg_status_t gvfg_gpu_convert_to_nv12(
+        _In_ const gvfg_frame_t *source,
+        _Out_writes_bytes_(destination_size) void *destination,
+        _In_ uint64_t destination_size,
+        _In_ int row_bytes);
 
     /*
      * Poll one capture event.

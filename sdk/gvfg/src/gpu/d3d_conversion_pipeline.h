@@ -58,6 +58,7 @@ public:
     DXGI_FORMAT linear_fp16_texture_format() const;
     bool blit_fp16_to_rgba8(int frame_w, int frame_h);
     bool blit_fp16_to_rgb10a2(int frame_w, int frame_h);
+    bool blit_fp16_to_nv12(int frame_w, int frame_h);
     bool upload_packed_422_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h);
     bool upload_y210_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h);
     bool render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, int frame_w, int frame_h);
@@ -68,6 +69,11 @@ public:
                             DXGI_FORMAT destination_format,
                             int frame_w,
                             int frame_h);
+    bool readback_nv12_to_buffer(void *destination,
+                                 uint64_t destination_size,
+                                 int destination_row_bytes,
+                                 int frame_w,
+                                 int frame_h);
 
     ID3D11Device *d3d_ = nullptr;
     ID3D11DeviceContext *ctx_ = nullptr;
@@ -88,6 +94,12 @@ public:
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv_rgb10_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> readback_bgra8_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> readback_rgb10_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> rt_nv12_y_;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv_nv12_y_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> rt_nv12_uv_;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv_nv12_uv_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> readback_nv12_y_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> readback_nv12_uv_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> upload_yuy2_packed_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> upload_y210_packed_;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv_rgba_;
@@ -98,6 +110,8 @@ public:
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_yuy2_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_y210_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_fp16_to_rgba8_;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_fp16_to_nv12_y_;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_fp16_to_nv12_uv_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_fp16_to_preview_;
     Microsoft::WRL::ComPtr<ID3D11InputLayout> il_;
     Microsoft::WRL::ComPtr<ID3D11Buffer> vb_;

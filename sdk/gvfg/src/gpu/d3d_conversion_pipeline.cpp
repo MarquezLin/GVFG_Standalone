@@ -294,6 +294,31 @@ float4 main(PSIn i) : SV_Target
 }
 )";
 
+// RGB to studio-range BT.709 NV12. Rendering the UV target at half resolution
+// makes the linear sample at each output texel average the corresponding 2x2
+// source pixels.
+static const char *g_ps_fp16_to_nv12_y = R"(
+Texture2D<float4> tex0 : register(t0);
+SamplerState samL : register(s0);
+float main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
+{
+    float3 rgb = saturate(tex0.Sample(samL, uv).rgb);
+    return saturate(16.0 / 255.0 + dot(rgb, float3(0.182586, 0.614231, 0.062007)));
+}
+)";
+
+static const char *g_ps_fp16_to_nv12_uv = R"(
+Texture2D<float4> tex0 : register(t0);
+SamplerState samL : register(s0);
+float2 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
+{
+    float3 rgb = saturate(tex0.Sample(samL, uv).rgb);
+    float u = 128.0 / 255.0 + dot(rgb, float3(-0.100644, -0.338572, 0.439216));
+    float v = 128.0 / 255.0 + dot(rgb, float3( 0.439216, -0.398942, -0.040274));
+    return saturate(float2(u, v));
+}
+)";
+
 static const char *g_ps_fp16_to_preview = R"(
 Texture2D<float4> tex0 : register(t0);
 SamplerState samL : register(s0);
@@ -414,6 +439,18 @@ bool D3DPreviewPipeline::create_shaders_and_states()
     if (FAILED(d3d_->CreatePixelShader(psb4->GetBufferPointer(), psb4->GetBufferSize(), nullptr, &ps_fp16_to_rgba8_)))
         return false;
 
+    ComPtr<ID3DBlob> psbNv12Y, psbNv12Uv;
+    if (FAILED(D3DCompile(g_ps_fp16_to_nv12_y, strlen(g_ps_fp16_to_nv12_y), nullptr, nullptr, nullptr,
+                          "main", "ps_5_0", 0, 0, &psbNv12Y, &err)) ||
+        FAILED(d3d_->CreatePixelShader(psbNv12Y->GetBufferPointer(), psbNv12Y->GetBufferSize(),
+                                       nullptr, &ps_fp16_to_nv12_y_)))
+        return false;
+    if (FAILED(D3DCompile(g_ps_fp16_to_nv12_uv, strlen(g_ps_fp16_to_nv12_uv), nullptr, nullptr, nullptr,
+                          "main", "ps_5_0", 0, 0, &psbNv12Uv, &err)) ||
+        FAILED(d3d_->CreatePixelShader(psbNv12Uv->GetBufferPointer(), psbNv12Uv->GetBufferSize(),
+                                       nullptr, &ps_fp16_to_nv12_uv_)))
+        return false;
+
     if (FAILED(D3DCompile(g_ps_fp16_to_preview, strlen(g_ps_fp16_to_preview), nullptr, nullptr, nullptr,
                           "main", "ps_5_0", 0, 0, &psb5, &err)))
         return false;
@@ -470,7 +507,8 @@ bool D3DPreviewPipeline::ensure_rt_and_pipeline(int w, int h)
     const bool hasAllTargets = rt_fp16_ && rtv_fp16_ && srv_fp16_ &&
                                rt_scene_fp16_ && rtv_scene_fp16_ && srv_scene_fp16_ &&
                                rt_rgba_ && rtv_rgba_ && srv_rgba_ &&
-                               rt_rgb10_ && rtv_rgb10_;
+                               rt_rgb10_ && rtv_rgb10_ &&
+                               rt_nv12_y_ && rtv_nv12_y_ && rt_nv12_uv_ && rtv_nv12_uv_;
 
     if (hasAllTargets && rt_w_ == w && rt_h_ == h)
         return true;
@@ -488,6 +526,12 @@ bool D3DPreviewPipeline::ensure_rt_and_pipeline(int w, int h)
     rtv_rgb10_.Reset();
     readback_bgra8_.Reset();
     readback_rgb10_.Reset();
+    rt_nv12_y_.Reset();
+    rtv_nv12_y_.Reset();
+    rt_nv12_uv_.Reset();
+    rtv_nv12_uv_.Reset();
+    readback_nv12_y_.Reset();
+    readback_nv12_uv_.Reset();
 
     // 1) High precision intermediate target
     D3D11_TEXTURE2D_DESC td{};
@@ -535,6 +579,22 @@ bool D3DPreviewPipeline::ensure_rt_and_pipeline(int w, int h)
     if (FAILED(d3d_->CreateTexture2D(&td, nullptr, &rt_rgb10_)))
         return false;
     if (FAILED(d3d_->CreateRenderTargetView(rt_rgb10_.Get(), nullptr, &rtv_rgb10_)))
+        return false;
+
+    // 5) Separate render targets matching the two NV12 planes. D3D11 planar
+    // render-target support varies by adapter; R8/RG8 targets are portable and
+    // are packed into the caller's NV12 buffer during readback.
+    td.Width = static_cast<UINT>(w);
+    td.Height = static_cast<UINT>(h);
+    td.Format = DXGI_FORMAT_R8_UNORM;
+    if (FAILED(d3d_->CreateTexture2D(&td, nullptr, &rt_nv12_y_)) ||
+        FAILED(d3d_->CreateRenderTargetView(rt_nv12_y_.Get(), nullptr, &rtv_nv12_y_)))
+        return false;
+    td.Width = static_cast<UINT>((w + 1) / 2);
+    td.Height = static_cast<UINT>((h + 1) / 2);
+    td.Format = DXGI_FORMAT_R8G8_UNORM;
+    if (FAILED(d3d_->CreateTexture2D(&td, nullptr, &rt_nv12_uv_)) ||
+        FAILED(d3d_->CreateRenderTargetView(rt_nv12_uv_.Get(), nullptr, &rtv_nv12_uv_)))
         return false;
 
     const bool ok = create_shaders_and_states();
@@ -626,6 +686,47 @@ bool D3DPreviewPipeline::blit_fp16_to_rgb10a2(int frame_w, int frame_h)
     return true;
 }
 
+bool D3DPreviewPipeline::blit_fp16_to_nv12(int frame_w, int frame_h)
+{
+    if (!rtv_nv12_y_ || !rtv_nv12_uv_ || !srv_scene_fp16_ || !vs_ ||
+        !ps_fp16_to_nv12_y_ || !ps_fp16_to_nv12_uv_ || !ctx_ ||
+        (frame_w & 1) != 0 || (frame_h & 1) != 0)
+        return false;
+
+    UINT stride = sizeof(float) * 4, offset = 0;
+    ID3D11Buffer *vertexBuffer = vb_.Get();
+    ctx_->IASetVertexBuffers(0, 1, &vertexBuffer, &stride, &offset);
+    ctx_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ctx_->IASetInputLayout(il_.Get());
+    ctx_->VSSetShader(vs_.Get(), nullptr, 0);
+    ID3D11ShaderResourceView *srv = srv_scene_fp16_.Get();
+    ctx_->PSSetShaderResources(0, 1, &srv);
+    ID3D11SamplerState *sampler = samp_.Get();
+    ctx_->PSSetSamplers(0, 1, &sampler);
+
+    D3D11_VIEWPORT viewport{};
+    viewport.Width = static_cast<FLOAT>(frame_w);
+    viewport.Height = static_cast<FLOAT>(frame_h);
+    viewport.MaxDepth = 1.0f;
+    ID3D11RenderTargetView *target = rtv_nv12_y_.Get();
+    ctx_->OMSetRenderTargets(1, &target, nullptr);
+    ctx_->RSSetViewports(1, &viewport);
+    ctx_->PSSetShader(ps_fp16_to_nv12_y_.Get(), nullptr, 0);
+    ctx_->Draw(6, 0);
+
+    viewport.Width = static_cast<FLOAT>(frame_w / 2);
+    viewport.Height = static_cast<FLOAT>(frame_h / 2);
+    target = rtv_nv12_uv_.Get();
+    ctx_->OMSetRenderTargets(1, &target, nullptr);
+    ctx_->RSSetViewports(1, &viewport);
+    ctx_->PSSetShader(ps_fp16_to_nv12_uv_.Get(), nullptr, 0);
+    ctx_->Draw(6, 0);
+
+    ID3D11ShaderResourceView *nullSrv = nullptr;
+    ctx_->PSSetShaderResources(0, 1, &nullSrv);
+    return true;
+}
+
 bool D3DPreviewPipeline::readback_to_buffer(void *destination,
                                             uint64_t destination_size,
                                             int destination_row_bytes,
@@ -700,6 +801,68 @@ bool D3DPreviewPipeline::readback_to_buffer(void *destination,
     }
     ctx_->Unmap(staging->Get(), 0);
     return true;
+}
+
+bool D3DPreviewPipeline::readback_nv12_to_buffer(void *destination,
+                                                  uint64_t destination_size,
+                                                  int destination_row_bytes,
+                                                  int frame_w,
+                                                  int frame_h)
+{
+    if (!d3d_ || !ctx_ || !destination || !rt_nv12_y_ || !rt_nv12_uv_ ||
+        frame_w <= 0 || frame_h <= 0 || (frame_w & 1) != 0 || (frame_h & 1) != 0 ||
+        destination_row_bytes < frame_w)
+        return false;
+    const uint64_t rows = static_cast<uint64_t>(frame_h) + static_cast<uint64_t>(frame_h / 2);
+    if (destination_size < static_cast<uint64_t>(destination_row_bytes) * rows)
+        return false;
+
+    auto ensureStaging = [this](ComPtr<ID3D11Texture2D> &texture, UINT width, UINT height,
+                                DXGI_FORMAT format) {
+        if (texture)
+        {
+            D3D11_TEXTURE2D_DESC current{};
+            texture->GetDesc(&current);
+            if (current.Width == width && current.Height == height && current.Format == format)
+                return true;
+            texture.Reset();
+        }
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = format;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        return SUCCEEDED(d3d_->CreateTexture2D(&desc, nullptr, &texture));
+    };
+    if (!ensureStaging(readback_nv12_y_, static_cast<UINT>(frame_w), static_cast<UINT>(frame_h),
+                       DXGI_FORMAT_R8_UNORM) ||
+        !ensureStaging(readback_nv12_uv_, static_cast<UINT>(frame_w / 2), static_cast<UINT>(frame_h / 2),
+                       DXGI_FORMAT_R8G8_UNORM))
+        return false;
+
+    auto *dst = static_cast<uint8_t *>(destination);
+    auto copyPlane = [this, dst, destination_row_bytes](ID3D11Texture2D *source,
+                                                        ID3D11Texture2D *staging,
+                                                        int rows, int copyBytes,
+                                                        size_t destinationOffset) {
+        ctx_->CopyResource(staging, source);
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        if (FAILED(ctx_->Map(staging, 0, D3D11_MAP_READ, 0, &mapped)))
+            return false;
+        for (int row = 0; row < rows; ++row)
+            std::memcpy(dst + destinationOffset + static_cast<size_t>(row) * destination_row_bytes,
+                        static_cast<const uint8_t *>(mapped.pData) + static_cast<size_t>(row) * mapped.RowPitch,
+                        static_cast<size_t>(copyBytes));
+        ctx_->Unmap(staging, 0);
+        return true;
+    };
+    return copyPlane(rt_nv12_y_.Get(), readback_nv12_y_.Get(), frame_h, frame_w, 0) &&
+           copyPlane(rt_nv12_uv_.Get(), readback_nv12_uv_.Get(), frame_h / 2, frame_w,
+                     static_cast<size_t>(destination_row_bytes) * static_cast<size_t>(frame_h));
 }
 
 bool D3DPreviewPipeline::upload_packed_422_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h)

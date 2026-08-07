@@ -80,6 +80,16 @@ public:
             outputFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
             rendered = pipeline_->blit_fp16_to_rgb10a2(source.width, source.height);
             break;
+        case GVFG_GPU_OUTPUT_NV12:
+            rendered = pipeline_->blit_fp16_to_nv12(source.width, source.height);
+            if (!rendered ||
+                !pipeline_->readback_nv12_to_buffer(output.data,
+                                                     output.data_size,
+                                                     output.row_bytes,
+                                                     source.width,
+                                                     source.height))
+                return GVFG_EIO;
+            return GVFG_OK;
         default:
             return GVFG_ENOTSUP;
         }
@@ -197,18 +207,75 @@ extern "C" GVFG_API gvfg_status_t gvfg_gpu_convert_to_buffer(
         source->pixel_format != GVFG_PIXFMT_Y210)
         return GVFG_ENOTSUP;
     if (output->pixel_format != GVFG_GPU_OUTPUT_BGRA8 &&
-        output->pixel_format != GVFG_GPU_OUTPUT_RGB10A2)
+        output->pixel_format != GVFG_GPU_OUTPUT_RGB10A2 &&
+        output->pixel_format != GVFG_GPU_OUTPUT_NV12)
         return GVFG_ENOTSUP;
     if (!checkedFrameLayout(*source))
         return GVFG_EINVAL;
 
-    const uint64_t minimumRowBytes = static_cast<uint64_t>(source->width) * 4u;
+    if (output->pixel_format == GVFG_GPU_OUTPUT_NV12 &&
+        ((source->width & 1) != 0 || (source->height & 1) != 0))
+        return GVFG_EINVAL;
+
+    const uint64_t minimumRowBytes = output->pixel_format == GVFG_GPU_OUTPUT_NV12
+                                         ? static_cast<uint64_t>(source->width)
+                                         : static_cast<uint64_t>(source->width) * 4u;
     if (static_cast<uint64_t>(output->row_bytes) < minimumRowBytes)
         return GVFG_EINVAL;
-    const uint64_t requiredSize = static_cast<uint64_t>(output->row_bytes) *
-                                  static_cast<uint64_t>(source->height);
+    const uint64_t outputRows = output->pixel_format == GVFG_GPU_OUTPUT_NV12
+                                    ? static_cast<uint64_t>(source->height) +
+                                          static_cast<uint64_t>(source->height / 2)
+                                    : static_cast<uint64_t>(source->height);
+    const uint64_t requiredSize = static_cast<uint64_t>(output->row_bytes) * outputRows;
     if (output->data_size < requiredSize)
         return GVFG_EINVAL;
 
     return sharedConverter().convert(*source, *output);
+}
+
+namespace
+{
+gvfg_status_t convertToFormat(const gvfg_frame_t *source,
+                              void *destination,
+                              uint64_t destinationSize,
+                              int rowBytes,
+                              gvfg_gpu_output_format_t format)
+{
+    gvfg_gpu_output_buffer_t output{};
+    output.data = destination;
+    output.data_size = destinationSize;
+    output.row_bytes = rowBytes;
+    output.pixel_format = static_cast<int>(format);
+    return gvfg_gpu_convert_to_buffer(source, &output);
+}
+}
+
+extern "C" GVFG_API gvfg_status_t gvfg_gpu_convert_to_bgra8(
+    const gvfg_frame_t *source,
+    void *destination,
+    uint64_t destination_size,
+    int row_bytes)
+{
+    return convertToFormat(source, destination, destination_size, row_bytes,
+                           GVFG_GPU_OUTPUT_BGRA8);
+}
+
+extern "C" GVFG_API gvfg_status_t gvfg_gpu_convert_to_rgb10a2(
+    const gvfg_frame_t *source,
+    void *destination,
+    uint64_t destination_size,
+    int row_bytes)
+{
+    return convertToFormat(source, destination, destination_size, row_bytes,
+                           GVFG_GPU_OUTPUT_RGB10A2);
+}
+
+extern "C" GVFG_API gvfg_status_t gvfg_gpu_convert_to_nv12(
+    const gvfg_frame_t *source,
+    void *destination,
+    uint64_t destination_size,
+    int row_bytes)
+{
+    return convertToFormat(source, destination, destination_size, row_bytes,
+                           GVFG_GPU_OUTPUT_NV12);
 }
