@@ -93,6 +93,13 @@ GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_attach_window(
     gvfg_preview_handle handle,
     void *native_window_handle);
 
+/* Pre-create GPU resources before the first captured frame is held. */
+GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_prepare(
+    gvfg_preview_handle handle,
+    int width,
+    int height,
+    int bit_depth);
+
 /*
  * Synchronously render one frame.
  *

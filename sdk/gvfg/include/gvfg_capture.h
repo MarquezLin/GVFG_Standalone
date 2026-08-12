@@ -129,6 +129,8 @@ extern "C"
     {
         double capture_fps;        /* Runtime FPS measured from frames returned by gvfg_read_frame(). */
         uint64_t delivered_frames; /* Number of frames returned by gvfg_read_frame(). */
+        /* Frames known by the SDK to have been lost before application delivery. */
+        uint64_t lost_frames;
     } gvfg_runtime_info_t;
 
     typedef struct
@@ -170,8 +172,19 @@ extern "C"
         /* First complete frame after stream start, plug-in, or format recovery is ready. */
         GVFG_EVENT_STREAM_READY = 3,
         /* Input format is changing; pause use of resources created for the old format. */
-        GVFG_EVENT_FORMAT_CHANGE_BEGIN = 4
+        GVFG_EVENT_FORMAT_CHANGE_BEGIN = 4,
+        /* One or more frames were known to be lost before application delivery. */
+        GVFG_EVENT_FRAME_LOSS = 5
     } gvfg_event_type_t;
+
+    typedef struct
+    {
+        /* Set to sizeof(gvfg_event_t) before calling gvfg_poll_event(). */
+        uint32_t struct_size;
+        int32_t type;   /* gvfg_event_type_t value. */
+        uint64_t count; /* Loss count for GVFG_EVENT_FRAME_LOSS; otherwise zero. */
+        uint64_t reserved[4];
+    } gvfg_event_t;
 
     /* Opaque session handle created by gvfg_create() and released by gvfg_destroy(). */
     typedef struct gvfg_handle_t *gvfg_handle;
@@ -362,19 +375,20 @@ extern "C"
      *
      * Parameters:
      * - handle: Opened session handle.
-     * - out_event: Receives the event. Must not be NULL.
+     * - out_event: Receives the event. Initialize it to zero and set
+     *   struct_size to sizeof(gvfg_event_t).
      * - timeout_ms: Maximum time to wait. Use 0 to return immediately or
      *   GVFG_TIMEOUT_INFINITE to wait indefinitely.
      *
      * Returns:
      * - GVFG_OK on success.
-     * - GVFG_EINVAL if handle or out_event is NULL.
+     * - GVFG_EINVAL if handle/out_event is NULL or struct_size is invalid.
      * - GVFG_ESTATE if capture is not running or is stopped while waiting.
      * - GVFG_ETIMEOUT if no event is available before timeout_ms expires.
      */
     GVFG_API gvfg_status_t gvfg_poll_event(
         _In_ gvfg_handle handle,
-        _Out_ gvfg_event_type_t *out_event,
+        _Inout_ gvfg_event_t *out_event,
         _In_ uint32_t timeout_ms);
 
     /*
@@ -422,9 +436,9 @@ extern "C"
      * - GVFG_OK on success.
      * - GVFG_EINVAL if handle or out_info is NULL.
      *
-     * The result includes the latest delivered frame, SDK-measured capture FPS,
-     * and the number of frames delivered by the SDK. Query current input signal
-     * metadata separately with gvfg_get_signal_status().
+     * The result includes SDK-measured capture FPS and the number of frames
+     * delivered by the SDK. Query current input signal metadata separately with
+     * gvfg_get_signal_status().
      */
     GVFG_API gvfg_status_t gvfg_get_runtime_info(
         _In_ gvfg_handle handle,
@@ -445,6 +459,12 @@ extern "C"
      */
     GVFG_API const char *gvfg_strerror(
         _In_ gvfg_status_t status);
+
+    /* Copy the most recent detailed error for this handle. */
+    GVFG_API gvfg_status_t gvfg_get_last_error_detail(
+        _In_ gvfg_handle handle,
+        _Out_ char *out_message,
+        _In_ uint32_t out_message_size);
 
 #ifdef __cplusplus
 }

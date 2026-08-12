@@ -149,6 +149,8 @@ namespace
             return QStringLiteral("STREAM_READY");
         case GVFG_EVENT_FORMAT_CHANGE_BEGIN:
             return QStringLiteral("FORMAT_CHANGE_BEGIN");
+        case GVFG_EVENT_FRAME_LOSS:
+            return QStringLiteral("FRAME_LOSS");
         default:
             return QStringLiteral("UNKNOWN");
         }
@@ -349,6 +351,17 @@ void MainWindow::startCapture()
     if (!applyPreview())
         return;
 
+    gvfg_signal_status_t previewSignal{};
+    if (gvfg_get_signal_status(handle_, &previewSignal) == GVFG_OK &&
+        previewSignal.connected &&
+        gvfg_preview_prepare(previewHandle_,
+                             previewSignal.width,
+                             previewSignal.height,
+                             previewSignal.bit_depth) != GVFG_PREVIEW_OK)
+    {
+        appendLog(QStringLiteral("Preview prewarm failed; first frame may initialize GPU resources"));
+    }
+
 #if GVFG_INTERNAL_DIAGNOSTICS
     appendLog(QStringLiteral("FPGA signal before stream start"));
 #endif
@@ -364,6 +377,8 @@ void MainWindow::startCapture()
     }
 
     previewFailureCount_ = 0;
+    previewCallAverageMs_.store(0.0, std::memory_order_relaxed);
+    previewCallSamples_.store(0, std::memory_order_relaxed);
 #if GVFG_INTERNAL_DIAGNOSTICS
     haveDebugBaseline_ = false;
     lastDebugDmaErrors_ = 0;
@@ -484,7 +499,9 @@ void MainWindow::updateSignalStatus()
                                      ? QStringLiteral("Stopped")
                                      : previewFps == QStringLiteral("--")
                                          ? QStringLiteral("Measuring")
-                                         : QStringLiteral("%1 FPS").arg(previewFps);
+                                          : QStringLiteral("%1 FPS").arg(previewFps);
+    const double previewCallAverageMs = previewCallAverageMs_.load(std::memory_order_relaxed);
+    const uint64_t previewCallSamples = previewCallSamples_.load(std::memory_order_relaxed);
     QStringList statusLines;
     statusLines << (signal.connected
                         ? QStringLiteral("Input   | CH%1 | Connected | %2")
@@ -493,8 +510,13 @@ void MainWindow::updateSignalStatus()
                         : QStringLiteral("Input   | CH%1 | No signal")
                               .arg(signal.channel));
     statusLines << (previewInfoOk
-                        ? QStringLiteral("Preview | %1 | %2")
-                              .arg(previewState, previewFrame)
+                        ? previewCallSamples > 0
+                              ? QStringLiteral("Preview | %1 | %2 | GPU call avg=%3 ms/frame samples=%4")
+                                    .arg(previewState, previewFrame)
+                                    .arg(previewCallAverageMs, 0, 'f', 3)
+                                    .arg(static_cast<qulonglong>(previewCallSamples))
+                              : QStringLiteral("Preview | %1 | %2 | GPU call measuring")
+                                    .arg(previewState, previewFrame)
                         : QStringLiteral("Preview | Inactive"));
 
 #if GVFG_INTERNAL_DIAGNOSTICS
@@ -734,13 +756,23 @@ void MainWindow::captureReadLoop()
 
     while (!captureStop_.load(std::memory_order_acquire))
     {
-        gvfg_event_type_t event = GVFG_EVENT_UNKNOWN;
+        gvfg_event_t event{};
+        event.struct_size = sizeof(event);
         while (gvfg_poll_event(handle_, &event, 0) == GVFG_OK)
         {
-            const QString type = eventTypeText(event);
-            QMetaObject::invokeMethod(this, [this, type]()
-                                      { appendLog(QStringLiteral("EVENT %1").arg(type)); },
+            const auto eventType = static_cast<gvfg_event_type_t>(event.type);
+            const QString type = eventTypeText(eventType);
+            const uint64_t count = event.count;
+            QMetaObject::invokeMethod(this, [this, eventType, type, count]()
+                                      {
+                                          if (eventType == GVFG_EVENT_FRAME_LOSS)
+                                              appendLog(QStringLiteral("WARNING dropped frames +%1").arg(count));
+                                          else
+                                              appendLog(QStringLiteral("EVENT %1").arg(type));
+                                      },
                                       Qt::QueuedConnection);
+            event = {};
+            event.struct_size = sizeof(event);
         }
 
         gvfg_frame_t frame{};
@@ -821,10 +853,8 @@ void MainWindow::captureReadLoop()
                         {
                             const double averageMs =
                                 previewTimingTotalMs / static_cast<double>(previewTimingSampleCount);
-                            QMetaObject::invokeMethod(this, [this, averageMs]()
-                                                      { appendLog(QStringLiteral("PERF GPU preview call: avg=%1 ms/frame, samples=%2")
-                                                                      .arg(averageMs, 0, 'f', 3)
-                                                                      .arg(kPreviewTimingSampleFrames)); }, Qt::QueuedConnection);
+                            previewCallAverageMs_.store(averageMs, std::memory_order_relaxed);
+                            previewCallSamples_.store(kPreviewTimingSampleFrames, std::memory_order_relaxed);
 
                             previewTimingSampleCount = 0;
                             previewTimingTotalMs = 0.0;

@@ -30,7 +30,6 @@ typedef enum pcies2mm_stream_state_t
 
 typedef struct pcies2mm_stream_desc_t
 {
-    uint32_t channel;
     uint32_t width;
     uint32_t height;
     pcies2mm_pixel_format_t pixel_format;
@@ -86,7 +85,8 @@ typedef enum pcies2mm_event_type_t
     PCIES2MM_EVENT_PLUG_IN = 1,
     PCIES2MM_EVENT_PLUG_OUT = 2,
     PCIES2MM_EVENT_STREAM_READY = 3,
-    PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN = 4
+    PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN = 4,
+    PCIES2MM_EVENT_FRAME_LOSS = 5
 } pcies2mm_event_type_t;
 
 enum
@@ -95,10 +95,12 @@ enum
     PCIES2MM_EVENT_MASK_PLUG_OUT = 1u << 1,
     PCIES2MM_EVENT_MASK_STREAM_READY = 1u << 2,
     PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN = 1u << 3,
+    PCIES2MM_EVENT_MASK_FRAME_LOSS = 1u << 4,
     PCIES2MM_EVENT_MASK_DEFAULT = PCIES2MM_EVENT_MASK_PLUG_IN |
                                  PCIES2MM_EVENT_MASK_PLUG_OUT |
                                  PCIES2MM_EVENT_MASK_STREAM_READY |
-                                 PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN
+                                 PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN |
+                                 PCIES2MM_EVENT_MASK_FRAME_LOSS
 };
 
 typedef void (*pcies2mm_event_callback_t)(pcies2mm_event_type_t event, void *user);

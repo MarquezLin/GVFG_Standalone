@@ -107,6 +107,8 @@ namespace
             return PCIES2MM_EVENT_MASK_STREAM_READY;
         case PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN:
             return PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN;
+        case PCIES2MM_EVENT_FRAME_LOSS:
+            return PCIES2MM_EVENT_MASK_FRAME_LOSS;
         default:
             return 0;
         }
@@ -123,7 +125,6 @@ namespace gvfg::internal
 {
     PcieS2mmCaptureSession::PcieS2mmCaptureSession()
     {
-        stream_desc_.channel = 0;
         stream_desc_.width = kDefaultWidth;
         stream_desc_.height = kDefaultHeight;
         stream_desc_.pixel_format = PCIES2MM_PIXFMT_YVYU;
@@ -204,10 +205,11 @@ namespace gvfg::internal
     {
         if (!opened_)
             return PCIES2MM_ESTATE;
+        if (running_)
+            return PCIES2MM_ESTATE;
         if (channel >= kMaxChannels)
             return PCIES2MM_EINVAL;
         channel_ = channel;
-        stream_desc_.channel = channel_;
         return PCIES2MM_OK;
     }
 
@@ -279,7 +281,6 @@ namespace gvfg::internal
         }
 
         stream_desc_ = desc;
-        stream_desc_.channel = channel_;
         stream_desc_.pixel_format = fmt;
         stream_desc_.buffer_count = std::clamp(desc.buffer_count ? desc.buffer_count : kDefaultRingBufferCount,
                                                1u,
@@ -325,46 +326,18 @@ namespace gvfg::internal
             close_event_handles();
             return fail(PCIES2MM_EIO, "REGISTER_EVENT", err);
         }
-
         // Events are edge-triggered, so a source connected before registration
         // may not produce a plug-in event. Probe DMA using the register layout,
         // but do not report connected until a full frame is received.
         signal_presence_known_.store(false, std::memory_order_release);
         signal_present_.store(false, std::memory_order_release);
-        const bool startProbeNow = refresh_stream_from_registers(true);
-        if (startProbeNow)
-        {
-            // Match the proven CaptureDemo sequence: register events first,
-            // enable DMA/video second, then start the single wait thread.
-            const bool dmaEnableOk = write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 1);
-            const bool videoEnableOk = write_reg(video_base() + VIDEO_EN_OFFSET, 1);
-            if (!dmaEnableOk || !videoEnableOk)
-            {
-                const DWORD err = GetLastError();
-                write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
-                write_reg(video_base() + VIDEO_EN_OFFSET, 0);
-                unregister_events(channel);
-                close_event_handles();
-                return fail(PCIES2MM_EIO, "enable video capture", err);
-            }
-
-            uint32_t dmaEnableReadback = 0;
-            uint32_t videoEnableReadback = 0;
-            const bool dmaReadOk = read_reg(video_base() + VIDEO_DMA_EN_OFFSET, dmaEnableReadback);
-            const bool videoReadOk = read_reg(video_base() + VIDEO_EN_OFFSET, videoEnableReadback);
-            PCIES2MM_LOG("capture enable: dma_write=%d video_write=%d dma_read=%s0x%08X video_read=%s0x%08X",
-                         dmaEnableOk ? 1 : 0,
-                         videoEnableOk ? 1 : 0,
-                         dmaReadOk ? "" : "FAILED/",
-                         dmaEnableReadback,
-                         videoReadOk ? "" : "FAILED/",
-                         videoEnableReadback);
-        }
+        const bool probeAvailable = refresh_stream_from_registers(true);
 
         running_ = true;
-        capture_active_ = startProbeNow;
-        signal_probe_active_ = startProbeNow;
-        stream_ready_pending_ = startProbeNow;
+        capture_active_ = false;
+        reader_ready_ = false;
+        signal_probe_active_ = probeAvailable;
+        stream_ready_pending_ = false;
         try
         {
             capture_thread_ = std::thread(&PcieS2mmCaptureSession::capture_thread_proc, this);
@@ -375,21 +348,16 @@ namespace gvfg::internal
             capture_active_ = false;
             signal_probe_active_ = false;
             stream_ready_pending_ = false;
-            if (startProbeNow)
-            {
-                write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
-                write_reg(video_base() + VIDEO_EN_OFFSET, 0);
-            }
             unregister_events(channel);
             close_event_handles();
             return fail(PCIES2MM_EIO, "capture_thread", ERROR_NOT_ENOUGH_MEMORY);
         }
 
-        PCIES2MM_LOG("start: channel=%u base=0x%x bytes=%zu probe_active=%d",
+        PCIES2MM_LOG("start: channel=%u base=0x%x bytes=%zu probe_available=%d reader_deferred=1",
                      channel,
                      video_base(),
                      frame_size_bytes(),
-                     startProbeNow ? 1 : 0);
+                     probeAvailable ? 1 : 0);
         return PCIES2MM_OK;
     }
 
@@ -401,6 +369,7 @@ namespace gvfg::internal
         const uint32_t channel = active_channel();
         running_ = false;
         capture_active_ = false;
+        reader_ready_ = false;
         signal_probe_active_ = false;
         stream_ready_pending_ = false;
 
@@ -439,10 +408,49 @@ namespace gvfg::internal
 
     pcies2mm_status_t PcieS2mmCaptureSession::wait_frame(uint32_t timeoutMs, pcies2mm_frame_t &out)
     {
+        reader_ready_.store(true, std::memory_order_release);
+
+        bool descriptorReady = false;
+        bool probingSignal = false;
+        if (!capture_active_.load(std::memory_order_acquire))
+        {
+            const bool presenceKnown = signal_presence_known_.load(std::memory_order_acquire);
+            const bool signalPresent = signal_present_.load(std::memory_order_acquire);
+            probingSignal = !presenceKnown;
+            if (!presenceKnown || signalPresent)
+                descriptorReady = refresh_stream_from_registers(true);
+        }
+
         std::unique_lock<std::mutex> lock(mutex_);
         std::memset(&out, 0, sizeof(out));
         if (!running_)
             return PCIES2MM_ESTATE;
+
+        // Arm DMA while holding the same mutex used by publish_frame(). The
+        // condition-variable wait below releases it atomically, so the
+        // capture thread cannot publish or fill the FIFO before this reader
+        // is genuinely waiting.
+        if (descriptorReady && !capture_active_.load(std::memory_order_acquire))
+        {
+            const bool dmaEnableOk = write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 1);
+            const bool videoEnableOk = write_reg(video_base() + VIDEO_EN_OFFSET, 1);
+            if (!dmaEnableOk || !videoEnableOk)
+            {
+                const DWORD err = GetLastError();
+                write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
+                write_reg(video_base() + VIDEO_EN_OFFSET, 0);
+                ++stats_.dma_errors;
+                lock.unlock();
+                fail(PCIES2MM_EIO, "enable reader capture", err);
+                return PCIES2MM_EIO;
+            }
+            capture_active_.store(true, std::memory_order_release);
+            signal_probe_active_.store(probingSignal, std::memory_order_release);
+            stream_ready_pending_.store(true, std::memory_order_release);
+            PCIES2MM_LOG("capture armed with reader waiting: channel=%u probe=%d",
+                         active_channel(),
+                         probingSignal ? 1 : 0);
+        }
 
         const auto hasFrame = [this]()
         {
@@ -473,11 +481,13 @@ namespace gvfg::internal
         }
 
         size_t readySlot = frame_ring_.size();
-        uint64_t readySequence = delivered_sequence_;
+        uint64_t readySequence = (std::numeric_limits<uint64_t>::max)();
         for (size_t i = 0; i < frame_ring_.size(); ++i)
         {
             const FrameSlot &slot = frame_ring_[i];
-            if (slot.ready && slot.sequence > readySequence)
+            if (slot.ready &&
+                slot.sequence > delivered_sequence_ &&
+                slot.sequence < readySequence)
             {
                 readySlot = i;
                 readySequence = slot.sequence;
@@ -796,6 +806,7 @@ namespace gvfg::internal
                                  irqMask);
                 }
                 if (!signal_presence_known_.load(std::memory_order_acquire) &&
+                    reader_ready_.load(std::memory_order_acquire) &&
                     !capture_active_.load(std::memory_order_acquire) &&
                     refresh_stream_from_registers(true))
                 {
@@ -874,12 +885,13 @@ namespace gvfg::internal
         const DWORD bytes = static_cast<DWORD>(frame_size_bytes());
         size_t slotIndex = frame_ring_.size();
         uint8_t *slotData = nullptr;
+        bool frameLost = false;
         {
             std::unique_lock<std::mutex> lock(mutex_);
             ++pending_events_;
             ++stats_.interrupt_count;
 
-            auto hasFreeSlot = [this]()
+            auto hasWritableSlot = [this]()
             {
                 for (const FrameSlot &slot : frame_ring_)
                 {
@@ -889,18 +901,33 @@ namespace gvfg::internal
                 return false;
             };
 
-            while (running_ && !hasFreeSlot())
+            while (running_ && !hasWritableSlot())
                 data_cv_.wait_for(lock, std::chrono::seconds(1));
             if (!running_)
                 return;
 
+            // Prefer unused capacity. If every writable slot already holds a
+            // ready frame, overwrite the oldest unread one and report loss.
             for (size_t attempt = 0; attempt < frame_ring_.size(); ++attempt)
             {
                 const size_t candidate = (next_write_slot_ + attempt) % frame_ring_.size();
-                if (!frame_ring_[candidate].in_use)
+                if (!frame_ring_[candidate].in_use && !frame_ring_[candidate].ready)
                 {
                     slotIndex = candidate;
                     break;
+                }
+            }
+            if (slotIndex == frame_ring_.size())
+            {
+                uint64_t oldestSequence = (std::numeric_limits<uint64_t>::max)();
+                for (size_t i = 0; i < frame_ring_.size(); ++i)
+                {
+                    const FrameSlot &slot = frame_ring_[i];
+                    if (!slot.in_use && slot.ready && slot.sequence < oldestSequence)
+                    {
+                        slotIndex = i;
+                        oldestSequence = slot.sequence;
+                    }
                 }
             }
             if (slotIndex == frame_ring_.size())
@@ -908,7 +935,10 @@ namespace gvfg::internal
 
             FrameSlot &slot = frame_ring_[slotIndex];
             if (slot.ready && slot.sequence > delivered_sequence_)
+            {
                 ++stats_.frames_dropped;
+                frameLost = true;
+            }
             slot.ready = false;
             slot.in_use = true;
             if (slot.data.size() < bytes)
@@ -916,6 +946,9 @@ namespace gvfg::internal
             slotData = slot.data.data();
             next_write_slot_ = (slotIndex + 1) % frame_ring_.size();
         }
+
+        if (frameLost)
+            emit_event(PCIES2MM_EVENT_FRAME_LOSS);
 
         const uint32_t frameIndex = doneIndex % kDmaBufferCount;
         const int ret = get_frame(channel, frameIndex, slotData, bytes);
@@ -962,7 +995,8 @@ namespace gvfg::internal
         write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
         write_reg(video_base() + VIDEO_EN_OFFSET, 0);
         capture_active_ = false;
-        resume_capture_from_signal(channel);
+        if (reader_ready_.load(std::memory_order_acquire))
+            resume_capture_from_signal(channel);
 
         frame_cv_.notify_all();
         data_cv_.notify_all();
@@ -983,7 +1017,8 @@ namespace gvfg::internal
         signal_present_.store(true, std::memory_order_release);
         signal_presence_known_.store(true, std::memory_order_release);
         emit_event(PCIES2MM_EVENT_PLUG_IN);
-        resume_capture_from_signal(channel);
+        if (reader_ready_.load(std::memory_order_acquire))
+            resume_capture_from_signal(channel);
         frame_cv_.notify_all();
         data_cv_.notify_all();
     }

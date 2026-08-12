@@ -126,6 +126,8 @@ namespace
             return GVFG_EVENT_STREAM_READY;
         case PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN:
             return GVFG_EVENT_FORMAT_CHANGE_BEGIN;
+        case PCIES2MM_EVENT_FRAME_LOSS:
+            return GVFG_EVENT_FRAME_LOSS;
         default:
             return GVFG_EVENT_UNKNOWN;
         }
@@ -302,6 +304,11 @@ struct gvfg_handle_t
         std::memset(&out, 0, sizeof(out));
         out.capture_fps = runtimeFps.load(std::memory_order_relaxed);
         out.delivered_frames = deliveredFrames.load(std::memory_order_relaxed);
+        pcies2mm_stream_stats_t stats{};
+        pcies2mm_debug_state_t debugState{};
+        uint64_t waitTimeouts = 0;
+        backend->get_debug_stats(stats, waitTimeouts, debugState);
+        out.lost_frames = stats.frames_dropped;
         return GVFG_OK;
     }
 
@@ -324,11 +331,22 @@ struct gvfg_handle_t
 
     void emitEvent(pcies2mm_event_type_t event)
     {
-        const gvfg_event_type_t out = map_event_type(event);
+        const gvfg_event_type_t type = map_event_type(event);
         {
             std::lock_guard<std::mutex> lock(eventMutex);
+            if (type == GVFG_EVENT_FRAME_LOSS && !eventQueue.empty() &&
+                eventQueue.back().type == GVFG_EVENT_FRAME_LOSS)
+            {
+                ++eventQueue.back().count;
+                eventCv.notify_one();
+                return;
+            }
             if (eventQueue.size() >= 64)
                 eventQueue.pop_front();
+            gvfg_event_t out{};
+            out.struct_size = sizeof(out);
+            out.type = type;
+            out.count = type == GVFG_EVENT_FRAME_LOSS ? 1 : 0;
             eventQueue.push_back(out);
         }
         eventCv.notify_one();
@@ -371,7 +389,6 @@ struct gvfg_handle_t
             waitingForSignal || pixelFormat == PCIES2MM_PIXFMT_UNKNOWN ? PCIES2MM_PIXFMT_YVYU : pixelFormat;
 
         pcies2mm_stream_desc_t desc{};
-        desc.channel = selectedChannel;
         desc.width = configureWidth;
         desc.height = configureHeight;
         desc.pixel_format = configureFormat;
@@ -525,7 +542,7 @@ struct gvfg_handle_t
             backend->release_frame(frame);
     }
 
-    gvfg_status_t pollEvent(gvfg_event_type_t &out, uint32_t timeoutMs)
+    gvfg_status_t pollEvent(gvfg_event_t &out, uint32_t timeoutMs)
     {
         if (!backend || !running.load(std::memory_order_acquire))
             return GVFG_ESTATE;
@@ -710,7 +727,7 @@ struct gvfg_handle_t
     pcies2mm_frame_t heldBackendFrame{};
     std::mutex eventMutex;
     std::condition_variable eventCv;
-    std::deque<gvfg_event_type_t> eventQueue;
+    std::deque<gvfg_event_t> eventQueue;
 };
 
 extern "C"
@@ -787,11 +804,16 @@ extern "C"
         return handle->releaseFrame(*frame);
     }
 
-    gvfg_status_t gvfg_poll_event(gvfg_handle handle, gvfg_event_type_t *out_event, uint32_t timeout_ms)
+    gvfg_status_t gvfg_poll_event(gvfg_handle handle, gvfg_event_t *out_event, uint32_t timeout_ms)
     {
-        if (!handle || !out_event)
+        if (!handle || !out_event || out_event->struct_size < sizeof(gvfg_event_t))
             return GVFG_EINVAL;
-        return handle->pollEvent(*out_event, timeout_ms);
+        gvfg_event_t event{};
+        event.struct_size = sizeof(event);
+        const gvfg_status_t status = handle->pollEvent(event, timeout_ms);
+        if (status == GVFG_OK)
+            *out_event = event;
+        return status;
     }
 
     gvfg_status_t gvfg_stop(gvfg_handle handle)
@@ -853,6 +875,15 @@ extern "C"
         default:
             return "Unknown";
         }
+    }
+
+    gvfg_status_t gvfg_get_last_error_detail(gvfg_handle handle,
+                                             char *out_message,
+                                             uint32_t out_message_size)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        return handle->getLastErrorDetail(out_message, out_message_size);
     }
 
     gvfg_status_t gvfg_debug_get_backend_stats(gvfg_handle handle,

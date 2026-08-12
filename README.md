@@ -12,7 +12,8 @@ import library、runtime DLL 來使用 GVFG，不要直接把 GVFG source 編進
 - `samples/gvfg_qt_preview`：Qt preview sample；診斷功能由 build option 控制。
 - `docs`：API 與整合說明。
 
-客戶端 API 細節在 `docs/GVFG_CUSTOMER_API.md`。內部架構、package
+客戶使用指南在 `docs/GVFG_CUSTOMER_API.md`，完整函式與結構參考在
+`docs/GVFG_CUSTOMER_API_REFERENCE.md`。內部架構、package
 切分、threading、frame ownership 說明在 `docs/GVFG_INTERNAL_NOTES.md`。
 
 ## Build

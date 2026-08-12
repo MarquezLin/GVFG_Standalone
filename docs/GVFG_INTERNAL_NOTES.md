@@ -1,375 +1,187 @@
-# GVFG Internal Notes
+# GVFG 內部設計與維護說明
 
-這份文件是 standalone GVFG SDK 的內部工程地圖。客戶端 API 細節請看
-`docs/GVFG_CUSTOMER_API.md`。
+本文件只供 GVFG SDK、driver、FPGA 與內部診斷工具維護者使用。客戶行為與公開
+契約請以 `GVFG_CUSTOMER_API.md`、`GVFG_CUSTOMER_API_REFERENCE.md` 和
+`gvfg_capture.h` 為準。本文件中的 IOCTL、
+register、ring、counter 與執行緒模型都不是公開 ABI。
 
-## 目前方向
+## 1. 客戶／內部邊界
 
-GVFG 目前切成幾個清楚的模組：
+| 類別 | 客戶套件 | 僅內部 |
+|---|---|---|
+| Header | `gvfg_capture.h`、選用 `gvfg_preview.h` | `gvfg_debug.h`、backend headers |
+| Binary | `gvfg.dll/.lib`、選用 preview DLL/lib | driver/FPGA 診斷工具 |
+| 文件 | `GVFG_CUSTOMER_API.md`、`GVFG_CUSTOMER_API_REFERENCE.md` | 本文件 |
+| 資訊 | lifecycle、frame、event、signal、runtime FPS | IOCTL、IRQ、register、DMA/ring、debug counters |
 
-```text
-sdk/gvfg/
-  gvfg.dll
-  capture API, GPU buffer conversion, handle lifecycle, pull frame/event bridge,
-  internal debug API
+CMake install 已只安裝 `gvfg_capture.h` 與客戶文件；不得把 `gvfg_debug.h` 或
+`sdk/gvfg/src` 加入 customer package。
 
-helpers/gvfg_preview/
-  gvfg_preview.dll
-  optional display helper; renders gvfg_frame_t after gvfg_read_frame()
-
-samples/gvfg_qt_preview/
-  gvfg_qt_preview: diagnostics are selected at configure time
-```
-
-從 customer 角度看，core SDK 必須維持 driver-neutral。PCIES2MM、IRQ、DMA counters、
-backend details 都是 internal。
-
-### PCIES2MM backend 檔案分工
-
-`sdk/gvfg/src/backend/pcies2mm/` 內部依責任拆分如下：
+## 2. 元件責任
 
 ```text
-pcies2mm_capture_session.{h,cpp}
-  stream lifecycle, single driver-event/DMA worker, event dispatch,
-  SDK-owned frame ring and frame ownership
+customer/sample
+  -> gvfg_capture.h
+  -> gvfg.dll facade (sdk/gvfg/src/gvfg_capture.cpp)
+  -> PcieS2mmCaptureSession
+  -> Windows device / IOCTL / FPGA registers / DMA
 
-pcies2mm_device.{h,cpp}
-  Windows SetupAPI device discovery and device interface path
-
-pcies2mm_ioctl.h
-  private ABI contract shared with the PCIE S2MM driver:
-  IOCTL codes, driver event IDs and DeviceIoControl structures
-
-pcies2mm_reg.h
-  FPGA register offsets and bit masks
-
-pcies2mm_video_format.{h,cpp}
-  native YVYU/Y210 layout rules and format-register decoding
+customer/sample (optional)
+  -> gvfg_preview.h
+  -> gvfg_preview.dll
+  -> D3D preview pipeline
 ```
 
-`pcies2mm_ioctl.h` 與 `pcies2mm_reg.h` 都不是 customer public header，不可放進
-SDK customer include package。目前板卡只輸出 YVYU 與 Y210；這個 FPGA revision 即使
-format register 回報 v210，DMA payload 仍由 `pcies2mm_video_format.cpp` 解讀為 Y210。
-上述拆分只分離程式責任，不會增加 capture thread。
+- `gvfg_capture.cpp`：公開 handle 狀態、狀態碼轉換、frame token 驗證、event
+  queue、runtime counter 與 debug API facade。
+- `pcies2mm_capture_session.*`：stream lifecycle、driver event/DMA worker、frame
+  ring 與 backend statistics。
+- `pcies2mm_device.*`：SetupAPI 裝置列舉與 interface path。
+- `pcies2mm_ioctl.h`：與 driver 共用的 private ABI。
+- `pcies2mm_reg.h`：FPGA register offsets/masks。
+- `pcies2mm_video_format.*`：format register 解碼與 YVYU/Y210 layout。
+- `src/gpu/*`：D3D11 同步轉換及 readback 到 caller buffer。
 
-## 架構
+## 3. 公開 facade 狀態
 
-```mermaid
-flowchart TD
-    subgraph App["Application / Sample"]
-        QtApp["samples/gvfg_qt_preview"]
-        CustomerApp["Customer application"]
-    end
-
-    subgraph Preview["Optional Preview Helper: gvfg_preview.dll"]
-        PreviewApi["helpers/gvfg_preview/include/gvfg_preview.h"]
-        PreviewPipe["private D3D preview pipeline"]
-    end
-
-    subgraph SDK["Core SDK: gvfg.dll"]
-        CaptureApi["sdk/gvfg/include/gvfg_capture.h"]
-        DebugApi["sdk/gvfg/include/gvfg_debug.h\ninternal only"]
-        Facade["sdk/gvfg/src/gvfg_capture.cpp"]
-    end
-
-    subgraph Backend["Internal Backend"]
-        PcieS2mm["sdk/gvfg/src/backend/pcies2mm"]
-        Ring["frame_ring_"]
-        Workers["single capture thread: DMA / format / plug events"]
-    end
-
-    CustomerApp --> CaptureApi
-    CustomerApp -. optional display .-> PreviewApi
-    CustomerApp -. GPU buffer conversion .-> CaptureApi
-    QtApp --> CaptureApi
-    QtApp --> DebugApi
-    QtApp --> PreviewApi
-    PreviewApi --> PreviewPipe
-    CaptureApi --> Facade
-    DebugApi --> Facade
-    Facade --> PcieS2mm
-    PcieS2mm --> Workers
-    Workers --> Ring
-```
-
-## Capture 流程
-
-Core capture API 的基本模式是 FFmpeg-style pull model：
+概念狀態：
 
 ```text
-gvfg_enumerate_devices
--> gvfg_create
--> gvfg_open_channel(CH0 or CH1)
--> gvfg_start
--> loop:
-   gvfg_read_frame
-   customer processing and/or gvfg_preview_render_frame
-   gvfg_release_frame
-   gvfg_poll_event optional
--> gvfg_stop
--> gvfg_destroy
+Created/Closed -> Opened -> Running -> Opened -> Destroyed
+                    ^          |
+                    +----------+ stop
 ```
 
-Pull mode 下，`gvfg.dll` 不擁有 application 的 public read thread。UI app 應該
-自己建立 worker thread，並在那個 thread 呼叫 `gvfg_read_frame()`。
+- `open()` 會先 close 舊 backend、建立 session、設定 channel、同步 signal。
+- `start()` 先 `configureStream()`，清空 facade event queue，再啟動 backend。
+- 無訊號時使用最小 placeholder descriptor 進入 event-monitoring mode；訊號恢復後
+  backend 依真實 descriptor 啟用 DMA。
+- `stop()` 先清除 running、喚醒 event poll、釋放 held frame，再停止 backend。
+- `destroy()` 允許 NULL，並透過 destructor/close 保證 stop。
 
-`gvfg_start()` 在尚未確認 input signal 時仍會註冊 driver events 並啟動單一 backend
-capture thread。`gvfg_read_frame()` 此時 timeout；收到 signal-connected event 後，
-backend 在相同 thread 重讀 width/height/payload format、resize ring，然後 enable DMA。
-第一張完整 frame publish 後，public event queue 收到 `GVFG_EVENT_STREAM_READY`。
+每個 handle 只有一個 `readInProgress` 與一個 `frameHeld`。公開文件要求 lifecycle
+由 caller 序列化；若日後要宣告完整 thread-safe，必須先補足 open/start/stop/destroy
+彼此的同步與 handle lifetime 保護。
 
-FPGA H/V/format registers 可能在拔除來源後保留 last-known values，因此它們只能用來
-準備 DMA probe layout，不能當作 signal-present 判斷。啟動時 backend 可以在內部 enable
-probe DMA，以涵蓋來源早於 event registration 就已接上的情況；只有收到 driver plug-in
-event 或成功取得第一張完整 frame 後，public signal status 才能回報 connected。DMA
-probe 成功不偽造 plug-in event，而是送出 `GVFG_EVENT_STREAM_READY`。
+## 4. DMA 與 frame ring
 
-## Internal DMA / Ring Data Flow
-
-Driver DMA buffer 與 SDK `frame_ring_` 是兩層不同的 storage。Driver buffer 負責接收
-硬體 DMA；SDK ring 保存一份 user-mode copy，讓 application 能持有 frame 到
-`gvfg_release_frame()`。三個 SDK ring slots 只增加緩衝空間，每一張 frame 仍只有一次
-driver-to-SDK copy。
-
-目前完整路徑：
+目前資料路徑：
 
 ```text
-video source produces one frame
--> hardware writes driver DMA buffer N
--> DMA complete interrupt
--> driver SetEvent(dma_event_)
--> capture_thread_proc() wakes from WaitForMultipleObjects()
--> handle_dma_event()
--> IOCTL_GET_VIDEO_DONE_INDEX
--> frameIndex = doneIndex % kDmaBufferCount (currently 16)
--> search the 3-slot SDK frame_ring_ for slot.in_use == false
--> mark slot: ready=false, in_use=true
--> IOCTL_GET_FRAME
--> one copy: driver DMA buffer N -> slot.data
--> validate bytesReturned == expected frame size
--> publish_frame()
-   - sequence = ++latest_sequence_
-   - ready = true
-   - in_use = false
-   - frame_cv_.notify_one()
--> gvfg_read_frame() / wait_frame() wakes
--> select the newest ready sequence
--> mark delivered slot: ready=false, in_use=true
--> return gvfg_frame_t pointing at slot.data
--> preview / conversion / customer processing
--> gvfg_release_frame()
--> mark slot.in_use=false
--> data_cv_.notify_all()
--> slot becomes reusable
+source frame
+-> hardware/driver DMA buffer
+-> DMA complete event
+-> capture worker 查詢 done index
+-> IOCTL_GET_FRAME 複製到 SDK ring free slot
+-> slot ready + sequence 更新 + frame_cv notify
+-> wait_frame 選取 ready frame
+-> facade 回傳指向 slot.data 的 gvfg_frame_t
+-> customer/preview/conversion
+-> release_frame
+-> slot 回到 free
 ```
 
-FrameSlot 的主要狀態：
+Backend stream descriptor 目前配置 3 個 SDK slots。Slot 邏輯狀態：
 
 ```text
-Free       : ready=false, in_use=false
-Writing    : ready=false, in_use=true
-Ready      : ready=true,  in_use=false
-Delivered  : ready=false, in_use=true
-Released   : ready=false, in_use=false
+Free      ready=false, in_use=false
+Writing   ready=false, in_use=true
+Ready     ready=true,  in_use=false
+Delivered ready=false, in_use=true
 ```
 
-同步責任：
+ring 滿時的行為是即時擷取的 drop/backpressure policy，不是 lossless queue；應透過
+internal stats 觀察 `frames_dropped`。不要將 slot 數、driver DMA buffer 數或 done-index
+演算法暴露為客戶契約。
 
-- `mutex_` 保護 `frame_ring_`、slot flags、sequence 與 active delivery slot。
-- `frame_cv_` 喚醒等待 ready frame 的 `wait_frame()`。
-- `data_cv_` 喚醒等待 free slot 的 capture thread。
-- `eventMutex`、`eventCv` 與 `eventQueue` 是 public capture event 的另一套同步機制，
-  不保存 frame。
+## 5. Frame token 與 ABI
 
-如果三個 SDK slots 全部 `in_use`，capture thread 目前會在 `data_cv_` 等待，不會主動
-從 SDK ring 丟掉 application 正在持有的 frame。硬體與 driver DMA 仍可能繼續前進，
-因此等待期間的中間 frame 可能在 driver 層被覆寫或 event 被合併，形成隱性掉幀。
-這是 backpressure policy，不是 lossless queue 保證。
+Facade 在 release 時驗證原 token 的 data、size、width、height、stride、format、
+bit depth 與 frame ID。任何欄位遭修改都回傳 `GVFG_EINVAL`。
 
-## Frame 所有權
+x64 `gvfg_frame_t` ABI 已在 `gvfg_capture.cpp` 以 static assertions 固定為 48 bytes
+及明確欄位 offsets。修改公開 struct 時必須視為 ABI 變更，不能只重新編譯 DLL。
+新增 metadata 優先考慮新 query API 或帶 size/version 的新 struct。
 
-- `gvfg_read_frame()` 回傳一個 SDK-owned frame buffer。
-- `frame.data` 在 `gvfg_release_frame()` 前有效。
-- `frame.row_stride_bytes` 是相鄰兩列起點之間的 byte 距離；consumer 不應自行
-  由 width/format 猜 stride。
-- 現行 YVYU/Y210 都是 single-plane packed buffers，因此不公開 plane-layout API。
-- 未來真的加入 multi-plane format 時，再新增獨立的 plane-layout query。
-- `gvfg_handle` 永遠 opaque；stable release 後 `gvfg_frame_t` 凍結，只有 major
-  version 可以破壞既有 ABI。
-- 未來 color/timestamp metadata 應新增獨立的 query output，例如
-  `gvfg_get_frame_color_info()` 與 `gvfg_get_frame_timestamp_info()`。不要預先在每個
-  struct 放大型 reserved array；等 metadata 類型真的很多再考慮 side data。
-- `gvfg_preview.dll` 直接使用 capture frame 的 `row_stride_bytes`。
-- `gvfg.dll` 提供 explicit GPU buffer conversion；API 不負責 image export、
-  thread、queue 或 frame ownership policy。
-- 同一個 handle 一次最多 hold 一個 frame。
-- Application 如果 release 後還要用 data，必須自己 copy frame。
-- `gvfg_preview_render_frame()` 是 synchronous，應該在 `gvfg_release_frame()` 前呼叫。
-- Qt sample 狀態列只顯示 Preview FPS，不顯示 reader/capture FPS。Preview FPS
-  由 `gvfg_preview_get_stats()` 提供，只計算 DXGI 接受的 Present；swapchain
-  busy skip 不計入，採最近五秒滑動時間窗。
+目前原生格式：
 
-Typical two-way use：
+- YVYU：2 bytes/pixel，8-bit packed 4:2:2。
+- Y210：4 bytes/pixel，10-bit packed 4:2:2。
 
-```text
-gvfg_read_frame
--> customer-owned display / AI / recording / snapshot
--> optional gvfg_preview_render_frame
--> gvfg_release_frame
-```
+目前皆為 single-plane。加入 multi-plane 格式前，必須先設計 plane count、offset、
+stride、buffer lifetime 與向後相容 API，不能直接重新解釋既有 `data`。
 
-## Event 邊界
+## 6. Event 流程
 
-Customer event 保持 driver-neutral：
+Backend event 映射：
 
-```text
-GVFG_EVENT_SIGNAL_CONNECTED
-GVFG_EVENT_SIGNAL_DISCONNECTED
-GVFG_EVENT_STREAM_READY
-GVFG_EVENT_FORMAT_CHANGE_BEGIN
-```
+| Backend | Public |
+|---|---|
+| `PCIES2MM_EVENT_PLUG_IN` | `GVFG_EVENT_SIGNAL_CONNECTED` |
+| `PCIES2MM_EVENT_PLUG_OUT` | `GVFG_EVENT_SIGNAL_DISCONNECTED` |
+| `PCIES2MM_EVENT_STREAM_READY` | `GVFG_EVENT_STREAM_READY` |
+| `PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN` | `GVFG_EVENT_FORMAT_CHANGE_BEGIN` |
 
-事件語意：
+Facade queue 上限為 64；滿時丟棄最舊事件。`pollEvent()` 只允許 running 狀態，支援
+non-blocking、有限 timeout 與 infinite wait；stop 透過 `eventCv` 喚醒 waiter。
 
-- `GVFG_EVENT_SIGNAL_CONNECTED`：backend 收到真正的 driver plug-in event。
-- `GVFG_EVENT_SIGNAL_DISCONNECTED`：backend 收到真正的 driver plug-out event。
-- `GVFG_EVENT_FORMAT_CHANGE_BEGIN`：收到 driver format-change event，舊格式資源即將
-  失效；backend 自動停止舊 DMA、重讀格式並恢復 capture。
-- `GVFG_EVENT_STREAM_READY`：start、plug-in recovery 或 format recovery 後，第一張
-  完整 frame 已經 publish。Application 可讀取新 `gvfg_frame_t`，依其中的
-  width/height/pixel_format/bit_depth 重建 render resources。
+事件順序的維護目標：format change begin 後停止使用舊 descriptor，完成重新配置且
+第一個完整 frame 可用時才送 stream ready。更動 driver event mapping 或 recovery
+流程時，要同時驗證無訊號啟動、拔插、解析度切換及 stop-during-wait。
 
-Format change 是兩階段通知：
+## 7. Internal debug API
 
-```text
-driver format-change event
--> GVFG_EVENT_FORMAT_CHANGE_BEGIN
--> backend disables old DMA/video
--> backend refreshes width/height/payload format and resizes ring
--> backend enables capture
--> first complete new-format frame is published
--> GVFG_EVENT_STREAM_READY
-```
+`gvfg_debug.h` 僅供內部工具，包含：
 
-Application 可在 `FORMAT_CHANGE_BEGIN` 暫停 render 或清理舊格式資源，但不應自行對同一
-session 執行 Stop/Start；backend 負責恢復。在 `STREAM_READY` 後，以新 frame metadata
-重建並恢復 render。
+- `gvfg_debug_get_backend_stats()`：facade/backend state、frame/drop/DMA/IRQ/timeout、
+  queue/ring/sequence counters。
+- `gvfg_debug_get_last_error_detail()`：複製 UTF-8 backend 詳細錯誤。
+- `gvfg_debug_read_register()`：讀取 4-byte aligned BAR-relative register。
+- `gvfg_debug_write_register()`：寫入 register。
 
-Video IRQ handling 是 `sdk/gvfg/src/backend/pcies2mm` 內部細節。IRQ bit numbers、
-IRQ masks 與 DMA counters 不應出現在
-`gvfg_capture.h`。
+Register write 可能中斷 DMA、interrupt 或 capture。工具必須確認裝置、offset 與當前
+stream 狀態，且不得將 register API 包裝成客戶功能。
 
-## API Surfaces
+客戶診斷只應使用 `gvfg_get_signal_status()`、`gvfg_get_runtime_info()`、event 與
+`gvfg_strerror()`。
 
-Customer/demo 可見：
+## 8. GPU conversion
 
-```text
-include/gvfg_capture.h
-include/gvfg_preview.h when display helper is used
-```
+公開 GPU conversion 是同步的：建立 D3D pipeline、轉換／readback 到 caller-owned
+buffer，返回後不保留指標。輸入只接受目前公開的 YVYU/Y210；輸出為 BGRA8、
+RGB10A2 或 BT.709 limited-range NV12。
 
-Internal debug only：
+維護時必測：
 
-```text
-include/gvfg_debug.h
-backend counters
-interrupt count
-DMA errors
-latest backend error detail
-PDB symbols
-internal diagnostic tools
-```
+- 奇偶尺寸與 overflow 檢查。
+- source stride/data size 與 destination row/data size。
+- NV12 偶數 width/height、Y/UV plane offset。
+- D3D device/resource 建立失敗的狀態碼與資源釋放。
+- 在 release 前轉換，及 stop/format change 時沒有持有失效 frame。
 
-## Package 切分
+## 9. Preview helper
 
-### Demo / Customer Package
+Preview helper 是獨立 DLL，不連結 core capture SDK。它只接受 caller 填入的
+`gvfg_preview_frame_t`，同步 render 到 HWND。Sample 可同時使用 capture、preview 與
+internal debug header，但客戶 sample/package 不應包含 internal diagnostics。
 
-Include：
+`present_fps` 只統計 DXGI 成功接受的 Present；non-blocking swapchain busy 的 frame
+計入 `skipped_presents`，不可將其解讀為 capture drop。
 
-```text
-include/gvfg_capture.h
-include/gvfg_preview.h when the demo shows video
-lib/gvfg.lib
-lib/gvfg_preview.lib when the demo shows video
-bin/gvfg.dll
-bin/gvfg_preview.dll when the demo shows video
-samples/customer-facing source
-docs/GVFG_CUSTOMER_API.md
-```
+## 10. 已知限制與發佈檢查表
 
-Do not include：
+目前設計限制：Windows only、每 handle 單一 channel、每 handle 最多一個 held
+frame、原生格式限 YVYU/Y210、event queue 非持久化且可能淘汰最舊事件。
 
-```text
-include/gvfg_debug.h
-SDK source
-helper source
-PCIES2MM backend headers
-PDB symbols
-register / DMA / IRQ debug docs
-internal diagnostic tools
-```
+每次發佈前確認：
 
-### Internal Debug Package
-
-Include：
-
-```text
-include/gvfg_capture.h
-include/gvfg_debug.h
-include/gvfg_preview.h
-lib/gvfg.lib
-lib/gvfg_preview.lib
-bin/gvfg.dll
-bin/gvfg_preview.dll
-bin/gvfg_qt_preview.exe
-PDB symbols
-internal debug notes
-```
-
-### Full Release Package
-
-Full application release 可以使用 `gvfg.dll` 與 `gvfg_preview.dll`，再加上
-licensing 與 closed-source application integration。
-不要把 full release package 當成 daily driver/FPGA bring-up vehicle。
-
-## Build
-
-Top-level CMake 會 build core SDK、helpers 和 optional sample：
-
-```text
-BUILD_GVFG_SAMPLES=ON
-```
-
-Internal diagnostic build 使用 Debug configuration：
-
-```text
-cmake --build build --target gvfg_qt_preview --config Debug
-```
-
-這個 build 仍產生 `gvfg_qt_preview.exe`，但會把 internal diagnostics
-編譯進同一個執行檔。
-
-輸出產物：
-
-```text
-bin/gvfg.dll
-bin/gvfg_preview.dll
-lib/gvfg.lib
-lib/gvfg_preview.lib
-bin/gvfg_qt_preview.exe
-```
-
-Debug configuration 也會打開 internal backend 的 verbose PCIES2MM flow logging。
-
-## Draw.io Files
-
-保留 draw.io files 方便討論圖：
-
-```text
-docs/GVFG_ARCHITECTURE_OVERVIEW.drawio
-docs/GVFG_DMA_RING_DATA_FLOW.drawio
-```
-
-如果 code change 只影響 API order、package boundary 或 module ownership，更新這份
-Markdown 即可。只有 deeper data flow 或 frame ownership diagram 改變時，才需要更新
-draw.io。
+1. `gvfg_capture.h` 的所有 symbol 都有 export、實作及客戶文件。
+2. 公開 header 不 include private backend/Windows driver header。
+3. install/package 不含 `gvfg_debug.h`、backend source、IOCTL/register 文件。
+4. 測試 enumerate、CH0/CH1、無訊號 start、plug in/out、format change、stop/destroy。
+5. 測試 timeout 0、有限 timeout、infinite wait 被 stop 喚醒。
+6. 測試 read/release token、重複 read、錯誤 token、stop with held frame。
+7. 測試所有 GPU output 與 buffer size 邊界。
+8. 驗證 x64 ABI static assertions、DLL exports、import library 與 customer sample。
+9. 用乾淨 install tree 編譯 customer sample，避免意外依賴 source tree。
+10. 確認客戶文件沒有 register、IOCTL、IRQ、ring slot 或未承諾的規格。

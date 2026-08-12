@@ -405,6 +405,14 @@ void D3DPreviewPipeline::set_source_bit_depth(int bits)
 
 bool D3DPreviewPipeline::create_shaders_and_states()
 {
+    if (vs_ && il_ &&
+        ps_yuy2_ && ps_y210_ &&
+        ps_fp16_to_rgba8_ &&
+        ps_fp16_to_nv12_y_ && ps_fp16_to_nv12_uv_ &&
+        ps_fp16_to_preview_ && ps_rgba8_to_preview_ &&
+        vb_ && samp_ && cs_params_)
+        return true;
+
     // Compile shaders
     ComPtr<ID3DBlob> vsb, psb3, psb4, psb5, psb6, err;
     if (FAILED(D3DCompile(g_vs_src, strlen(g_vs_src), nullptr, nullptr, nullptr,

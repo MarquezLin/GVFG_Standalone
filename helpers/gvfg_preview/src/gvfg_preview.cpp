@@ -27,11 +27,24 @@ public:
         resetPresentStats();
         hwnd_ = hwnd;
         configured_ = hwnd_ != nullptr;
-        if (pipeline_)
+        if (configured_ && ensureDevice())
         {
+            if (!pipeline_)
+                pipeline_ = std::make_unique<gvfg::internal::D3DPreviewPipeline>();
+            pipeline_->initialize(d3d_->device.Get(), d3d_->context.Get());
             gvfg::internal::gvfg_render_preview_desc_t desc{};
             desc.hwnd = hwnd_;
             desc.enable_preview = configured_ ? 1 : 0;
+            desc.swapchain_10bit = gvfg::internal::GVFG_RENDER_PREVIEW_BITDEPTH_AUTO;
+            pipeline_->configurePreview(desc);
+            if (!pipeline_->create_shaders_and_states())
+                return false;
+        }
+        else if (pipeline_)
+        {
+            gvfg::internal::gvfg_render_preview_desc_t desc{};
+            desc.hwnd = hwnd_;
+            desc.enable_preview = 0;
             desc.swapchain_10bit = gvfg::internal::GVFG_RENDER_PREVIEW_BITDEPTH_AUTO;
             pipeline_->configurePreview(desc);
         }
@@ -122,6 +135,15 @@ public:
         swapchain10Bit_.store(pipeline_->preview_swapchain_10bit(), std::memory_order_relaxed);
         active_.store(true, std::memory_order_relaxed);
         return true;
+    }
+
+    bool prepare(int width, int height, int sourceBitDepth)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!configured_ || !hwnd_ || width <= 0 || height <= 0)
+            return false;
+        return ensureDevice() &&
+               ensurePipeline(width, height, sourceBitDepth > 0 ? sourceBitDepth : 8);
     }
 
     void shutdown()
@@ -422,6 +444,18 @@ extern "C"
             return GVFG_PREVIEW_EINVAL;
         }
         return handle->renderer.configure(native_window_handle) ? GVFG_PREVIEW_OK : GVFG_PREVIEW_ESTATE;
+    }
+
+    gvfg_preview_status_t gvfg_preview_prepare(gvfg_preview_handle handle,
+                                               int width,
+                                               int height,
+                                               int bit_depth)
+    {
+        if (!handle || width <= 0 || height <= 0)
+            return GVFG_PREVIEW_EINVAL;
+        return handle->renderer.prepare(width, height, bit_depth)
+                   ? GVFG_PREVIEW_OK
+                   : GVFG_PREVIEW_ERENDER;
     }
 
     gvfg_preview_status_t gvfg_preview_render_frame(gvfg_preview_handle handle,
