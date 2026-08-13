@@ -115,6 +115,9 @@ int main(void)
 | `GVFG_ETIMEOUT` | 等待逾時                        |
 
 可用 `gvfg_strerror()` 取得靜態英文說明字串；呼叫端不可釋放該字串。
+
+可用 `gvfg_get_version()` 查詢目前實際載入的 `gvfg.dll` 版本。回傳值為
+靜態字串，例如 `"0.1.0"`，呼叫端不可釋放。
 需要記錄最近一次失敗的詳細原因時，可在 API 失敗後立即呼叫
 `gvfg_get_last_error_detail()`；driver/register 等內部診斷仍保留在 debug API。
 
@@ -124,7 +127,7 @@ int main(void)
 
 | 格式                | `pixel_format`     | bit depth | 每列大小        |
 | ----------------- | ------------------:| ---------:| -----------:|
-| YVYU packed 4:2:2 | `GVFG_PIXFMT_YVYU` | 8         | `width * 2` |
+| YUY2 packed 4:2:2 (`Y0 U0 Y1 V0`) | `GVFG_PIXFMT_YUY2` | 8 | `width * 2` |
 | Y210 packed 4:2:2 | `GVFG_PIXFMT_Y210` | 10        | `width * 4` |
 
 實際列距以 `gvfg_frame_t.row_stride_bytes` 為準。

@@ -18,6 +18,10 @@
 #include <type_traits>
 #include <vector>
 
+#ifndef GVFG_VERSION_STRING
+#define GVFG_VERSION_STRING "0.0.0"
+#endif
+
 using namespace gvfg::internal;
 
 namespace
@@ -137,8 +141,8 @@ namespace
     {
         switch (fmt)
         {
-        case PCIES2MM_PIXFMT_YVYU:
-            return GVFG_PIXFMT_YVYU;
+        case PCIES2MM_PIXFMT_YUY2:
+            return GVFG_PIXFMT_YUY2;
         case PCIES2MM_PIXFMT_Y210:
             return GVFG_PIXFMT_Y210;
         default:
@@ -150,8 +154,8 @@ namespace
     {
         switch (fmt)
         {
-        case GVFG_PIXFMT_YVYU:
-            return "YVYU";
+        case GVFG_PIXFMT_YUY2:
+            return "YUY2";
         case GVFG_PIXFMT_Y210:
             return "Y210";
         default:
@@ -172,7 +176,7 @@ namespace
                                           int &outStride)
     {
         uint64_t bytesPerPixel = 0;
-        if (pixelFormat == PCIES2MM_PIXFMT_YVYU)
+        if (pixelFormat == PCIES2MM_PIXFMT_YUY2)
             bytesPerPixel = 2;
         else if (pixelFormat == PCIES2MM_PIXFMT_Y210)
             bytesPerPixel = 4;
@@ -386,7 +390,7 @@ struct gvfg_handle_t
         const uint32_t configureWidth = waitingForSignal ? 2 : width;
         const uint32_t configureHeight = waitingForSignal ? 1 : height;
         const pcies2mm_pixel_format_t configureFormat =
-            waitingForSignal || pixelFormat == PCIES2MM_PIXFMT_UNKNOWN ? PCIES2MM_PIXFMT_YVYU : pixelFormat;
+            waitingForSignal || pixelFormat == PCIES2MM_PIXFMT_UNKNOWN ? PCIES2MM_PIXFMT_YUY2 : pixelFormat;
 
         pcies2mm_stream_desc_t desc{};
         desc.width = configureWidth;
@@ -847,6 +851,11 @@ extern "C"
 
         *out_info = runtimeInfo;
         return GVFG_OK;
+    }
+
+    const char *gvfg_get_version(void)
+    {
+        return GVFG_VERSION_STRING;
     }
 
     const char *gvfg_pixel_format_name(int pixel_format)

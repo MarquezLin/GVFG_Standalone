@@ -100,7 +100,7 @@ extern "C"
     {
         GVFG_PIXFMT_UNKNOWN = 0,
         GVFG_PIXFMT_Y210 = 2,
-        GVFG_PIXFMT_YVYU = 3
+        GVFG_PIXFMT_YUY2 = 3
     } gvfg_pixel_format_t;
 
     typedef enum
@@ -321,7 +321,7 @@ extern "C"
         _In_ const gvfg_frame_t *frame);
 
     /*
-     * Convert a captured YVYU or Y210 frame with the GPU and copy the result
+     * Convert a captured YUY2 or Y210 frame with the GPU and copy the result
      * into caller-owned memory.
      *
      * This call is synchronous. The source frame and destination buffer must
@@ -443,6 +443,9 @@ extern "C"
     GVFG_API gvfg_status_t gvfg_get_runtime_info(
         _In_ gvfg_handle handle,
         _Out_ gvfg_runtime_info_t *out_info);
+
+    /* Return the loaded GVFG runtime DLL version, for example "0.1.0". */
+    GVFG_API const char *gvfg_get_version(void);
 
     /* Convert a gvfg_pixel_format_t value to a static English format name. */
     GVFG_API const char *gvfg_pixel_format_name(

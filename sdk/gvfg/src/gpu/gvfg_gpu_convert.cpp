@@ -45,8 +45,8 @@ public:
         const auto *data = static_cast<const uint8_t *>(source.data);
         switch (source.pixel_format)
         {
-        case GVFG_PIXFMT_YVYU:
-            renderFormat = gvfg::internal::GVFG_RENDER_FMT_YVYU;
+        case GVFG_PIXFMT_YUY2:
+            renderFormat = gvfg::internal::GVFG_RENDER_FMT_YUY2;
             uploaded = pipeline_->upload_packed_422_frame(data,
                                                      source.row_stride_bytes,
                                                      source.width,
@@ -170,7 +170,7 @@ bool checkedFrameLayout(const gvfg_frame_t &source)
     uint64_t minimumRowBytes = 0;
     switch (source.pixel_format)
     {
-    case GVFG_PIXFMT_YVYU:
+    case GVFG_PIXFMT_YUY2:
         minimumRowBytes = static_cast<uint64_t>(source.width) * 2u;
         break;
     case GVFG_PIXFMT_Y210:
@@ -203,7 +203,7 @@ extern "C" GVFG_API gvfg_status_t gvfg_gpu_convert_to_buffer(
         output->row_bytes <= 0)
         return GVFG_EINVAL;
 
-    if (source->pixel_format != GVFG_PIXFMT_YVYU &&
+    if (source->pixel_format != GVFG_PIXFMT_YUY2 &&
         source->pixel_format != GVFG_PIXFMT_Y210)
         return GVFG_ENOTSUP;
     if (output->pixel_format != GVFG_GPU_OUTPUT_BGRA8 &&

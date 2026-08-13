@@ -39,7 +39,7 @@ register 與 DMA 實作不屬於本文件。
 | --------------------- | ---:| ----------------------------------------- |
 | `GVFG_PIXFMT_UNKNOWN` | 0   | 未知或尚無有效訊號格式                               |
 | `GVFG_PIXFMT_Y210`    | 2   | 10-bit packed YUV 4:2:2；目前每 pixel 4 bytes |
-| `GVFG_PIXFMT_YVYU`    | 3   | 8-bit packed YUV 4:2:2；目前每 pixel 2 bytes  |
+| `GVFG_PIXFMT_YUY2`    | 3   | 8-bit packed YUV 4:2:2；byte order Y0 U0 Y1 V0，每 pixel 2 bytes |
 
 ### 1.4 `gvfg_channel_t`
 
@@ -241,7 +241,7 @@ gvfg_status_t gvfg_gpu_convert_to_buffer(
     const gvfg_gpu_output_buffer_t *output);
 ```
 
-- `source`：有效的 YVYU/Y210 frame；若來自 read，必須尚未 release。
+- `source`：有效的 YUY2/Y210 frame；若來自 read，必須尚未 release。
 - `output`：caller 填好的 destination descriptor。
 - `GVFG_OK`：同步轉換及 copy 完成。
 - `GVFG_EINVAL`：NULL、尺寸、stride、buffer size、奇偶尺寸或 overflow 錯誤。
@@ -258,7 +258,7 @@ gvfg_status_t gvfg_gpu_convert_to_bgra8(
     int row_bytes);
 ```
 
-- `source`：有效且尚未 release 的 YVYU/Y210 frame。
+- `source`：有效且尚未 release 的 YUY2/Y210 frame。
 - `destination`：caller-owned BGRA8 buffer。
 - `destination_size`：buffer byte 數，至少 `row_bytes * source->height`。
 - `row_bytes`：destination stride，至少 `source->width * 4`。
@@ -287,7 +287,7 @@ gvfg_status_t gvfg_gpu_convert_to_nv12(
     int row_bytes);
 ```
 
-- `source`：有效且尚未 release 的 YVYU/Y210 frame；width、height 必須為偶數。
+- `source`：有效且尚未 release 的 YUY2/Y210 frame；width、height 必須為偶數。
 - `destination`：caller-owned NV12 buffer。
 - `destination_size`：至少 `row_bytes * (height + height / 2)`。
 - `row_bytes`：Y 與 UV plane 共用的 stride，至少為 `width`。
@@ -350,16 +350,26 @@ gvfg_status_t gvfg_get_runtime_info(
 - `GVFG_EINVAL`：handle 或 output pointer 為 NULL。
 - `GVFG_ESTATE`：handle 尚無已開啟的 backend 裝置。
 
-### 1.28 `gvfg_pixel_format_name`
+### 1.28 `gvfg_get_version`
+
+```c
+const char *gvfg_get_version(void);
+```
+
+- 回傳目前實際載入的 GVFG runtime DLL 版本，例如 `"0.1.0"`。
+- 回傳值是靜態 null-terminated 字串，caller 不可 free。
+- 可用於 log、問題回報，以及確認 header、LIB、DLL 是否來自同一版本。
+
+### 1.29 `gvfg_pixel_format_name`
 
 ```c
 const char *gvfg_pixel_format_name(int pixel_format);
 ```
 
 - `pixel_format`：`gvfg_pixel_format_t` 或其他整數值。
-- 回傳：靜態英文字串 `"YVYU"`、`"Y210"` 或 `"UNKNOWN"`。Caller 不可 free。
+- 回傳：靜態英文字串 `"YUY2"`、`"Y210"` 或 `"UNKNOWN"`。Caller 不可 free。
 
-### 1.29 `gvfg_strerror`
+### 1.30 `gvfg_strerror`
 
 ```c
 const char *gvfg_strerror(gvfg_status_t status);
@@ -401,7 +411,7 @@ gvfg_status_t gvfg_get_last_error_detail(gvfg_handle handle,
 `gvfg_preview_handle` 是 opaque pointer，只能由 preview create/destroy 管理。
 
 `gvfg_preview_pixel_format_t` 包含 `GVFG_PREVIEW_PIXFMT_Y210` 與
-`GVFG_PREVIEW_PIXFMT_YVYU`，值與對應 core pixel format 相同。
+`GVFG_PREVIEW_PIXFMT_YUY2`，值與對應 core pixel format 相同。
 
 `gvfg_preview_frame_t`：
 

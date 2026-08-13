@@ -11,7 +11,7 @@ namespace gvfg::internal
 typedef enum
 {
     GVFG_RENDER_FMT_Y210,
-    GVFG_RENDER_FMT_YVYU
+    GVFG_RENDER_FMT_YUY2
 } gvfg_render_pixfmt_t;
 
 typedef enum

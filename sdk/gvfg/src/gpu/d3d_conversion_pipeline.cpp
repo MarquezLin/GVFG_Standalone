@@ -51,12 +51,12 @@ VSOut main(VSIn i){
 }
 )";
 
-// YVYU 4:2:2 packed input.
+// YUY2 4:2:2 packed input (byte order Y0 U0 Y1 V0).
 // Each upload texture texel stores two pixels as R=Y0, G=U, B=Y1, A=V.
 //   R=Y0, G=U, B=Y1, A=V
 // texture width = ceil(w/2)
 static const char *g_ps_yuy2 = R"(
-// YVYU (4:2:2 packed):
+// YUY2 (4:2:2 packed):
 // Each texel packs 2 pixels: R=Y0, G=U, B=Y1, A=V
 // texture width = ceil(w/2)
 Texture2D<uint4> texP : register(t0);
@@ -132,8 +132,8 @@ float2 loadUV01(int x, int y)
     x = clamp(x, 0, (int)width - 1);
     y = clamp(y, 0, (int)height - 1);
     uint4 p = texP.Load(int3(x >> 1, y, 0));
-    float u = (float)p.a / 255.0;
-    float v = (float)p.g / 255.0;
+    float u = (float)p.g / 255.0;
+    float v = (float)p.a / 255.0;
     return float2(u, v);
 }
 
@@ -979,7 +979,7 @@ bool D3DPreviewPipeline::upload_y210_frame(const uint8_t *data, int src_stride, 
 
 bool D3DPreviewPipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, int frame_w, int frame_h)
 {
-    ID3D11Texture2D *texture = fmt == GVFG_RENDER_FMT_YVYU
+    ID3D11Texture2D *texture = fmt == GVFG_RENDER_FMT_YUY2
                                   ? upload_yuy2_packed_.Get()
                                   : upload_y210_packed_.Get();
     return render_texture_to_fp16(texture, fmt, frame_w, frame_h);
@@ -995,7 +995,7 @@ bool D3DPreviewPipeline::render_texture_to_fp16(ID3D11Texture2D *texture,
 
     ID3D11PixelShader *ps = nullptr;
     ComPtr<ID3D11ShaderResourceView> srv0;
-    if (fmt == GVFG_RENDER_FMT_YVYU)
+    if (fmt == GVFG_RENDER_FMT_YUY2)
     {
         if (!texture)
             return false;

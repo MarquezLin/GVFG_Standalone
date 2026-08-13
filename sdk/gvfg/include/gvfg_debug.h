@@ -20,7 +20,7 @@ typedef struct
     int width;        /* Width of the most recent frame returned by gvfg_read_frame(). */
     int height;       /* Height of the most recent frame returned by gvfg_read_frame(). */
     int bit_depth;    /* Bits per color channel of the frame buffer. */
-    int pixel_format; /* gvfg_pixel_format_t value: YVYU or Y210. */
+    int pixel_format; /* gvfg_pixel_format_t value: YUY2 or Y210. */
     int valid;        /* Non-zero after a frame is returned during the current running session. */
 } gvfg_debug_last_frame_info_t;
 

@@ -527,7 +527,7 @@ private:
                 const gvfg::internal::gvfg_render_pixfmt_t renderFmt =
                     work.pixelFormat == GVFG_PREVIEW_PIXFMT_Y210
                         ? gvfg::internal::GVFG_RENDER_FMT_Y210
-                        : gvfg::internal::GVFG_RENDER_FMT_YVYU;
+                        : gvfg::internal::GVFG_RENDER_FMT_YUY2;
                 rendered = pipeline_->render_texture_to_fp16(work.texture.Get(), renderFmt,
                                                               work.width, work.height);
                 copied = rendered && pipeline_->copy_fp16_to_scene();
@@ -691,7 +691,7 @@ extern "C"
         uint64_t minimumRowBytes = 0;
         switch (frame->pixel_format)
         {
-        case GVFG_PREVIEW_PIXFMT_YVYU:
+        case GVFG_PREVIEW_PIXFMT_YUY2:
             minimumRowBytes = static_cast<uint64_t>(frame->width) * 2u;
             break;
         case GVFG_PREVIEW_PIXFMT_Y210:

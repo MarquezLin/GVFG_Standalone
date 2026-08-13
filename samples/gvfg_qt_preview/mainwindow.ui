@@ -56,6 +56,9 @@
      </item>
      <item>
       <widget class="QPushButton" name="showPreviewButton">
+       <property name="toolTip">
+        <string>Available after capture receives its first video frame</string>
+       </property>
        <property name="text">
         <string>Open view window</string>
        </property>
@@ -63,6 +66,9 @@
      </item>
      <item>
       <widget class="QPushButton" name="fullscreenPreviewButton">
+       <property name="toolTip">
+        <string>Available after capture receives its first video frame</string>
+       </property>
        <property name="text">
         <string>Fullscreen window</string>
        </property>

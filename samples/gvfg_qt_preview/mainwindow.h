@@ -70,6 +70,7 @@ private:
     gvfg_preview_handle previewHandle_ = nullptr;
     std::atomic<bool> captureRunning_{false};
     std::atomic<bool> captureStop_{false};
+    std::atomic<bool> frameAvailable_{false};
     std::thread captureThread_;
     uint64_t previewFailureCount_ = 0;
     std::atomic<double> previewCallAverageMs_{0.0};

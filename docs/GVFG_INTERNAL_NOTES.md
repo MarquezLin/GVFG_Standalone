@@ -39,7 +39,7 @@ customer/sample (optional)
 - `pcies2mm_device.*`：SetupAPI 裝置列舉與 interface path。
 - `pcies2mm_ioctl.h`：與 driver 共用的 private ABI。
 - `pcies2mm_reg.h`：FPGA register offsets/masks。
-- `pcies2mm_video_format.*`：format register 解碼與 YVYU/Y210 layout。
+- `pcies2mm_video_format.*`：format register 解碼與 YUY2/Y210 layout；相容舊 FPGA 回報的 YVYU register 值。
 - `src/gpu/*`：D3D11 同步轉換及 readback 到 caller buffer。
 
 ## 3. 公開 facade 狀態
@@ -105,7 +105,7 @@ x64 `gvfg_frame_t` ABI 已在 `gvfg_capture.cpp` 以 static assertions 固定為
 
 目前原生格式：
 
-- YVYU：2 bytes/pixel，8-bit packed 4:2:2。
+- YUY2：2 bytes/pixel，8-bit packed 4:2:2，byte order 為 Y0 U0 Y1 V0。
 - Y210：4 bytes/pixel，10-bit packed 4:2:2。
 
 目前皆為 single-plane。加入 multi-plane 格式前，必須先設計 plane count、offset、
@@ -148,7 +148,7 @@ stream 狀態，且不得將 register API 包裝成客戶功能。
 ## 8. GPU conversion
 
 公開 GPU conversion 是同步的：建立 D3D pipeline、轉換／readback 到 caller-owned
-buffer，返回後不保留指標。輸入只接受目前公開的 YVYU/Y210；輸出為 BGRA8、
+buffer，返回後不保留指標。輸入只接受目前公開的 YUY2/Y210；輸出為 BGRA8、
 RGB10A2 或 BT.709 limited-range NV12。
 
 維護時必測：
@@ -171,7 +171,7 @@ internal debug header，但客戶 sample/package 不應包含 internal diagnosti
 ## 10. 已知限制與發佈檢查表
 
 目前設計限制：Windows only、每 handle 單一 channel、每 handle 最多一個 held
-frame、原生格式限 YVYU/Y210、event queue 非持久化且可能淘汰最舊事件。
+frame、原生格式限 YUY2/Y210、event queue 非持久化且可能淘汰最舊事件。
 
 每次發佈前確認：
 

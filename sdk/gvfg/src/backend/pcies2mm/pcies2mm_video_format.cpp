@@ -2,9 +2,10 @@
 
 namespace
 {
-    // This board revision can report v210 even though its DMA payload is Y210
-    // (16-bit containers with 10 valid bits).
-    constexpr uint32_t kRegisterDisplayYvyu = 0x59565955u;
+    // Legacy firmware reports YVYU for the 8-bit stream even though the DMA
+    // payload is YUY2 (byte order Y0 U0 Y1 V0). Keep accepting that register
+    // value until FPGA firmware is corrected.
+    constexpr uint32_t kLegacyRegisterDisplayYvyu = 0x59565955u;
     constexpr uint32_t kRegisterDisplayV210 = 0x76323130u;
     constexpr uint32_t kRegisterDisplayY210 = 0x59323130u;
 
@@ -23,8 +24,8 @@ namespace gvfg::internal
     {
         // Current firmware writes character codes in display order. Normalize
         // those values here so no register naming leaks into the SDK formats.
-        if (registerValue == kRegisterDisplayYvyu)
-            return PCIES2MM_PIXFMT_YVYU;
+        if (registerValue == kLegacyRegisterDisplayYvyu)
+            return PCIES2MM_PIXFMT_YUY2;
         if (registerValue == kRegisterDisplayV210 || registerValue == kRegisterDisplayY210)
             return PCIES2MM_PIXFMT_Y210;
 
@@ -32,7 +33,8 @@ namespace gvfg::internal
         switch (registerValue)
         {
         case fourcc('Y', 'V', 'Y', 'U'):
-            return PCIES2MM_PIXFMT_YVYU;
+        case fourcc('Y', 'U', 'Y', '2'):
+            return PCIES2MM_PIXFMT_YUY2;
         case fourcc('v', '2', '1', '0'):
         case fourcc('Y', '2', '1', '0'):
             return PCIES2MM_PIXFMT_Y210;
@@ -43,7 +45,7 @@ namespace gvfg::internal
 
     uint32_t bit_depth_for_pixfmt(pcies2mm_pixel_format_t format)
     {
-        if (format == PCIES2MM_PIXFMT_YVYU)
+        if (format == PCIES2MM_PIXFMT_YUY2)
             return 8;
         if (format == PCIES2MM_PIXFMT_Y210)
             return 10;
@@ -53,7 +55,7 @@ namespace gvfg::internal
     size_t bytes_per_frame(uint32_t width, uint32_t height, pcies2mm_pixel_format_t format)
     {
         const size_t pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
-        if (format == PCIES2MM_PIXFMT_YVYU)
+        if (format == PCIES2MM_PIXFMT_YUY2)
             return pixels * 2u;
         if (format == PCIES2MM_PIXFMT_Y210)
             return pixels * 4u;

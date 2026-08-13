@@ -163,9 +163,11 @@ MainWindow::MainWindow(QWidget *parent)
     ui_->setupUi(this);
 
 #if GVFG_INTERNAL_DIAGNOSTICS
-    setWindowTitle(QStringLiteral("GVFG Internal Diagnostic"));
+    setWindowTitle(QStringLiteral("GVFG Internal Diagnostic - SDK v%1")
+                       .arg(QString::fromLatin1(gvfg_get_version())));
 #else
-    setWindowTitle(QStringLiteral("GVFG Preview Sample"));
+    setWindowTitle(QStringLiteral("GVFG Preview Sample - SDK v%1")
+                       .arg(QString::fromLatin1(gvfg_get_version())));
 #endif
     previewWindow_ = new PreviewWindow();
     ui_->logEdit->setMaximumBlockCount(300);
@@ -195,6 +197,8 @@ MainWindow::MainWindow(QWidget *parent)
             { updateSignalStatus(); });
 
     updateUiState();
+    appendLog(QStringLiteral("GVFG SDK version | %1")
+                  .arg(QString::fromLatin1(gvfg_get_version())));
     appendLog(logFile_.isOpen()
                   ? QStringLiteral("Log file | %1").arg(logFilePath_)
                   : QStringLiteral("Log file unavailable | %1").arg(logFilePath_));
@@ -257,6 +261,10 @@ void MainWindow::refreshDevices()
 
 void MainWindow::showPreviewWindow()
 {
+    if (!captureRunning_.load(std::memory_order_acquire) ||
+        !frameAvailable_.load(std::memory_order_acquire))
+        return;
+
     updatePreviewSourceSize();
     previewWindow_->showPreview();
 
@@ -266,6 +274,10 @@ void MainWindow::showPreviewWindow()
 
 void MainWindow::showFullscreenPreviewWindow()
 {
+    if (!captureRunning_.load(std::memory_order_acquire) ||
+        !frameAvailable_.load(std::memory_order_acquire))
+        return;
+
     updatePreviewSourceSize();
     previewWindow_->showFullscreenPreview();
 
@@ -346,6 +358,7 @@ void MainWindow::startCapture()
     if (!handle_ && !openDevice())
         return;
 
+    frameAvailable_.store(false, std::memory_order_release);
     updatePreviewSourceSize();
     previewWindow_->showPreview();
     if (!applyPreview())
@@ -404,10 +417,14 @@ void MainWindow::stopCapture()
         joinCaptureThread();
         gvfg_stop(handle_);
         captureRunning_ = false;
+        frameAvailable_.store(false, std::memory_order_release);
+        if (previewWindow_)
+            previewWindow_->closePreview();
         appendLog(QStringLiteral("Stopped capture"));
         updateSignalStatus();
     }
 
+    frameAvailable_.store(false, std::memory_order_release);
     updateUiState();
 }
 
@@ -598,11 +615,14 @@ void MainWindow::updateSignalStatus()
 void MainWindow::updateUiState()
 {
     const bool deviceOpen = handle_ != nullptr;
+    const bool viewAvailable = captureRunning_.load(std::memory_order_acquire) &&
+                               frameAvailable_.load(std::memory_order_acquire);
     ui_->openButton->setText(deviceOpen ? QStringLiteral("Close Device") : QStringLiteral("Open Device"));
     ui_->openButton->setEnabled(!captureRunning_);
     ui_->startButton->setEnabled(deviceOpen && !captureRunning_);
     ui_->stopButton->setEnabled(captureRunning_);
-    ui_->fullscreenPreviewButton->setEnabled(true);
+    ui_->showPreviewButton->setEnabled(viewAvailable);
+    ui_->fullscreenPreviewButton->setEnabled(viewAvailable);
     ui_->refreshButton->setEnabled(!deviceOpen && !captureRunning_);
     ui_->deviceCombo->setEnabled(!deviceOpen && !captureRunning_);
 }
@@ -766,6 +786,12 @@ void MainWindow::captureReadLoop()
         if (st == GVFG_OK)
         {
             consecutiveTimeouts = 0;
+            if (!frameAvailable_.exchange(true, std::memory_order_acq_rel))
+            {
+                QMetaObject::invokeMethod(this, [this]()
+                                          { updateUiState(); },
+                                          Qt::QueuedConnection);
+            }
             if (captureStalledLogged)
             {
                 captureStalledLogged = false;
@@ -787,8 +813,8 @@ void MainWindow::captureReadLoop()
 
                 switch (frame.pixel_format)
                 {
-                case GVFG_PIXFMT_YVYU:
-                    previewFrame.pixel_format = GVFG_PREVIEW_PIXFMT_YVYU;
+                case GVFG_PIXFMT_YUY2:
+                    previewFrame.pixel_format = GVFG_PREVIEW_PIXFMT_YUY2;
                     break;
                 case GVFG_PIXFMT_Y210:
                     previewFrame.pixel_format = GVFG_PREVIEW_PIXFMT_Y210;

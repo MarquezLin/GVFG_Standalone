@@ -1,8 +1,7 @@
-if (NOT DEFINED GVFG_SDK_VERSION)
-  set(GVFG_SDK_VERSION "0.1.0" CACHE STRING "GVFG SDK version")
-endif()
-
-project(gvfg VERSION ${GVFG_SDK_VERSION} LANGUAGES CXX)
+# Inherit the version from the standalone root project. The root project()
+# declaration is the single source of truth for the public SDK version.
+set(_GVFG_VERSION "${PROJECT_VERSION}")
+project(gvfg VERSION ${_GVFG_VERSION} LANGUAGES CXX)
 
 add_library(gvfg SHARED
     include/gvfg_capture.h
@@ -38,7 +37,7 @@ target_include_directories(gvfg
 
 target_compile_definitions(gvfg PRIVATE
     GVFG_BUILD
-    GVFG_SDK_VERSION="${GVFG_SDK_VERSION}"
+    GVFG_VERSION_STRING="${PROJECT_VERSION}"
 )
 
 target_compile_definitions(gvfg PRIVATE

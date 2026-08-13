@@ -127,7 +127,7 @@ namespace gvfg::internal
     {
         stream_desc_.width = kDefaultWidth;
         stream_desc_.height = kDefaultHeight;
-        stream_desc_.pixel_format = PCIES2MM_PIXFMT_YVYU;
+        stream_desc_.pixel_format = PCIES2MM_PIXFMT_YUY2;
         stream_desc_.buffer_count = kDefaultRingBufferCount;
         stream_bit_depth_ = 8;
         reset_stats(stats_, PCIES2MM_STREAM_STOPPED);
@@ -270,10 +270,10 @@ namespace gvfg::internal
         if (desc.width == 0 || desc.height == 0)
             return PCIES2MM_EINVAL;
 
-        pcies2mm_pixel_format_t fmt = desc.pixel_format == PCIES2MM_PIXFMT_UNKNOWN ? PCIES2MM_PIXFMT_YVYU : desc.pixel_format;
+        pcies2mm_pixel_format_t fmt = desc.pixel_format == PCIES2MM_PIXFMT_UNKNOWN ? PCIES2MM_PIXFMT_YUY2 : desc.pixel_format;
         switch (fmt)
         {
-        case PCIES2MM_PIXFMT_YVYU:
+        case PCIES2MM_PIXFMT_YUY2:
         case PCIES2MM_PIXFMT_Y210:
             break;
         default:
@@ -1151,8 +1151,8 @@ namespace gvfg::internal
         const char *decodedFormat = "UNKNOWN";
         switch (pixelFormat)
         {
-        case PCIES2MM_PIXFMT_YVYU:
-            decodedFormat = "YVYU";
+        case PCIES2MM_PIXFMT_YUY2:
+            decodedFormat = "YUY2";
             break;
         case PCIES2MM_PIXFMT_Y210:
             decodedFormat = "Y210";
