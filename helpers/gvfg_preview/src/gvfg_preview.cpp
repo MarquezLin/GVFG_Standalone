@@ -10,8 +10,11 @@
 #include <cstring>
 #include <deque>
 #include <cstdio>
+#include <array>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <windows.h>
 #include <wrl/client.h>
 
@@ -29,9 +32,6 @@ public:
         resetPresentStats();
         hwnd_ = hwnd;
         configured_ = hwnd_ != nullptr;
-        preparedWidth_ = 0;
-        preparedHeight_ = 0;
-        preparedBitDepth_ = 0;
         if (configured_ && ensureDevice())
         {
             if (!pipeline_)
@@ -59,129 +59,107 @@ public:
     bool render(const gvfg_preview_frame_t &frame)
     {
         using Clock = std::chrono::steady_clock;
-        const auto totalStart = Clock::now();
-        std::lock_guard<std::mutex> lock(mutex_);
+        const auto submitStart = Clock::now();
+        std::unique_lock<std::mutex> lock(mutex_);
+        const auto lockEnd = Clock::now();
         if (!configured_ || !hwnd_ || !frame.data || frame.width <= 0 || frame.height <= 0)
-        {
-            clearActiveInfo();
             return false;
-        }
 
         int sourceBitDepth = frame.bit_depth > 0 ? frame.bit_depth : 8;
         if (frame.pixel_format == GVFG_PREVIEW_PIXFMT_Y210)
-        {
-            // These packed formats always carry 10-bit components. Do not let
-            // a missing or incorrect caller hint silently select an 8-bit swapchain.
             sourceBitDepth = 10;
-        }
-
-        if (!ensureDevice())
-        {
-            clearActiveInfo();
+        if (!ensureDevice() || !ensureWorkerLocked() ||
+            !ensureUploadSlotsLocked(frame.width, frame.height, frame.pixel_format))
             return false;
-        }
 
-        const bool pipelineMatches = pipeline_ &&
-                                     preparedWidth_ == frame.width &&
-                                     preparedHeight_ == frame.height &&
-                                     preparedBitDepth_ == sourceBitDepth;
-        const bool pipelineReady = pipelineMatches
-                                       ? pipeline_->ensure_preview_swapchain(frame.width, frame.height)
-                                       : ensurePipeline(frame.width, frame.height, sourceBitDepth);
-        const auto ensureEnd = Clock::now();
-        if (!pipelineReady)
+        size_t slotIndex = slots_.size();
+        for (size_t i = 0; i < slots_.size(); ++i)
+            if (slots_[i].state == SlotState::Free) { slotIndex = i; break; }
+        if (slotIndex == slots_.size())
+            for (size_t i = 0; i < slots_.size(); ++i)
+                if (slots_[i].state == SlotState::Pending) { slotIndex = i; break; }
+        if (slotIndex == slots_.size())
         {
-            clearActiveInfo();
-            return false;
+            ++skippedSubmits_;
+            return true;
         }
 
-        gvfg::internal::gvfg_render_pixfmt_t renderFmt = gvfg::internal::GVFG_RENDER_FMT_YVYU;
-        const uint8_t *base = static_cast<const uint8_t *>(frame.data);
-        const int stride = frame.row_bytes;
-        bool uploaded = false;
-
-        switch (frame.pixel_format)
+        UploadSlot &slot = slots_[slotIndex];
+        if (slot.state == SlotState::Pending)
         {
-        case GVFG_PREVIEW_PIXFMT_YVYU:
-            renderFmt = gvfg::internal::GVFG_RENDER_FMT_YVYU;
-            break;
-        case GVFG_PREVIEW_PIXFMT_Y210:
-            renderFmt = gvfg::internal::GVFG_RENDER_FMT_Y210;
-            break;
-        default:
-            return false;
+            slot.commands.Reset();
+            ++skippedSubmits_;
         }
+        slot.state = SlotState::Uploading;
+        ID3D11DeviceContext *deferred = slot.deferred.Get();
+        ID3D11Texture2D *texture = slot.texture.Get();
+        lock.unlock();
+        const auto setupEnd = Clock::now();
 
-        switch (frame.pixel_format)
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        if (FAILED(deferred->Map(texture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
         {
-        case GVFG_PREVIEW_PIXFMT_YVYU:
-            uploaded = pipeline_->upload_packed_422_frame(base, stride, frame.width, frame.height);
-            break;
-        case GVFG_PREVIEW_PIXFMT_Y210:
-            uploaded = pipeline_->upload_y210_frame(base, stride, frame.width, frame.height);
-            break;
-        default:
-            return false;
+            lock.lock(); slot.state = SlotState::Free; return false;
         }
-        const auto uploadEnd = Clock::now();
-
-        const bool rendered = uploaded &&
-                              pipeline_->render_uploaded_yuv_to_fp16(renderFmt, frame.width, frame.height);
-        const auto renderEnd = Clock::now();
-        const bool copied = rendered && pipeline_->copy_fp16_to_scene();
+        const auto mapEnd = Clock::now();
+        const size_t rowBytes = frame.pixel_format == GVFG_PREVIEW_PIXFMT_Y210
+                                    ? static_cast<size_t>(frame.width) * 4u
+                                    : static_cast<size_t>((frame.width + 1) / 2) * 4u;
+        if (mapped.RowPitch == rowBytes && static_cast<size_t>(frame.row_bytes) == rowBytes)
+        {
+            std::memcpy(mapped.pData, frame.data, rowBytes * static_cast<size_t>(frame.height));
+        }
+        else
+        {
+            for (int row = 0; row < frame.height; ++row)
+                std::memcpy(static_cast<uint8_t *>(mapped.pData) + static_cast<size_t>(row) * mapped.RowPitch,
+                            static_cast<const uint8_t *>(frame.data) + static_cast<size_t>(row) * frame.row_bytes,
+                            rowBytes);
+        }
+        deferred->Unmap(texture, 0);
         const auto copyEnd = Clock::now();
-        if (!uploaded || !rendered || !copied)
+        ComPtr<ID3D11CommandList> commands;
+        if (FAILED(deferred->FinishCommandList(FALSE, &commands)))
         {
-            clearActiveInfo();
-            return false;
+            lock.lock(); slot.state = SlotState::Free; return false;
         }
+        const auto finishEnd = Clock::now();
 
-        bool ok = true;
-        if (!pipeline_->preview_swapchain_10bit())
-            ok = pipeline_->blit_fp16_to_rgba8(frame.width, frame.height);
-        const auto blitEnd = Clock::now();
-        if (!ok)
-        {
-            clearActiveInfo();
-            return false;
-        }
-
-        const gvfg::internal::gvfg_preview_present_result_t presentResult =
-            pipeline_->present_preview(frame.width, frame.height);
-        const auto presentEnd = Clock::now();
+        lock.lock();
+        const auto publishLockEnd = Clock::now();
+        for (UploadSlot &other : slots_)
+            if (&other != &slot && other.state == SlotState::Pending)
+                other.state = SlotState::Free;
+        slot.commands = commands;
+        slot.width = frame.width;
+        slot.height = frame.height;
+        slot.bitDepth = sourceBitDepth;
+        slot.pixelFormat = frame.pixel_format;
+        slot.frameId = frame.frame_id;
+        slot.state = SlotState::Pending;
+        workerCv_.notify_one();
 #if GVFG_INTERNAL_DIAGNOSTICS
-        const auto milliseconds = [](Clock::duration duration)
-        {
+        const auto submitEnd = Clock::now();
+        const auto milliseconds = [](Clock::duration duration) {
             return std::chrono::duration<double, std::milli>(duration).count();
         };
-        const double totalMs = milliseconds(presentEnd - totalStart);
+        const double totalMs = milliseconds(submitEnd - submitStart);
         if (totalMs >= 10.0)
         {
-            char line[512] = {};
+            char line[420] = {};
             std::snprintf(line, sizeof(line),
-                          "[GVFG][PREVIEW] SLOW frame=%llu total=%.3f lock_ensure=%.3f upload=%.3f render=%.3f copy=%.3f blit=%.3f present=%.3f ms\n",
-                          static_cast<unsigned long long>(frame.frame_id), totalMs,
-                          milliseconds(ensureEnd - totalStart),
-                          milliseconds(uploadEnd - ensureEnd),
-                          milliseconds(renderEnd - uploadEnd),
-                          milliseconds(copyEnd - renderEnd),
-                          milliseconds(blitEnd - copyEnd),
-                          milliseconds(presentEnd - blitEnd));
+                          "[GVFG][PREVIEW] SLOW SUBMIT frame=%llu slot=%zu total=%.3f lock=%.3f setup=%.3f map=%.3f copy=%.3f finish=%.3f publish_lock=%.3f src_pitch=%d dst_pitch=%u ms\n",
+                          static_cast<unsigned long long>(frame.frame_id), slotIndex, totalMs,
+                          milliseconds(lockEnd - submitStart),
+                          milliseconds(setupEnd - lockEnd),
+                          milliseconds(mapEnd - setupEnd),
+                          milliseconds(copyEnd - mapEnd),
+                          milliseconds(finishEnd - copyEnd),
+                          milliseconds(publishLockEnd - finishEnd),
+                          frame.row_bytes, mapped.RowPitch);
             OutputDebugStringA(line);
         }
 #endif
-        if (presentResult == gvfg::internal::GVFG_PREVIEW_PRESENT_FAILED)
-        {
-            clearActiveInfo();
-            return false;
-        }
-        recordPresentResult(presentResult);
-
-        width_.store(pipeline_->preview_w_, std::memory_order_relaxed);
-        height_.store(pipeline_->preview_h_, std::memory_order_relaxed);
-        bitDepth_.store(pipeline_->preview_swapchain_10bit() ? 10 : 8, std::memory_order_relaxed);
-        swapchain10Bit_.store(pipeline_->preview_swapchain_10bit(), std::memory_order_relaxed);
-        active_.store(true, std::memory_order_relaxed);
         return true;
     }
 
@@ -196,16 +174,28 @@ public:
 
     void shutdown()
     {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            workerStopping_ = true;
+            workerCv_.notify_all();
+        }
+        if (worker_.joinable())
+            worker_.join();
+
         std::lock_guard<std::mutex> lock(mutex_);
         if (pipeline_)
             pipeline_->release_preview_swapchain();
+        for (UploadSlot &slot : slots_)
+            slot = UploadSlot{};
         pipeline_.reset();
         d3d_.reset();
-        preparedWidth_ = 0;
-        preparedHeight_ = 0;
-        preparedBitDepth_ = 0;
         configured_ = false;
         hwnd_ = nullptr;
+        workerStarted_ = false;
+        workerStopping_ = false;
+        uploadWidth_ = 0;
+        uploadHeight_ = 0;
+        uploadPixelFormat_ = -1;
         clearActiveInfo();
         resetPresentStats();
     }
@@ -249,13 +239,28 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stats.presented_frames = presentedFrames_;
-        stats.skipped_presents = skippedPresents_;
+        stats.skipped_presents = skippedPresents_ + skippedSubmits_;
         stats.present_fps = active_.load(std::memory_order_relaxed)
                                 ? calculatePresentFps(std::chrono::steady_clock::now())
                                 : 0.0;
     }
 
 private:
+    enum class SlotState { Free, Uploading, Pending, Presenting };
+
+    struct UploadSlot
+    {
+        ComPtr<ID3D11DeviceContext> deferred;
+        ComPtr<ID3D11Texture2D> texture;
+        ComPtr<ID3D11CommandList> commands;
+        SlotState state = SlotState::Free;
+        int width = 0;
+        int height = 0;
+        int bitDepth = 0;
+        int pixelFormat = -1;
+        uint64_t frameId = 0;
+    };
+
     struct D3DState
     {
         ComPtr<ID3D11Device> device;
@@ -278,6 +283,7 @@ private:
         presentTimes_.clear();
         presentedFrames_ = 0;
         skippedPresents_ = 0;
+        skippedSubmits_ = 0;
     }
 
     void recordPresentResult(gvfg::internal::gvfg_preview_present_result_t result)
@@ -412,6 +418,158 @@ private:
         return true;
     }
 
+    bool ensureWorkerLocked()
+    {
+        if (workerStarted_)
+            return true;
+        workerStopping_ = false;
+        try
+        {
+            worker_ = std::thread(&PreviewRenderer::workerLoop, this);
+            workerStarted_ = true;
+        }
+        catch (...)
+        {
+            return false;
+        }
+        return true;
+    }
+
+    bool ensureUploadSlotsLocked(int width, int height, int pixelFormat)
+    {
+        if (uploadWidth_ == width && uploadHeight_ == height &&
+            uploadPixelFormat_ == pixelFormat && slots_[0].texture)
+            return true;
+
+        for (const UploadSlot &slot : slots_)
+            if (slot.state == SlotState::Uploading || slot.state == SlotState::Presenting)
+                return false;
+
+        const DXGI_FORMAT format = pixelFormat == GVFG_PREVIEW_PIXFMT_Y210
+                                       ? DXGI_FORMAT_R16G16B16A16_UINT
+                                       : DXGI_FORMAT_R8G8B8A8_UINT;
+        const UINT textureWidth = static_cast<UINT>((width + 1) / 2);
+        std::array<UploadSlot, 3> replacement{};
+        for (UploadSlot &slot : replacement)
+        {
+            if (FAILED(d3d_->device->CreateDeferredContext(0, &slot.deferred)))
+                return false;
+            D3D11_TEXTURE2D_DESC desc{};
+            desc.Width = textureWidth;
+            desc.Height = static_cast<UINT>(height);
+            desc.MipLevels = 1;
+            desc.ArraySize = 1;
+            desc.Format = format;
+            desc.SampleDesc.Count = 1;
+            desc.Usage = D3D11_USAGE_DYNAMIC;
+            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+            if (FAILED(d3d_->device->CreateTexture2D(&desc, nullptr, &slot.texture)))
+                return false;
+        }
+        slots_ = std::move(replacement);
+        uploadWidth_ = width;
+        uploadHeight_ = height;
+        uploadPixelFormat_ = pixelFormat;
+        return true;
+    }
+
+    void workerLoop()
+    {
+        for (;;)
+        {
+            size_t selected = slots_.size();
+            UploadSlot work;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                workerCv_.wait(lock, [this] {
+                    if (workerStopping_)
+                        return true;
+                    for (const UploadSlot &slot : slots_)
+                        if (slot.state == SlotState::Pending)
+                            return true;
+                    return false;
+                });
+                if (workerStopping_)
+                    break;
+                for (size_t i = 0; i < slots_.size(); ++i)
+                    if (slots_[i].state == SlotState::Pending &&
+                        (selected == slots_.size() || slots_[i].frameId > slots_[selected].frameId))
+                        selected = i;
+                for (size_t i = 0; i < slots_.size(); ++i)
+                    if (i != selected && slots_[i].state == SlotState::Pending)
+                    {
+                        slots_[i].commands.Reset();
+                        slots_[i].state = SlotState::Free;
+                        ++skippedSubmits_;
+                    }
+                slots_[selected].state = SlotState::Presenting;
+                work = slots_[selected];
+            }
+
+            using Clock = std::chrono::steady_clock;
+            const auto start = Clock::now();
+            bool ready = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                ready = configured_ && !workerStopping_ &&
+                        ensurePipeline(work.width, work.height, work.bitDepth);
+            }
+            const auto ensureEnd = Clock::now();
+            bool rendered = false;
+            bool copied = false;
+            bool blitted = false;
+            gvfg::internal::gvfg_preview_present_result_t presentResult =
+                gvfg::internal::GVFG_PREVIEW_PRESENT_FAILED;
+            if (ready)
+            {
+                d3d_->context->ExecuteCommandList(work.commands.Get(), FALSE);
+                const gvfg::internal::gvfg_render_pixfmt_t renderFmt =
+                    work.pixelFormat == GVFG_PREVIEW_PIXFMT_Y210
+                        ? gvfg::internal::GVFG_RENDER_FMT_Y210
+                        : gvfg::internal::GVFG_RENDER_FMT_YVYU;
+                rendered = pipeline_->render_texture_to_fp16(work.texture.Get(), renderFmt,
+                                                              work.width, work.height);
+                copied = rendered && pipeline_->copy_fp16_to_scene();
+                blitted = copied && (pipeline_->preview_swapchain_10bit() ||
+                                     pipeline_->blit_fp16_to_rgba8(work.width, work.height));
+                if (blitted)
+                    presentResult = pipeline_->present_preview(work.width, work.height);
+            }
+            const auto end = Clock::now();
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (ready && rendered && copied && blitted &&
+                    presentResult != gvfg::internal::GVFG_PREVIEW_PRESENT_FAILED)
+                {
+                    recordPresentResult(presentResult);
+                    width_.store(work.width, std::memory_order_relaxed);
+                    height_.store(work.height, std::memory_order_relaxed);
+                    bitDepth_.store(work.bitDepth, std::memory_order_relaxed);
+                    swapchain10Bit_.store(pipeline_->preview_swapchain_10bit(), std::memory_order_relaxed);
+                    active_.store(true, std::memory_order_relaxed);
+                }
+                else
+                    clearActiveInfo();
+                slots_[selected].commands.Reset();
+                slots_[selected].state = SlotState::Free;
+            }
+#if GVFG_INTERNAL_DIAGNOSTICS
+            const double totalMs = std::chrono::duration<double, std::milli>(end - start).count();
+            if (totalMs >= 10.0)
+            {
+                char line[320] = {};
+                std::snprintf(line, sizeof(line),
+                              "[GVFG][PREVIEW] SLOW ASYNC frame=%llu total=%.3f ensure=%.3f ms\n",
+                              static_cast<unsigned long long>(work.frameId), totalMs,
+                              std::chrono::duration<double, std::milli>(ensureEnd - start).count());
+                OutputDebugStringA(line);
+            }
+#endif
+        }
+    }
+
     bool ensurePipeline(int width, int height, int sourceBitDepth)
     {
         if (!pipeline_)
@@ -428,12 +586,6 @@ private:
         pipeline_->set_source_bit_depth(sourceBitDepth > 0 ? sourceBitDepth : 8);
         const bool ready = pipeline_->ensure_rt_and_pipeline(width, height) &&
                            pipeline_->ensure_preview_swapchain(width, height);
-        if (ready)
-        {
-            preparedWidth_ = width;
-            preparedHeight_ = height;
-            preparedBitDepth_ = sourceBitDepth > 0 ? sourceBitDepth : 8;
-        }
         return ready;
     }
 
@@ -445,14 +597,20 @@ private:
     std::atomic<int> bitDepth_{0};
     std::atomic<bool> swapchain10Bit_{false};
     std::atomic<bool> active_{false};
-    int preparedWidth_ = 0;
-    int preparedHeight_ = 0;
-    int preparedBitDepth_ = 0;
     char adapterName_[160] = {};
     int adapterIndex_ = -1;
     std::deque<PresentClock::time_point> presentTimes_;
     uint64_t presentedFrames_ = 0;
     uint64_t skippedPresents_ = 0;
+    uint64_t skippedSubmits_ = 0;
+    std::array<UploadSlot, 3> slots_{};
+    std::thread worker_;
+    std::condition_variable workerCv_;
+    bool workerStarted_ = false;
+    bool workerStopping_ = false;
+    int uploadWidth_ = 0;
+    int uploadHeight_ = 0;
+    int uploadPixelFormat_ = -1;
     std::unique_ptr<D3DState> d3d_;
     std::unique_ptr<gvfg::internal::D3DPreviewPipeline> pipeline_;
 };

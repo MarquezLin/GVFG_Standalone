@@ -979,6 +979,17 @@ bool D3DPreviewPipeline::upload_y210_frame(const uint8_t *data, int src_stride, 
 
 bool D3DPreviewPipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, int frame_w, int frame_h)
 {
+    ID3D11Texture2D *texture = fmt == GVFG_RENDER_FMT_YVYU
+                                  ? upload_yuy2_packed_.Get()
+                                  : upload_y210_packed_.Get();
+    return render_texture_to_fp16(texture, fmt, frame_w, frame_h);
+}
+
+bool D3DPreviewPipeline::render_texture_to_fp16(ID3D11Texture2D *texture,
+                                                gvfg_render_pixfmt_t fmt,
+                                                int frame_w,
+                                                int frame_h)
+{
     if (!ctx_ || !vs_ || !il_ || !vb_ || !rtv_fp16_ || !rt_fp16_ || frame_w <= 0 || frame_h <= 0)
         return false;
 
@@ -986,13 +997,13 @@ bool D3DPreviewPipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, i
     ComPtr<ID3D11ShaderResourceView> srv0;
     if (fmt == GVFG_RENDER_FMT_YVYU)
     {
-        if (!upload_yuy2_packed_)
+        if (!texture)
             return false;
         D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
         sd.Format = DXGI_FORMAT_R8G8B8A8_UINT;
         sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
         sd.Texture2D.MipLevels = 1;
-        if (FAILED(d3d_->CreateShaderResourceView(upload_yuy2_packed_.Get(), &sd, &srv0)) || !srv0)
+        if (FAILED(d3d_->CreateShaderResourceView(texture, &sd, &srv0)) || !srv0)
             return false;
         ps = ps_yuy2_.Get();
         if (!ps)
@@ -1000,13 +1011,13 @@ bool D3DPreviewPipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, i
     }
     else if (fmt == GVFG_RENDER_FMT_Y210)
     {
-        if (!upload_y210_packed_)
+        if (!texture)
             return false;
         D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
         sd.Format = DXGI_FORMAT_R16G16B16A16_UINT;
         sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
         sd.Texture2D.MipLevels = 1;
-        if (FAILED(d3d_->CreateShaderResourceView(upload_y210_packed_.Get(), &sd, &srv0)) || !srv0)
+        if (FAILED(d3d_->CreateShaderResourceView(texture, &sd, &srv0)) || !srv0)
             return false;
         ps = ps_y210_.Get();
         if (!ps)

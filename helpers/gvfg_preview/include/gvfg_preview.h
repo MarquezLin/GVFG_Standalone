@@ -101,10 +101,12 @@ GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_prepare(
     int bit_depth);
 
 /*
- * Synchronously render one frame.
+ * Upload one frame to an internal GPU slot and queue it for preview.
  *
  * The frame memory remains owned by the caller and must remain valid until
- * this synchronous function returns.
+ * this function returns. GPU conversion and Present continue on the internal
+ * preview worker. If preview falls behind, an older queued preview frame may
+ * be replaced; capture ownership and capture-frame delivery are unaffected.
  */
 GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_render_frame(
     gvfg_preview_handle handle,

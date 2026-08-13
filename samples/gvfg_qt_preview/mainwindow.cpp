@@ -810,6 +810,7 @@ void MainWindow::captureReadLoop()
                            observedMaximum, previewElapsedMs, std::memory_order_relaxed))
                 {
                 }
+#if GVFG_INTERNAL_DIAGNOSTICS
                 if (previewElapsedMs >= 10.0)
                 {
                     QMetaObject::invokeMethod(this, [this, frameId = frame.frame_id, previewElapsedMs]()
@@ -818,6 +819,7 @@ void MainWindow::captureReadLoop()
                                                               .arg(previewElapsedMs, 0, 'f', 3)); },
                                               Qt::QueuedConnection);
                 }
+#endif
                 if (previewStatus != GVFG_PREVIEW_OK)
                 {
                     const uint64_t failures = ++previewFailureCount_;

@@ -62,6 +62,10 @@ public:
     bool upload_packed_422_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h);
     bool upload_y210_frame(const uint8_t *data, int src_stride, int frame_w, int frame_h);
     bool render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, int frame_w, int frame_h);
+    bool render_texture_to_fp16(ID3D11Texture2D *texture,
+                                gvfg_render_pixfmt_t fmt,
+                                int frame_w,
+                                int frame_h);
     bool copy_fp16_to_scene();
     bool readback_to_buffer(void *destination,
                             uint64_t destination_size,
