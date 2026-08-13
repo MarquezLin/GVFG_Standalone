@@ -73,6 +73,7 @@ private:
     std::thread captureThread_;
     uint64_t previewFailureCount_ = 0;
     std::atomic<double> previewCallAverageMs_{0.0};
+    std::atomic<double> previewCallMaximumMs_{0.0};
     std::atomic<uint64_t> previewCallSamples_{0};
     QTimer *signalStatusTimer_ = nullptr;
     QString lastSignalStatusText_;

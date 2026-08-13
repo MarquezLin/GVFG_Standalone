@@ -9,8 +9,10 @@
 #include <cstddef>
 #include <cstring>
 #include <deque>
+#include <cstdio>
 #include <memory>
 #include <mutex>
+#include <windows.h>
 #include <wrl/client.h>
 
 using Microsoft::WRL::ComPtr;
@@ -27,6 +29,9 @@ public:
         resetPresentStats();
         hwnd_ = hwnd;
         configured_ = hwnd_ != nullptr;
+        preparedWidth_ = 0;
+        preparedHeight_ = 0;
+        preparedBitDepth_ = 0;
         if (configured_ && ensureDevice())
         {
             if (!pipeline_)
@@ -53,6 +58,8 @@ public:
 
     bool render(const gvfg_preview_frame_t &frame)
     {
+        using Clock = std::chrono::steady_clock;
+        const auto totalStart = Clock::now();
         std::lock_guard<std::mutex> lock(mutex_);
         if (!configured_ || !hwnd_ || !frame.data || frame.width <= 0 || frame.height <= 0)
         {
@@ -68,7 +75,21 @@ public:
             sourceBitDepth = 10;
         }
 
-        if (!ensureDevice() || !ensurePipeline(frame.width, frame.height, sourceBitDepth))
+        if (!ensureDevice())
+        {
+            clearActiveInfo();
+            return false;
+        }
+
+        const bool pipelineMatches = pipeline_ &&
+                                     preparedWidth_ == frame.width &&
+                                     preparedHeight_ == frame.height &&
+                                     preparedBitDepth_ == sourceBitDepth;
+        const bool pipelineReady = pipelineMatches
+                                       ? pipeline_->ensure_preview_swapchain(frame.width, frame.height)
+                                       : ensurePipeline(frame.width, frame.height, sourceBitDepth);
+        const auto ensureEnd = Clock::now();
+        if (!pipelineReady)
         {
             clearActiveInfo();
             return false;
@@ -102,10 +123,14 @@ public:
         default:
             return false;
         }
+        const auto uploadEnd = Clock::now();
 
-        if (!uploaded ||
-            !pipeline_->render_uploaded_yuv_to_fp16(renderFmt, frame.width, frame.height) ||
-            !pipeline_->copy_fp16_to_scene())
+        const bool rendered = uploaded &&
+                              pipeline_->render_uploaded_yuv_to_fp16(renderFmt, frame.width, frame.height);
+        const auto renderEnd = Clock::now();
+        const bool copied = rendered && pipeline_->copy_fp16_to_scene();
+        const auto copyEnd = Clock::now();
+        if (!uploaded || !rendered || !copied)
         {
             clearActiveInfo();
             return false;
@@ -114,6 +139,7 @@ public:
         bool ok = true;
         if (!pipeline_->preview_swapchain_10bit())
             ok = pipeline_->blit_fp16_to_rgba8(frame.width, frame.height);
+        const auto blitEnd = Clock::now();
         if (!ok)
         {
             clearActiveInfo();
@@ -122,6 +148,28 @@ public:
 
         const gvfg::internal::gvfg_preview_present_result_t presentResult =
             pipeline_->present_preview(frame.width, frame.height);
+        const auto presentEnd = Clock::now();
+#if GVFG_INTERNAL_DIAGNOSTICS
+        const auto milliseconds = [](Clock::duration duration)
+        {
+            return std::chrono::duration<double, std::milli>(duration).count();
+        };
+        const double totalMs = milliseconds(presentEnd - totalStart);
+        if (totalMs >= 10.0)
+        {
+            char line[512] = {};
+            std::snprintf(line, sizeof(line),
+                          "[GVFG][PREVIEW] SLOW frame=%llu total=%.3f lock_ensure=%.3f upload=%.3f render=%.3f copy=%.3f blit=%.3f present=%.3f ms\n",
+                          static_cast<unsigned long long>(frame.frame_id), totalMs,
+                          milliseconds(ensureEnd - totalStart),
+                          milliseconds(uploadEnd - ensureEnd),
+                          milliseconds(renderEnd - uploadEnd),
+                          milliseconds(copyEnd - renderEnd),
+                          milliseconds(blitEnd - copyEnd),
+                          milliseconds(presentEnd - blitEnd));
+            OutputDebugStringA(line);
+        }
+#endif
         if (presentResult == gvfg::internal::GVFG_PREVIEW_PRESENT_FAILED)
         {
             clearActiveInfo();
@@ -153,6 +201,9 @@ public:
             pipeline_->release_preview_swapchain();
         pipeline_.reset();
         d3d_.reset();
+        preparedWidth_ = 0;
+        preparedHeight_ = 0;
+        preparedBitDepth_ = 0;
         configured_ = false;
         hwnd_ = nullptr;
         clearActiveInfo();
@@ -375,8 +426,15 @@ private:
         desc.swapchain_10bit = gvfg::internal::GVFG_RENDER_PREVIEW_BITDEPTH_AUTO;
         pipeline_->configurePreview(desc);
         pipeline_->set_source_bit_depth(sourceBitDepth > 0 ? sourceBitDepth : 8);
-        return pipeline_->ensure_rt_and_pipeline(width, height) &&
-               pipeline_->ensure_preview_swapchain(width, height);
+        const bool ready = pipeline_->ensure_rt_and_pipeline(width, height) &&
+                           pipeline_->ensure_preview_swapchain(width, height);
+        if (ready)
+        {
+            preparedWidth_ = width;
+            preparedHeight_ = height;
+            preparedBitDepth_ = sourceBitDepth > 0 ? sourceBitDepth : 8;
+        }
+        return ready;
     }
 
     mutable std::mutex mutex_;
@@ -387,6 +445,9 @@ private:
     std::atomic<int> bitDepth_{0};
     std::atomic<bool> swapchain10Bit_{false};
     std::atomic<bool> active_{false};
+    int preparedWidth_ = 0;
+    int preparedHeight_ = 0;
+    int preparedBitDepth_ = 0;
     char adapterName_[160] = {};
     int adapterIndex_ = -1;
     std::deque<PresentClock::time_point> presentTimes_;

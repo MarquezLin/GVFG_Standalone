@@ -1131,20 +1131,6 @@ bool D3DPreviewPipeline::ensure_preview_swapchain(int w, int h)
         clientH = h;
     }
 
-    ComPtr<IDXGIDevice> dxgiDev;
-    if (!d3d_ || FAILED(d3d_->QueryInterface(IID_PPV_ARGS(&dxgiDev))) || !dxgiDev)
-        return false;
-
-    ComPtr<IDXGIAdapter> adapter;
-    if (FAILED(dxgiDev->GetAdapter(&adapter)) || !adapter)
-        return false;
-
-    ComPtr<IDXGIFactory2> factory;
-    if (FAILED(adapter->GetParent(__uuidof(IDXGIFactory2),
-                                  reinterpret_cast<void **>(factory.GetAddressOf()))) ||
-        !factory)
-        return false;
-
     const int effectiveMode = (preview_swapchain_mode_ == GVFG_RENDER_PREVIEW_BITDEPTH_AUTO)
                                   ? ((preview_source_bit_depth_ >= 10) ? GVFG_RENDER_PREVIEW_BITDEPTH_10BIT : GVFG_RENDER_PREVIEW_BITDEPTH_8BIT)
                                   : preview_swapchain_mode_;
@@ -1164,6 +1150,23 @@ bool D3DPreviewPipeline::ensure_preview_swapchain(int w, int h)
 
     if (!preview_swapchain_)
     {
+        // Factory discovery is needed only while creating a swapchain.  It
+        // used to run for every preview frame even when the existing
+        // swapchain size and format were unchanged.
+        ComPtr<IDXGIDevice> dxgiDev;
+        if (FAILED(d3d_->QueryInterface(IID_PPV_ARGS(&dxgiDev))) || !dxgiDev)
+            return false;
+
+        ComPtr<IDXGIAdapter> adapter;
+        if (FAILED(dxgiDev->GetAdapter(&adapter)) || !adapter)
+            return false;
+
+        ComPtr<IDXGIFactory2> factory;
+        if (FAILED(adapter->GetParent(__uuidof(IDXGIFactory2),
+                                      reinterpret_cast<void **>(factory.GetAddressOf()))) ||
+            !factory)
+            return false;
+
         DXGI_SWAP_CHAIN_DESC1 sd{};
         sd.Width = (UINT)clientW;
         sd.Height = (UINT)clientH;

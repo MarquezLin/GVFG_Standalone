@@ -378,6 +378,7 @@ void MainWindow::startCapture()
 
     previewFailureCount_ = 0;
     previewCallAverageMs_.store(0.0, std::memory_order_relaxed);
+    previewCallMaximumMs_.store(0.0, std::memory_order_relaxed);
     previewCallSamples_.store(0, std::memory_order_relaxed);
 #if GVFG_INTERNAL_DIAGNOSTICS
     haveDebugBaseline_ = false;
@@ -501,6 +502,7 @@ void MainWindow::updateSignalStatus()
                                          ? QStringLiteral("Measuring")
                                           : QStringLiteral("%1 FPS").arg(previewFps);
     const double previewCallAverageMs = previewCallAverageMs_.load(std::memory_order_relaxed);
+    const double previewCallMaximumMs = previewCallMaximumMs_.load(std::memory_order_relaxed);
     const uint64_t previewCallSamples = previewCallSamples_.load(std::memory_order_relaxed);
     QStringList statusLines;
     statusLines << (signal.connected
@@ -511,9 +513,10 @@ void MainWindow::updateSignalStatus()
                               .arg(signal.channel));
     statusLines << (previewInfoOk
                         ? previewCallSamples > 0
-                              ? QStringLiteral("Preview | %1 | %2 | GPU call avg=%3 ms/frame samples=%4")
+                              ? QStringLiteral("Preview | %1 | %2 | GPU call avg=%3 max=%4 ms/frame samples=%5")
                                     .arg(previewState, previewFrame)
                                     .arg(previewCallAverageMs, 0, 'f', 3)
+                                    .arg(previewCallMaximumMs, 0, 'f', 3)
                                     .arg(static_cast<qulonglong>(previewCallSamples))
                               : QStringLiteral("Preview | %1 | %2 | GPU call measuring")
                                     .arg(previewState, previewFrame)
@@ -555,23 +558,6 @@ void MainWindow::updateSignalStatus()
                                    valueOrDash(backendStats.backend_dma_errors)));
                 diagnosticProblemDetected = true;
             }
-            if (backendStats.backend_frames_dropped > lastDebugDroppedFrames_)
-            {
-                const uint64_t delta = backendStats.backend_frames_dropped - lastDebugDroppedFrames_;
-                pendingDroppedFrames_ += delta;
-            }
-        }
-
-        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-        if (pendingDroppedFrames_ > 0 &&
-            (lastDroppedWarningMs_ == 0 || nowMs - lastDroppedWarningMs_ >= 10000))
-        {
-            appendLog(QStringLiteral("WARNING dropped frames +%1, total=%2")
-                          .arg(valueOrDash(pendingDroppedFrames_),
-                               valueOrDash(backendStats.backend_frames_dropped)));
-            pendingDroppedFrames_ = 0;
-            lastDroppedWarningMs_ = nowMs;
-            diagnosticProblemDetected = true;
         }
 
         lastDebugDmaErrors_ = backendStats.backend_dma_errors;
@@ -818,6 +804,20 @@ void MainWindow::captureReadLoop()
                 const auto previewEnd = std::chrono::steady_clock::now();
                 const double previewElapsedMs =
                     std::chrono::duration<double, std::milli>(previewEnd - previewStart).count();
+                double observedMaximum = previewCallMaximumMs_.load(std::memory_order_relaxed);
+                while (previewElapsedMs > observedMaximum &&
+                       !previewCallMaximumMs_.compare_exchange_weak(
+                           observedMaximum, previewElapsedMs, std::memory_order_relaxed))
+                {
+                }
+                if (previewElapsedMs >= 10.0)
+                {
+                    QMetaObject::invokeMethod(this, [this, frameId = frame.frame_id, previewElapsedMs]()
+                                              { appendLog(QStringLiteral("SLOW PREVIEW frame=%1 elapsed=%2 ms")
+                                                              .arg(static_cast<qulonglong>(frameId))
+                                                              .arg(previewElapsedMs, 0, 'f', 3)); },
+                                              Qt::QueuedConnection);
+                }
                 if (previewStatus != GVFG_PREVIEW_OK)
                 {
                     const uint64_t failures = ++previewFailureCount_;

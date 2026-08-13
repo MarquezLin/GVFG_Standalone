@@ -23,6 +23,7 @@ target_include_directories(gvfg_preview
 
 target_compile_definitions(gvfg_preview PRIVATE
     GVFG_PREVIEW_BUILD
+    GVFG_INTERNAL_DIAGNOSTICS=$<IF:$<CONFIG:Debug>,1,0>
 )
 
 target_link_libraries(gvfg_preview

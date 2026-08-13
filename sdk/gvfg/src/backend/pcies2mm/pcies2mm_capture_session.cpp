@@ -310,6 +310,8 @@ namespace gvfg::internal
                 slot.data.assign(bytes, 0);
             next_write_slot_ = 0;
             active_delivery_slot_ = static_cast<size_t>(-1);
+            active_delivery_started_ = {};
+            last_delivery_started_ = {};
             pending_events_ = 0;
             latest_sequence_ = 0;
             delivered_sequence_ = 0;
@@ -505,6 +507,8 @@ namespace gvfg::internal
         slot.ready = false;
         slot.in_use = true;
         active_delivery_slot_ = readySlot;
+        active_delivery_started_ = std::chrono::steady_clock::now();
+        last_delivery_started_ = active_delivery_started_;
         delivered_sequence_ = slot.sequence;
         ++stats_.frames_delivered;
 
@@ -535,6 +539,14 @@ namespace gvfg::internal
             return PCIES2MM_EINVAL;
 
         frame_ring_[active_delivery_slot_].in_use = false;
+        const double heldMs = active_delivery_started_.time_since_epoch().count() != 0
+                                  ? std::chrono::duration<double, std::milli>(
+                                        std::chrono::steady_clock::now() - active_delivery_started_).count()
+                                  : 0.0;
+        if (heldMs >= 10.0)
+            PCIES2MM_LOG("slow frame release: frame=%llu held_ms=%.3f",
+                         static_cast<unsigned long long>(frame.frame_id), heldMs);
+        active_delivery_started_ = {};
         active_delivery_slot_ = static_cast<size_t>(-1);
         data_cv_.notify_all();
         return PCIES2MM_OK;
@@ -841,7 +853,6 @@ namespace gvfg::internal
             switch (waitResult - WAIT_OBJECT_0)
             {
             case 0:
-                PCIES2MM_LOG("event: DMA");
                 handle_dma_event(channel);
                 break;
             case 1:
@@ -938,6 +949,30 @@ namespace gvfg::internal
             {
                 ++stats_.frames_dropped;
                 frameLost = true;
+#if GVFG_INTERNAL_DIAGNOSTICS
+                const auto now = std::chrono::steady_clock::now();
+                const double heldMs = active_delivery_started_.time_since_epoch().count() != 0
+                                          ? std::chrono::duration<double, std::milli>(now - active_delivery_started_).count()
+                                          : 0.0;
+                const double sinceReadMs = last_delivery_started_.time_since_epoch().count() != 0
+                                               ? std::chrono::duration<double, std::milli>(now - last_delivery_started_).count()
+                                               : 0.0;
+                PCIES2MM_LOG("FIFO LOSS: total=%llu overwrite_slot=%zu overwrite_seq=%llu delivered=%llu latest=%llu active_slot=%zu held_ms=%.3f since_read_ms=%.3f pending=%u",
+                             static_cast<unsigned long long>(stats_.frames_dropped),
+                             slotIndex,
+                             static_cast<unsigned long long>(slot.sequence),
+                             static_cast<unsigned long long>(delivered_sequence_),
+                             static_cast<unsigned long long>(latest_sequence_),
+                             active_delivery_slot_, heldMs, sinceReadMs, pending_events_);
+                for (size_t i = 0; i < frame_ring_.size(); ++i)
+                {
+                    const FrameSlot &diagnosticSlot = frame_ring_[i];
+                    PCIES2MM_LOG("FIFO slot[%zu]: ready=%d in_use=%d sequence=%llu bytes=%zu",
+                                 i, diagnosticSlot.ready ? 1 : 0, diagnosticSlot.in_use ? 1 : 0,
+                                 static_cast<unsigned long long>(diagnosticSlot.sequence),
+                                 diagnosticSlot.bytes);
+                }
+#endif
             }
             slot.ready = false;
             slot.in_use = true;
@@ -951,7 +986,13 @@ namespace gvfg::internal
             emit_event(PCIES2MM_EVENT_FRAME_LOSS);
 
         const uint32_t frameIndex = doneIndex % kDmaBufferCount;
+        const auto getFrameStarted = std::chrono::steady_clock::now();
         const int ret = get_frame(channel, frameIndex, slotData, bytes);
+        const double getFrameMs = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - getFrameStarted).count();
+        if (getFrameMs >= 10.0)
+            PCIES2MM_LOG("slow GET_FRAME: done_index=%u frame_index=%u elapsed_ms=%.3f ret=%d",
+                         doneIndex, frameIndex, getFrameMs, ret);
         if (!running_)
             return;
         if (ret < 0 || static_cast<DWORD>(ret) != bytes)

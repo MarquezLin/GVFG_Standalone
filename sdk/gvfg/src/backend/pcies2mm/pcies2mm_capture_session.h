@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -125,6 +126,8 @@ namespace gvfg::internal
         uint64_t latest_sequence_ = 0;
         uint64_t delivered_sequence_ = 0;
         uint64_t wait_timeout_count_ = 0;
+        std::chrono::steady_clock::time_point active_delivery_started_{};
+        std::chrono::steady_clock::time_point last_delivery_started_{};
         bool stream_error_ = false;
         pcies2mm_stream_stats_t stats_{};
         mutable std::string last_error_;
