@@ -123,6 +123,11 @@
 #define VIDEO_IRQ_STATUS_OFFSET 0x038     /* WO/RO: Video IRQ status [7:0] (write=clear, read=external) */
 #define VIDEO_DMA_IRQ_STATUS_OFFSET 0x03C /* WO/RO: Video DMA IRQ status [1:0] (read=external, write=clear); bit[0]=DMA done, bit[1]=reset done */
 #define VIDEO_DMA_SOFT_RESET_OFFSET 0x040 /* WO:   DMA soft reset [31:0] (write value determines whether to send IRQ after reset) */
+#define VIDEO_RX_MODE_LOCKED_OFFSET 0x048 /* RO: Xilinx XAPP 1097 rx_mode_locked */
+#define VIDEO_RX_T_LOCKED_OFFSET 0x04C    /* RO: Xilinx XAPP 1097 rx_t_locked */
+
+/* Temporary global control register; intentionally not relative to CHx_VIDEO_BASE. */
+#define VIDEO_OUTPUT_FORMAT_REGISTER 0x080 /* WO: 1=Y210, 0=YUY2 */
 
 /* ========================================================================
  * Audio Register Offsets (relative to CHx_AUDIO_BASE)

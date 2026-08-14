@@ -259,6 +259,18 @@ extern "C"
         _In_ int channel_index);
 
     /*
+     * Select the native capture format. This may be called before or during
+     * capture. A running stream reports GVFG_EVENT_FORMAT_CHANGE_BEGIN while
+     * the new format is applied.
+     *
+     * Currently the SDK implements this through a temporary hardware register;
+     * applications must use this API so the backend can move to an IOCTL later.
+     */
+    GVFG_API gvfg_status_t gvfg_set_video_format(
+        _In_ gvfg_handle handle,
+        _In_ gvfg_pixel_format_t format);
+
+    /*
      * Configure and start capture on an opened device.
      *
      * Parameters:
@@ -383,7 +395,7 @@ extern "C"
      * Returns:
      * - GVFG_OK on success.
      * - GVFG_EINVAL if handle/out_event is NULL or struct_size is invalid.
-     * - GVFG_ESTATE if capture is not running or is stopped while waiting.
+     * - GVFG_ESTATE if no capture device is open.
      * - GVFG_ETIMEOUT if no event is available before timeout_ms expires.
      */
     GVFG_API gvfg_status_t gvfg_poll_event(
@@ -401,7 +413,8 @@ extern "C"
      * - GVFG_OK on success, including when capture is already stopped.
      * - GVFG_EINVAL if handle is NULL.
      *
-     * This stops backend capture and invalidates any unreleased frame.
+     * This stops DMA capture and invalidates any unreleased frame. Signal and
+     * format event monitoring remains active until gvfg_destroy().
      */
     GVFG_API gvfg_status_t gvfg_stop(
         _In_ gvfg_handle handle);

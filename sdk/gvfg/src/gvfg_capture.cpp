@@ -548,40 +548,39 @@ struct gvfg_handle_t
 
     gvfg_status_t pollEvent(gvfg_event_t &out, uint32_t timeoutMs)
     {
-        if (!backend || !running.load(std::memory_order_acquire))
+        if (!backend)
             return GVFG_ESTATE;
 
         std::unique_lock<std::mutex> lock(eventMutex);
-        const auto eventAvailableOrStopped = [this]()
+        const auto eventAvailable = [this]()
         {
-            return !eventQueue.empty() || !running.load(std::memory_order_acquire);
+            return !eventQueue.empty();
         };
 
         bool waitConditionMet = false;
         if (timeoutMs == 0)
         {
             // Non-blocking: inspect the current state without sleeping.
-            waitConditionMet = eventAvailableOrStopped();
+            waitConditionMet = eventAvailable();
         }
         else if (timeoutMs == GVFG_TIMEOUT_INFINITE)
         {
             // Wake when an event arrives or capture is stopped.
-            eventCv.wait(lock, eventAvailableOrStopped);
+            eventCv.wait(lock, eventAvailable);
             waitConditionMet = true;
         }
         else
         {
             waitConditionMet = eventCv.wait_for(lock,
                                                 std::chrono::milliseconds(timeoutMs),
-                                                eventAvailableOrStopped);
+                                                eventAvailable);
         }
 
         if (!waitConditionMet)
             return GVFG_ETIMEOUT;
 
-        // A wake-up without an event means capture was stopped while waiting.
         if (eventQueue.empty())
-            return GVFG_ESTATE;
+            return GVFG_ETIMEOUT;
 
         out = eventQueue.front();
         eventQueue.pop_front();
@@ -645,6 +644,25 @@ struct gvfg_handle_t
         return map_status(backend->debug_read_register(offset, outValue));
     }
 
+    gvfg_status_t setVideoFormat(gvfg_pixel_format_t format)
+    {
+        if (!backend)
+            return GVFG_ESTATE;
+
+        pcies2mm_pixel_format_t backendFormat = PCIES2MM_PIXFMT_UNKNOWN;
+        if (format == GVFG_PIXFMT_YUY2)
+            backendFormat = PCIES2MM_PIXFMT_YUY2;
+        else if (format == GVFG_PIXFMT_Y210)
+            backendFormat = PCIES2MM_PIXFMT_Y210;
+        else
+            return GVFG_EINVAL;
+
+        const pcies2mm_status_t status = backend->set_video_format(backendFormat);
+        if (status != PCIES2MM_OK)
+            recordError(pcies2mm_error_text(status, backend.get()));
+        return map_status(status);
+    }
+
     gvfg_status_t debugWriteRegister(uint32_t offset, uint32_t value)
     {
         if (!backend)
@@ -671,22 +689,31 @@ struct gvfg_handle_t
 
     void updateRuntimeFps(uint64_t ptsNs)
     {
-        const uint64_t prevPtsNs = lastPtsNs.exchange(ptsNs, std::memory_order_relaxed);
-        if (prevPtsNs != 0 && ptsNs > prevPtsNs)
+        constexpr uint64_t kFpsWindowNs = 1000000000ULL;
+        const uint64_t windowStart = fpsWindowStartNs.load(std::memory_order_relaxed);
+        if (windowStart == 0 || ptsNs <= windowStart)
         {
-            const double fps = 1e9 / static_cast<double>(ptsNs - prevPtsNs);
-            if (fps > 0.0 && fps < 1000.0)
-            {
-                const double current = runtimeFps.load(std::memory_order_relaxed);
-                runtimeFps.store((current <= 0.0) ? fps : current * 0.9 + fps * 0.1,
-                                 std::memory_order_relaxed);
-            }
+            fpsWindowStartNs.store(ptsNs, std::memory_order_relaxed);
+            fpsWindowFrameCount.store(0, std::memory_order_relaxed);
+            return;
         }
+
+        const uint64_t frameCount = fpsWindowFrameCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        const uint64_t elapsedNs = ptsNs - windowStart;
+        if (elapsedNs < kFpsWindowNs)
+            return;
+
+        runtimeFps.store(static_cast<double>(frameCount) * 1e9 /
+                             static_cast<double>(elapsedNs),
+                         std::memory_order_relaxed);
+        fpsWindowStartNs.store(ptsNs, std::memory_order_relaxed);
+        fpsWindowFrameCount.store(0, std::memory_order_relaxed);
     }
 
     void resetRuntimeCounters()
     {
-        lastPtsNs.store(0, std::memory_order_relaxed);
+        fpsWindowStartNs.store(0, std::memory_order_relaxed);
+        fpsWindowFrameCount.store(0, std::memory_order_relaxed);
         deliveredFrames.store(0, std::memory_order_relaxed);
         deliveredWidth.store(0, std::memory_order_relaxed);
         deliveredHeight.store(0, std::memory_order_relaxed);
@@ -714,7 +741,8 @@ struct gvfg_handle_t
     pcies2mm_pixel_format_t pixelFormat = PCIES2MM_PIXFMT_UNKNOWN;
     bool signalConnected = false;
     mutable std::mutex stateMutex;
-    std::atomic<uint64_t> lastPtsNs{0};
+    std::atomic<uint64_t> fpsWindowStartNs{0};
+    std::atomic<uint64_t> fpsWindowFrameCount{0};
     std::atomic<uint64_t> deliveredFrames{0};
     std::atomic<uint32_t> deliveredWidth{0};
     std::atomic<uint32_t> deliveredHeight{0};
@@ -792,6 +820,13 @@ extern "C"
         if (!handle)
             return GVFG_EINVAL;
         return handle->start();
+    }
+
+    gvfg_status_t gvfg_set_video_format(gvfg_handle handle, gvfg_pixel_format_t format)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        return handle->setVideoFormat(format);
     }
 
     gvfg_status_t gvfg_read_frame(gvfg_handle handle, gvfg_frame_t *out_frame, uint32_t timeout_ms)

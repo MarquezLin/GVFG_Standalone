@@ -173,8 +173,8 @@ MainWindow::MainWindow(QWidget *parent)
     ui_->logEdit->setMaximumBlockCount(300);
     new LogHighlighter(ui_->logEdit->document());
     ui_->statusLabel->setWordWrap(true);
-    signalStatusTimer_ = new QTimer(this);
-    signalStatusTimer_->setInterval(1000);
+    runtimeStatusTimer_ = new QTimer(this);
+    runtimeStatusTimer_->setInterval(1000);
     openLogFile();
 
     connect(ui_->refreshButton, &QPushButton::clicked, this, [this]()
@@ -191,10 +191,21 @@ MainWindow::MainWindow(QWidget *parent)
             { showFullscreenPreviewWindow(); });
     connect(ui_->startButton, &QPushButton::clicked, this, [this]()
             { startCapture(); });
+    connect(ui_->outputFormatCombo, &QComboBox::currentIndexChanged, this, [this](int)
+            {
+                if (handle_)
+                {
+                    applyOutputFormat();
+                    updateSignalStatus();
+                }
+            });
     connect(ui_->stopButton, &QPushButton::clicked, this, [this]()
             { stopCapture(); });
-    connect(signalStatusTimer_, &QTimer::timeout, this, [this]()
-            { updateSignalStatus(); });
+    connect(runtimeStatusTimer_, &QTimer::timeout, this, [this]()
+            {
+                processPendingEvents();
+                updateSignalStatus(false);
+            });
 
     updateUiState();
     appendLog(QStringLiteral("GVFG SDK version | %1")
@@ -316,26 +327,32 @@ bool MainWindow::openDevice()
         return false;
     }
 
+    if (!applyOutputFormat())
+    {
+        closeDevice();
+        return false;
+    }
+
     lastSignalStatusText_.clear();
     appendLog(QStringLiteral("Opened device index %1 CH%2").arg(deviceIndex).arg(channelIndex));
     appendLog(QStringLiteral("Signal monitoring active"));
     updateSignalStatus();
-    signalStatusTimer_->start();
+    runtimeStatusTimer_->start();
     updateUiState();
     return true;
 }
 
 void MainWindow::closeDevice()
 {
+    if (runtimeStatusTimer_)
+        runtimeStatusTimer_->stop();
+
     stopCapture();
     if (previewHandle_)
     {
         gvfg_preview_destroy(previewHandle_);
         previewHandle_ = nullptr;
     }
-
-    if (signalStatusTimer_)
-        signalStatusTimer_->stop();
 
     if (handle_)
     {
@@ -347,7 +364,28 @@ void MainWindow::closeDevice()
     ui_->statusLabel->setText(QStringLiteral("Idle"));
     lastSignalStatusText_.clear();
     lastLoggedInputStatus_.clear();
+    cachedSignalStatus_ = {};
+    haveCachedSignalStatus_ = false;
     updateUiState();
+}
+
+bool MainWindow::applyOutputFormat()
+{
+    if (!handle_)
+        return false;
+
+    const gvfg_pixel_format_t format = ui_->outputFormatCombo->currentIndex() == 1
+                                           ? GVFG_PIXFMT_Y210
+                                           : GVFG_PIXFMT_YUY2;
+    const gvfg_status_t status = gvfg_set_video_format(handle_, format);
+    if (status != GVFG_OK)
+    {
+        showError(QStringLiteral("set output format register"), status);
+        return false;
+    }
+    appendLog(QStringLiteral("Output format | %1")
+                  .arg(format == GVFG_PIXFMT_Y210 ? QStringLiteral("Y210") : QStringLiteral("YUY2")));
+    return true;
 }
 
 void MainWindow::startCapture()
@@ -356,6 +394,18 @@ void MainWindow::startCapture()
         return;
 
     if (!handle_ && !openDevice())
+        return;
+
+    // Revalidate on the user action as a final guard against an unplug event
+    // that is queued but has not yet reached the UI.
+    updateSignalStatus();
+    if (!haveCachedSignalStatus_ || !cachedSignalStatus_.connected)
+    {
+        appendLog(QStringLiteral("Start skipped: no input signal"));
+        return;
+    }
+
+    if (!applyOutputFormat())
         return;
 
     frameAvailable_.store(false, std::memory_order_release);
@@ -468,14 +518,51 @@ void MainWindow::updatePreviewSourceSize()
         updatePreviewSourceSize(signal);
 }
 
-void MainWindow::updateSignalStatus()
+void MainWindow::processPendingEvents()
+{
+    if (!handle_)
+        return;
+
+    gvfg_event_t event{};
+    event.struct_size = sizeof(event);
+    while (gvfg_poll_event(handle_, &event, 0) == GVFG_OK)
+    {
+        const auto eventType = static_cast<gvfg_event_type_t>(event.type);
+        if (eventType == GVFG_EVENT_FRAME_LOSS)
+            appendLog(QStringLiteral("WARNING dropped frames +%1").arg(event.count));
+        else
+            appendLog(QStringLiteral("EVENT %1").arg(eventTypeText(eventType)));
+
+        if (eventType == GVFG_EVENT_SIGNAL_CONNECTED ||
+            eventType == GVFG_EVENT_SIGNAL_DISCONNECTED ||
+            eventType == GVFG_EVENT_FORMAT_CHANGE_BEGIN ||
+            eventType == GVFG_EVENT_STREAM_READY)
+            updateSignalStatus();
+
+        event = {};
+        event.struct_size = sizeof(event);
+    }
+}
+
+void MainWindow::updateSignalStatus(bool queryHardware)
 {
     if (!handle_)
         return;
 
     gvfg_signal_status_t signal{};
-    if (gvfg_get_signal_status(handle_, &signal) != GVFG_OK)
-        return;
+    if (queryHardware)
+    {
+        if (gvfg_get_signal_status(handle_, &signal) != GVFG_OK)
+            return;
+        cachedSignalStatus_ = signal;
+        haveCachedSignalStatus_ = true;
+    }
+    else
+    {
+        if (!haveCachedSignalStatus_)
+            return;
+        signal = cachedSignalStatus_;
+    }
 
     const QString inputStatus = signal.connected
                                     ? QStringLiteral("CH%1 Connected | %2")
@@ -605,6 +692,7 @@ void MainWindow::updateSignalStatus()
         ui_->statusLabel->setText(statusText);
         lastSignalStatusText_ = statusText;
     }
+    updateUiState();
 
 #if GVFG_INTERNAL_DIAGNOSTICS
     if (diagnosticProblemDetected)
@@ -619,12 +707,14 @@ void MainWindow::updateUiState()
                                frameAvailable_.load(std::memory_order_acquire);
     ui_->openButton->setText(deviceOpen ? QStringLiteral("Close Device") : QStringLiteral("Open Device"));
     ui_->openButton->setEnabled(!captureRunning_);
-    ui_->startButton->setEnabled(deviceOpen && !captureRunning_);
+    const bool signalConnected = haveCachedSignalStatus_ && cachedSignalStatus_.connected != 0;
+    ui_->startButton->setEnabled(deviceOpen && signalConnected && !captureRunning_);
     ui_->stopButton->setEnabled(captureRunning_);
     ui_->showPreviewButton->setEnabled(viewAvailable);
     ui_->fullscreenPreviewButton->setEnabled(viewAvailable);
     ui_->refreshButton->setEnabled(!deviceOpen && !captureRunning_);
     ui_->deviceCombo->setEnabled(!deviceOpen && !captureRunning_);
+    ui_->outputFormatCombo->setEnabled(deviceOpen);
 }
 
 void MainWindow::showError(const QString &apiName, gvfg_status_t status)
@@ -762,25 +852,6 @@ void MainWindow::captureReadLoop()
 
     while (!captureStop_.load(std::memory_order_acquire))
     {
-        gvfg_event_t event{};
-        event.struct_size = sizeof(event);
-        while (gvfg_poll_event(handle_, &event, 0) == GVFG_OK)
-        {
-            const auto eventType = static_cast<gvfg_event_type_t>(event.type);
-            const QString type = eventTypeText(eventType);
-            const uint64_t count = event.count;
-            QMetaObject::invokeMethod(this, [this, eventType, type, count]()
-                                      {
-                                          if (eventType == GVFG_EVENT_FRAME_LOSS)
-                                              appendLog(QStringLiteral("WARNING dropped frames +%1").arg(count));
-                                          else
-                                              appendLog(QStringLiteral("EVENT %1").arg(type));
-                                      },
-                                      Qt::QueuedConnection);
-            event = {};
-            event.struct_size = sizeof(event);
-        }
-
         gvfg_frame_t frame{};
         const gvfg_status_t st = gvfg_read_frame(handle_, &frame, 200);
         if (st == GVFG_OK)
@@ -902,23 +973,14 @@ void MainWindow::captureReadLoop()
             const bool periodicReport = captureStalledLogged && (consecutiveTimeouts % 50) == 0;
             if (firstReport || periodicReport)
             {
-                gvfg_signal_status_t signal{};
-                const gvfg_status_t signalStatus = gvfg_get_signal_status(handle_, &signal);
-                const QString detail = signalStatus != GVFG_OK
-                                           ? QStringLiteral("signal query failed: %1")
-                                                 .arg(QString::fromUtf8(gvfg_strerror(signalStatus)))
-                                           : signal.connected
-                                               ? signalFrameText(signal)
-                                               : QStringLiteral("No signal");
                 captureStalledLogged = true;
                 const uint32_t elapsedMs = consecutiveTimeouts * 200u;
-                QMetaObject::invokeMethod(this, [this, elapsedMs, detail]()
+                QMetaObject::invokeMethod(this, [this, elapsedMs]()
                                           {
-                                              appendLog(QStringLiteral("ERROR no capture frame for %1 ms | %2")
-                                                            .arg(elapsedMs)
-                                                            .arg(detail));
+                                              appendLog(QStringLiteral("ERROR no capture frame for %1 ms")
+                                                            .arg(elapsedMs));
 #if GVFG_INTERNAL_DIAGNOSTICS
-                                              updateSignalStatus();
+                                              updateSignalStatus(false);
                                               writeDiagnosticSnapshot(lastSignalStatusText_);
 #endif
                                           },

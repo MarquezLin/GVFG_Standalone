@@ -29,6 +29,7 @@ namespace gvfg::internal
         pcies2mm_status_t close();
 
         pcies2mm_status_t set_channel(uint32_t channel);
+        pcies2mm_status_t set_video_format(pcies2mm_pixel_format_t format);
         pcies2mm_status_t get_signal_status(pcies2mm_signal_status_t &out) const;
 
         pcies2mm_status_t set_event_callback(pcies2mm_event_callback_t callback, void *user, uint32_t eventMask);
@@ -54,6 +55,8 @@ namespace gvfg::internal
         bool register_event(uint32_t channelIndex, uint32_t eventType, HANDLE eventHandle);
         void unregister_event(uint32_t channelIndex, uint32_t eventType);
         bool create_and_register_events(uint32_t channelIndex);
+        bool start_event_monitoring();
+        void stop_event_monitoring();
         void unregister_events(uint32_t channelIndex);
         void close_event_handles();
         bool get_video_done_index(uint32_t channelIndex, uint32_t &doneIndex) const;
@@ -104,12 +107,15 @@ namespace gvfg::internal
         bool configured_ = false;
 
         std::atomic<bool> running_{false};
+        std::atomic<bool> monitoring_{false};
         std::atomic<bool> capture_active_{false};
         std::atomic<bool> reader_ready_{false};
         std::atomic<bool> signal_probe_active_{false};
         std::atomic<bool> stream_ready_pending_{false};
         mutable std::atomic<bool> signal_presence_known_{false};
         mutable std::atomic<bool> signal_present_{false};
+        mutable bool signal_metadata_valid_ = false;
+        mutable pcies2mm_signal_status_t cached_signal_{};
         std::thread capture_thread_;
 
         mutable std::mutex mutex_;
@@ -125,6 +131,8 @@ namespace gvfg::internal
         size_t active_delivery_slot_ = static_cast<size_t>(-1);
         uint64_t latest_sequence_ = 0;
         uint64_t delivered_sequence_ = 0;
+        bool have_last_done_index_ = false;
+        uint32_t last_done_index_ = 0;
         uint64_t wait_timeout_count_ = 0;
         std::chrono::steady_clock::time_point active_delivery_started_{};
         std::chrono::steady_clock::time_point last_delivery_started_{};

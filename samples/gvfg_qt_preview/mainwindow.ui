@@ -18,6 +18,18 @@
     <layout class="QHBoxLayout" name="topLayout">
      <item>
       <widget class="QLabel" name="deviceLabel">
+       <property name="minimumSize">
+        <size>
+         <width>86</width>
+         <height>0</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>86</width>
+         <height>16777215</height>
+        </size>
+       </property>
        <property name="text">
         <string>Device:</string>
        </property>
@@ -77,13 +89,66 @@
     </layout>
    </item>
    <item row="1" column="0">
+    <layout class="QHBoxLayout" name="formatLayout">
+     <item>
+      <widget class="QLabel" name="outputFormatLabel">
+       <property name="minimumSize">
+        <size>
+         <width>86</width>
+         <height>0</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>86</width>
+         <height>16777215</height>
+        </size>
+       </property>
+       <property name="text">
+        <string>Output format:</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QComboBox" name="outputFormatCombo">
+       <property name="toolTip">
+        <string>Requested capture output format</string>
+       </property>
+       <item>
+        <property name="text">
+         <string>YUY2 (8-bit 4:2:2)</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>Y210 (10-bit 4:2:2)</string>
+        </property>
+       </item>
+      </widget>
+     </item>
+     <item>
+      <spacer name="formatSpacer">
+       <property name="orientation">
+        <enum>Qt::Orientation::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+    </layout>
+   </item>
+   <item row="2" column="0">
     <widget class="QLabel" name="statusLabel">
      <property name="text">
       <string>Idle</string>
      </property>
     </widget>
    </item>
-   <item row="2" column="0">
+   <item row="3" column="0">
     <widget class="QPlainTextEdit" name="logEdit">
      <property name="readOnly">
       <bool>true</bool>

@@ -171,6 +171,7 @@ namespace gvfg::internal
         signal_presence_known_.store(false, std::memory_order_release);
         signal_present_.store(false, std::memory_order_release);
         signal_probe_active_.store(false, std::memory_order_release);
+        signal_metadata_valid_ = false;
         clear_last_error();
         PCIES2MM_LOG("open_device: %s", wide_to_utf8(base_path_).c_str());
         return PCIES2MM_OK;
@@ -179,12 +180,14 @@ namespace gvfg::internal
     pcies2mm_status_t PcieS2mmCaptureSession::close()
     {
         stop_stream();
+        stop_event_monitoring();
         close_handles();
         opened_ = false;
         configured_ = false;
         signal_presence_known_.store(false, std::memory_order_release);
         signal_present_.store(false, std::memory_order_release);
         signal_probe_active_.store(false, std::memory_order_release);
+        signal_metadata_valid_ = false;
         base_path_.clear();
         friendly_name_.clear();
         reset_stats(stats_, PCIES2MM_STREAM_STOPPED);
@@ -210,6 +213,28 @@ namespace gvfg::internal
         if (channel >= kMaxChannels)
             return PCIES2MM_EINVAL;
         channel_ = channel;
+        signal_metadata_valid_ = false;
+        if (!start_event_monitoring())
+            return fail(PCIES2MM_EIO, "start event monitoring");
+        return PCIES2MM_OK;
+    }
+
+    pcies2mm_status_t PcieS2mmCaptureSession::set_video_format(pcies2mm_pixel_format_t format)
+    {
+        if (!opened_)
+            return PCIES2MM_ESTATE;
+
+        uint32_t value = 0;
+        if (format == PCIES2MM_PIXFMT_Y210)
+            value = 1;
+        else if (format != PCIES2MM_PIXFMT_YUY2)
+            return PCIES2MM_EINVAL;
+
+        if (!write_reg(VIDEO_OUTPUT_FORMAT_REGISTER, value))
+            return fail(PCIES2MM_EIO, "set_video_format");
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        signal_metadata_valid_ = false;
         return PCIES2MM_OK;
     }
 
@@ -219,6 +244,31 @@ namespace gvfg::internal
             return PCIES2MM_ESTATE;
 
         std::memset(&out, 0, sizeof(out));
+        out.channel = channel_;
+
+        uint32_t modeLocked = 0;
+        uint32_t timingLocked = 0;
+        if (!read_reg(video_base() + VIDEO_RX_MODE_LOCKED_OFFSET, modeLocked) ||
+            !read_reg(video_base() + VIDEO_RX_T_LOCKED_OFFSET, timingLocked))
+            return fail(PCIES2MM_EIO, "read signal lock registers");
+
+        const bool signalPresent = modeLocked == 1u && timingLocked == 1u;
+        signal_presence_known_.store(true, std::memory_order_release);
+        signal_present_.store(signalPresent, std::memory_order_release);
+        if (!signalPresent)
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            signal_metadata_valid_ = false;
+            return PCIES2MM_ENODEV;
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (signal_metadata_valid_)
+        {
+            out = cached_signal_;
+            return PCIES2MM_OK;
+        }
+
         uint32_t rawWidth = 0;
         uint32_t rawHeight = 0;
         uint32_t rawFormat = 0;
@@ -227,17 +277,14 @@ namespace gvfg::internal
         const bool formatOk = read_reg(video_base() + VIDEO_FORMAT_OFFSET, rawFormat);
 
         const bool haveRawSize = widthOk && heightOk && rawWidth != 0 && rawHeight != 0;
-        const bool presenceKnown = signal_presence_known_.load(std::memory_order_acquire);
-        // H/V/format registers can retain their previous values after signal
-        // loss. They describe a candidate DMA layout, never signal presence.
-        const bool signalPresent = presenceKnown &&
-                                   signal_present_.load(std::memory_order_acquire);
         pcies2mm_pixel_format_t fmt = formatOk ? decode_pixel_format(rawFormat) : PCIES2MM_PIXFMT_UNKNOWN;
 
         const uint32_t width = signalPresent && haveRawSize ? rawWidth : 0;
         const uint32_t height = signalPresent && haveRawSize ? rawHeight : 0;
         const uint32_t bitDepth = bit_depth_for_pixfmt(fmt);
-        const bool connected = signalPresent && haveRawSize && fmt != PCIES2MM_PIXFMT_UNKNOWN;
+        // Signal presence is defined only by the two receiver lock bits. Size
+        // and format are metadata and must not participate in that decision.
+        const bool connected = signalPresent;
 
         out.connected = connected ? 1 : 0;
         out.channel = channel_;
@@ -245,11 +292,9 @@ namespace gvfg::internal
         out.height = height;
         out.pixel_format = fmt;
         out.bit_depth = bitDepth;
-        if (connected)
-            return PCIES2MM_OK;
-        if (signalPresent && haveRawSize && formatOk)
-            return PCIES2MM_ENOTSUP;
-        return PCIES2MM_ENODEV;
+        cached_signal_ = out;
+        signal_metadata_valid_ = widthOk && heightOk && formatOk && haveRawSize;
+        return PCIES2MM_OK;
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::set_event_callback(pcies2mm_event_callback_t callback, void *user, uint32_t eventMask)
@@ -315,19 +360,16 @@ namespace gvfg::internal
             pending_events_ = 0;
             latest_sequence_ = 0;
             delivered_sequence_ = 0;
+            have_last_done_index_ = false;
+            last_done_index_ = 0;
             wait_timeout_count_ = 0;
             stream_error_ = false;
             reset_stats(stats_, PCIES2MM_STREAM_CONFIGURED);
         }
 
         const uint32_t channel = active_channel();
-        if (!create_and_register_events(channel))
-        {
-            const DWORD err = GetLastError();
-            unregister_events(channel);
-            close_event_handles();
-            return fail(PCIES2MM_EIO, "REGISTER_EVENT", err);
-        }
+        if (!monitoring_.load(std::memory_order_acquire))
+            return fail(PCIES2MM_ESTATE, "event monitoring is not active", ERROR_INVALID_STATE);
         // Events are edge-triggered, so a source connected before registration
         // may not produce a plug-in event. Probe DMA using the register layout,
         // but do not report connected until a full frame is received.
@@ -340,21 +382,6 @@ namespace gvfg::internal
         reader_ready_ = false;
         signal_probe_active_ = probeAvailable;
         stream_ready_pending_ = false;
-        try
-        {
-            capture_thread_ = std::thread(&PcieS2mmCaptureSession::capture_thread_proc, this);
-        }
-        catch (...)
-        {
-            running_ = false;
-            capture_active_ = false;
-            signal_probe_active_ = false;
-            stream_ready_pending_ = false;
-            unregister_events(channel);
-            close_event_handles();
-            return fail(PCIES2MM_EIO, "capture_thread", ERROR_NOT_ENOUGH_MEMORY);
-        }
-
         PCIES2MM_LOG("start: channel=%u base=0x%x bytes=%zu probe_available=%d reader_deferred=1",
                      channel,
                      video_base(),
@@ -365,10 +392,9 @@ namespace gvfg::internal
 
     pcies2mm_status_t PcieS2mmCaptureSession::stop_stream()
     {
-        if (!running_ && !capture_thread_.joinable())
+        if (!running_)
             return PCIES2MM_OK;
 
-        const uint32_t channel = active_channel();
         running_ = false;
         capture_active_ = false;
         reader_ready_ = false;
@@ -379,21 +405,12 @@ namespace gvfg::internal
         {
             write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
             write_reg(video_base() + VIDEO_EN_OFFSET, 0);
-            write_reg(INTERRUPT_BASE + IRQ_MASK_W1C_OFFSET, video_irq_mask_bit());
         }
 
         if (dma_event_)
             SetEvent(dma_event_);
         frame_cv_.notify_all();
         data_cv_.notify_all();
-
-        if (capture_thread_.joinable())
-            capture_thread_.join();
-
-        if (device_ != INVALID_HANDLE_VALUE)
-            unregister_events(channel);
-
-        close_event_handles();
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -738,6 +755,50 @@ namespace gvfg::internal
         return true;
     }
 
+    bool PcieS2mmCaptureSession::start_event_monitoring()
+    {
+        if (monitoring_.load(std::memory_order_acquire))
+            return true;
+
+        const uint32_t channel = active_channel();
+        if (!create_and_register_events(channel))
+        {
+            unregister_events(channel);
+            close_event_handles();
+            return false;
+        }
+
+        monitoring_.store(true, std::memory_order_release);
+        try
+        {
+            capture_thread_ = std::thread(&PcieS2mmCaptureSession::capture_thread_proc, this);
+        }
+        catch (...)
+        {
+            monitoring_.store(false, std::memory_order_release);
+            unregister_events(channel);
+            close_event_handles();
+            return false;
+        }
+        return true;
+    }
+
+    void PcieS2mmCaptureSession::stop_event_monitoring()
+    {
+        if (!monitoring_.exchange(false, std::memory_order_acq_rel) &&
+            !capture_thread_.joinable())
+            return;
+
+        if (dma_event_)
+            SetEvent(dma_event_);
+        if (capture_thread_.joinable())
+            capture_thread_.join();
+
+        if (device_ != INVALID_HANDLE_VALUE)
+            unregister_events(active_channel());
+        close_event_handles();
+    }
+
     int PcieS2mmCaptureSession::get_frame(uint32_t channelIndex, uint32_t frameIndex, uint8_t *buffer, DWORD bufferSize) const
     {
         ULONG input[2] = {channelIndex, frameIndex};
@@ -776,16 +837,18 @@ namespace gvfg::internal
         constexpr DWORD waitHandleCount = 4;
         uint64_t diagnosticTimeouts = 0;
 
-        while (running_)
+        while (monitoring_.load(std::memory_order_acquire))
         {
             const DWORD waitResult = WaitForMultipleObjects(waitHandleCount,
                                                             waitHandles,
                                                             FALSE,
                                                             1000);
-            if (!running_)
+            if (!monitoring_.load(std::memory_order_acquire))
                 break;
             if (waitResult == WAIT_TIMEOUT)
             {
+                if (!running_.load(std::memory_order_acquire))
+                    continue;
                 ++diagnosticTimeouts;
                 if (diagnosticTimeouts <= 5 || (diagnosticTimeouts % 10) == 0)
                 {
@@ -891,6 +954,15 @@ namespace gvfg::internal
                                channel,
                                static_cast<unsigned long>(err));
             return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            // A repeated wake-up can expose the same completed DMA buffer.
+            // Do not publish it again as a new frame. A valid ring wrap is
+            // still accepted because other done indexes occur in between.
+            if (have_last_done_index_ && doneIndex == last_done_index_)
+                return;
         }
 
         const DWORD bytes = static_cast<DWORD>(frame_size_bytes());
@@ -1023,6 +1095,8 @@ namespace gvfg::internal
             std::lock_guard<std::mutex> lock(mutex_);
             if (pending_events_ > 0)
                 --pending_events_;
+            have_last_done_index_ = true;
+            last_done_index_ = doneIndex;
             publish_frame(slotIndex, static_cast<size_t>(ret));
         }
 
@@ -1032,6 +1106,10 @@ namespace gvfg::internal
 
     void PcieS2mmCaptureSession::handle_format_change_event(uint32_t channel)
     {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            signal_metadata_valid_ = false;
+        }
         emit_event(PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN);
         write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
         write_reg(video_base() + VIDEO_EN_OFFSET, 0);
@@ -1057,6 +1135,10 @@ namespace gvfg::internal
         signal_probe_active_.store(false, std::memory_order_release);
         signal_present_.store(true, std::memory_order_release);
         signal_presence_known_.store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            signal_metadata_valid_ = false;
+        }
         emit_event(PCIES2MM_EVENT_PLUG_IN);
         if (reader_ready_.load(std::memory_order_acquire))
             resume_capture_from_signal(channel);
@@ -1077,6 +1159,7 @@ namespace gvfg::internal
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            signal_metadata_valid_ = false;
             pending_events_ = 0;
             for (FrameSlot &slot : frame_ring_)
             {
@@ -1202,6 +1285,13 @@ namespace gvfg::internal
         stream_desc_.height = height;
         stream_desc_.pixel_format = pixelFormat;
         stream_bit_depth_ = bitDepth;
+        cached_signal_.connected = 1;
+        cached_signal_.channel = channel_;
+        cached_signal_.width = width;
+        cached_signal_.height = height;
+        cached_signal_.pixel_format = pixelFormat;
+        cached_signal_.bit_depth = bitDepth;
+        signal_metadata_valid_ = true;
         if (resizeRing)
         {
             frame_ring_.assign(stream_desc_.buffer_count, FrameSlot{});

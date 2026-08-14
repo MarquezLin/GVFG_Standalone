@@ -40,13 +40,15 @@ private:
     void showPreviewWindow();
     void showFullscreenPreviewWindow();
     bool openDevice();
+    bool applyOutputFormat();
     void closeDevice();
     void startCapture();
     void stopCapture();
     bool applyPreview();
     void updatePreviewSourceSize(const gvfg_signal_status_t &signal);
     void updatePreviewSourceSize();
-    void updateSignalStatus();
+    void processPendingEvents();
+    void updateSignalStatus(bool queryHardware = true);
     void updateUiState();
     void showError(const QString &apiName, gvfg_status_t status);
     void openLogFile();
@@ -76,7 +78,9 @@ private:
     std::atomic<double> previewCallAverageMs_{0.0};
     std::atomic<double> previewCallMaximumMs_{0.0};
     std::atomic<uint64_t> previewCallSamples_{0};
-    QTimer *signalStatusTimer_ = nullptr;
+    QTimer *runtimeStatusTimer_ = nullptr;
+    gvfg_signal_status_t cachedSignalStatus_{};
+    bool haveCachedSignalStatus_ = false;
     QString lastSignalStatusText_;
     QString lastLoggedInputStatus_;
 #if GVFG_INTERNAL_DIAGNOSTICS
