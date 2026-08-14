@@ -24,3 +24,4 @@ CaptureDemo/CaptureDemo/release/
 CaptureDemo/CaptureDemo/*.yuv
 CaptureDemo/CaptureDemo/*.raw
 CaptureDemo/CaptureDemo/*.rgb
+CaptureDemo

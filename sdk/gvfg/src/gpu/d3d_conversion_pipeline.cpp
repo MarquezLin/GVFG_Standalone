@@ -170,7 +170,7 @@ Texture2D<uint4> texP : register(t0);
 
 // true: interpret the raw chroma words as Y0,V,Y1,U.
 // false: interpret them as standard Y210 Y0,U,Y1,V.
-static const bool kSwapUV = true;
+static const bool kSwapUV = false;
 
 cbuffer ProcAmp : register(b0)
 {
@@ -812,10 +812,10 @@ bool D3DPreviewPipeline::readback_to_buffer(void *destination,
 }
 
 bool D3DPreviewPipeline::readback_nv12_to_buffer(void *destination,
-                                                  uint64_t destination_size,
-                                                  int destination_row_bytes,
-                                                  int frame_w,
-                                                  int frame_h)
+                                                 uint64_t destination_size,
+                                                 int destination_row_bytes,
+                                                 int frame_w,
+                                                 int frame_h)
 {
     if (!d3d_ || !ctx_ || !destination || !rt_nv12_y_ || !rt_nv12_uv_ ||
         frame_w <= 0 || frame_h <= 0 || (frame_w & 1) != 0 || (frame_h & 1) != 0 ||
@@ -826,7 +826,8 @@ bool D3DPreviewPipeline::readback_nv12_to_buffer(void *destination,
         return false;
 
     auto ensureStaging = [this](ComPtr<ID3D11Texture2D> &texture, UINT width, UINT height,
-                                DXGI_FORMAT format) {
+                                DXGI_FORMAT format)
+    {
         if (texture)
         {
             D3D11_TEXTURE2D_DESC current{};
@@ -856,7 +857,8 @@ bool D3DPreviewPipeline::readback_nv12_to_buffer(void *destination,
     auto copyPlane = [this, dst, destination_row_bytes](ID3D11Texture2D *source,
                                                         ID3D11Texture2D *staging,
                                                         int rows, int copyBytes,
-                                                        size_t destinationOffset) {
+                                                        size_t destinationOffset)
+    {
         ctx_->CopyResource(staging, source);
         D3D11_MAPPED_SUBRESOURCE mapped{};
         if (FAILED(ctx_->Map(staging, 0, D3D11_MAP_READ, 0, &mapped)))
@@ -980,8 +982,8 @@ bool D3DPreviewPipeline::upload_y210_frame(const uint8_t *data, int src_stride, 
 bool D3DPreviewPipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, int frame_w, int frame_h)
 {
     ID3D11Texture2D *texture = fmt == GVFG_RENDER_FMT_YUY2
-                                  ? upload_yuy2_packed_.Get()
-                                  : upload_y210_packed_.Get();
+                                   ? upload_yuy2_packed_.Get()
+                                   : upload_y210_packed_.Get();
     return render_texture_to_fp16(texture, fmt, frame_w, frame_h);
 }
 
