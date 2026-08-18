@@ -112,6 +112,10 @@ GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_render_frame(
     gvfg_preview_handle handle,
     const gvfg_preview_frame_t *frame);
 
+/* Replace the last presented frame with a solid black frame. */
+GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_clear(
+    gvfg_preview_handle handle);
+
 GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_get_info(
     gvfg_preview_handle handle,
     gvfg_preview_info_t *out_info);

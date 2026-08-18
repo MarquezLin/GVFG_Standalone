@@ -13,7 +13,6 @@
 
 namespace
 {
-    constexpr uint32_t kDmaBufferCount = 16;
     constexpr uint32_t kMaxChannels = 2;
     constexpr uint32_t kDefaultWidth = 1920;
     constexpr uint32_t kDefaultHeight = 1080;
@@ -360,8 +359,6 @@ namespace gvfg::internal
             pending_events_ = 0;
             latest_sequence_ = 0;
             delivered_sequence_ = 0;
-            have_last_done_index_ = false;
-            last_done_index_ = 0;
             wait_timeout_count_ = 0;
             stream_error_ = false;
             reset_stats(stats_, PCIES2MM_STREAM_CONFIGURED);
@@ -402,10 +399,7 @@ namespace gvfg::internal
         stream_ready_pending_ = false;
 
         if (device_ != INVALID_HANDLE_VALUE)
-        {
-            write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
-            write_reg(video_base() + VIDEO_EN_OFFSET, 0);
-        }
+            stop_video(active_channel());
 
         if (dma_event_)
             SetEvent(dma_event_);
@@ -451,13 +445,10 @@ namespace gvfg::internal
         // is genuinely waiting.
         if (descriptorReady && !capture_active_.load(std::memory_order_acquire))
         {
-            const bool dmaEnableOk = write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 1);
-            const bool videoEnableOk = write_reg(video_base() + VIDEO_EN_OFFSET, 1);
-            if (!dmaEnableOk || !videoEnableOk)
+            if (!start_video(active_channel()))
             {
                 const DWORD err = GetLastError();
-                write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
-                write_reg(video_base() + VIDEO_EN_OFFSET, 0);
+                stop_video(active_channel());
                 ++stats_.dma_errors;
                 lock.unlock();
                 fail(PCIES2MM_EIO, "enable reader capture", err);
@@ -640,6 +631,34 @@ namespace gvfg::internal
                                nullptr) != FALSE;
     }
 
+    bool PcieS2mmCaptureSession::start_video(uint32_t channelIndex) const
+    {
+        ULONG channel = channelIndex;
+        DWORD bytesReturned = 0;
+        return DeviceIoControl(device_,
+                               IOCTL_GIGA_VIDEO_START,
+                               &channel,
+                               sizeof(channel),
+                               nullptr,
+                               0,
+                               &bytesReturned,
+                               nullptr) != FALSE;
+    }
+
+    bool PcieS2mmCaptureSession::stop_video(uint32_t channelIndex) const
+    {
+        ULONG channel = channelIndex;
+        DWORD bytesReturned = 0;
+        return DeviceIoControl(device_,
+                               IOCTL_GIGA_VIDEO_STOP,
+                               &channel,
+                               sizeof(channel),
+                               nullptr,
+                               0,
+                               &bytesReturned,
+                               nullptr) != FALSE;
+    }
+
     pcies2mm_status_t PcieS2mmCaptureSession::debug_write_register(uint32_t offset,
                                                                    uint32_t value) const
     {
@@ -736,25 +755,6 @@ namespace gvfg::internal
         }
     }
 
-    bool PcieS2mmCaptureSession::get_video_done_index(uint32_t channelIndex, uint32_t &doneIndex) const
-    {
-        ULONG input = channelIndex;
-        ULONG value = 0;
-        DWORD bytesReturned = 0;
-        const BOOL ok = DeviceIoControl(device_,
-                                        IOCTL_PCIES2MM_GET_VIDEO_DONE_INDEX,
-                                        &input,
-                                        sizeof(input),
-                                        &value,
-                                        sizeof(value),
-                                        &bytesReturned,
-                                        nullptr);
-        if (!ok)
-            return false;
-        doneIndex = value;
-        return true;
-    }
-
     bool PcieS2mmCaptureSession::start_event_monitoring()
     {
         if (monitoring_.load(std::memory_order_acquire))
@@ -820,12 +820,10 @@ namespace gvfg::internal
     {
         const uint32_t channel = active_channel();
         const uint32_t irqBit = video_irq_mask_bit();
-        const bool irqMaskWriteOk = write_reg(INTERRUPT_BASE + IRQ_MASK_W1S_OFFSET, irqBit);
         uint32_t irqMaskReadback = 0;
         const bool irqMaskReadOk = read_reg(INTERRUPT_BASE + IRQ_MASK_STATUS_OFFSET, irqMaskReadback);
-        PCIES2MM_LOG("capture wait start: irq_bit=0x%08X mask_write=%d mask_read=%s0x%08X",
+        PCIES2MM_LOG("capture wait start: irq_bit=0x%08X mask_read=%s0x%08X",
                      irqBit,
-                     irqMaskWriteOk ? 1 : 0,
                      irqMaskReadOk ? "" : "FAILED/",
                      irqMaskReadback);
         HANDLE waitHandles[] = {
@@ -885,9 +883,7 @@ namespace gvfg::internal
                     !capture_active_.load(std::memory_order_acquire) &&
                     refresh_stream_from_registers(true))
                 {
-                    const bool dmaEnableOk = write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 1);
-                    const bool videoEnableOk = write_reg(video_base() + VIDEO_EN_OFFSET, 1);
-                    if (dmaEnableOk && videoEnableOk)
+                    if (start_video(active_channel()))
                     {
                         signal_probe_active_.store(true, std::memory_order_release);
                         stream_ready_pending_.store(true, std::memory_order_release);
@@ -895,8 +891,7 @@ namespace gvfg::internal
                     }
                     else
                     {
-                        write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
-                        write_reg(video_base() + VIDEO_EN_OFFSET, 0);
+                        stop_video(active_channel());
                     }
                 }
                 if (signal_present_.load(std::memory_order_acquire) &&
@@ -942,28 +937,6 @@ namespace gvfg::internal
     {
         if (!capture_active_.load(std::memory_order_acquire))
             return;
-
-        uint32_t doneIndex = 0;
-        if (!get_video_done_index(channel, doneIndex))
-        {
-            const DWORD err = GetLastError();
-            std::lock_guard<std::mutex> lock(mutex_);
-            ++stats_.dma_errors;
-            frame_cv_.notify_all();
-            PCIES2MM_ERROR_LOG("get_video_done_index failed channel=%u win32=%lu",
-                               channel,
-                               static_cast<unsigned long>(err));
-            return;
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            // A repeated wake-up can expose the same completed DMA buffer.
-            // Do not publish it again as a new frame. A valid ring wrap is
-            // still accepted because other done indexes occur in between.
-            if (have_last_done_index_ && doneIndex == last_done_index_)
-                return;
-        }
 
         const DWORD bytes = static_cast<DWORD>(frame_size_bytes());
         size_t slotIndex = frame_ring_.size();
@@ -1057,14 +1030,14 @@ namespace gvfg::internal
         if (frameLost)
             emit_event(PCIES2MM_EVENT_FRAME_LOSS);
 
-        const uint32_t frameIndex = doneIndex % kDmaBufferCount;
+        constexpr uint32_t frameIndex = (std::numeric_limits<uint32_t>::max)();
         const auto getFrameStarted = std::chrono::steady_clock::now();
         const int ret = get_frame(channel, frameIndex, slotData, bytes);
         const double getFrameMs = std::chrono::duration<double, std::milli>(
                                       std::chrono::steady_clock::now() - getFrameStarted).count();
         if (getFrameMs >= 10.0)
-            PCIES2MM_LOG("slow GET_FRAME: done_index=%u frame_index=%u elapsed_ms=%.3f ret=%d",
-                         doneIndex, frameIndex, getFrameMs, ret);
+            PCIES2MM_LOG("slow GET_FRAME: frame_index=0x%08X elapsed_ms=%.3f ret=%d",
+                         frameIndex, getFrameMs, ret);
         if (!running_)
             return;
         if (ret < 0 || static_cast<DWORD>(ret) != bytes)
@@ -1095,8 +1068,6 @@ namespace gvfg::internal
             std::lock_guard<std::mutex> lock(mutex_);
             if (pending_events_ > 0)
                 --pending_events_;
-            have_last_done_index_ = true;
-            last_done_index_ = doneIndex;
             publish_frame(slotIndex, static_cast<size_t>(ret));
         }
 
@@ -1111,8 +1082,7 @@ namespace gvfg::internal
             signal_metadata_valid_ = false;
         }
         emit_event(PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN);
-        write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
-        write_reg(video_base() + VIDEO_EN_OFFSET, 0);
+        stop_video(channel);
         capture_active_ = false;
         if (reader_ready_.load(std::memory_order_acquire))
             resume_capture_from_signal(channel);
@@ -1129,8 +1099,7 @@ namespace gvfg::internal
 
         if (capture_active_.exchange(false, std::memory_order_acq_rel))
         {
-            write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
-            write_reg(video_base() + VIDEO_EN_OFFSET, 0);
+            stop_video(channel);
         }
         signal_probe_active_.store(false, std::memory_order_release);
         signal_present_.store(true, std::memory_order_release);
@@ -1152,8 +1121,7 @@ namespace gvfg::internal
         stream_ready_pending_.store(false, std::memory_order_release);
         signal_present_.store(false, std::memory_order_release);
         signal_presence_known_.store(true, std::memory_order_release);
-        write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
-        write_reg(video_base() + VIDEO_EN_OFFSET, 0);
+        stop_video(channel);
         capture_active_ = false;
         emit_event(PCIES2MM_EVENT_PLUG_OUT);
 
@@ -1179,13 +1147,10 @@ namespace gvfg::internal
             !refresh_stream_from_registers(true))
             return false;
 
-        const bool dmaEnableOk = write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 1);
-        const bool videoEnableOk = write_reg(video_base() + VIDEO_EN_OFFSET, 1);
-        if (!dmaEnableOk || !videoEnableOk)
+        if (!start_video(channel))
         {
             const DWORD err = GetLastError();
-            write_reg(video_base() + VIDEO_DMA_EN_OFFSET, 0);
-            write_reg(video_base() + VIDEO_EN_OFFSET, 0);
+            stop_video(channel);
             capture_active_.store(false, std::memory_order_release);
             stream_ready_pending_.store(false, std::memory_order_release);
             {

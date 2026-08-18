@@ -136,6 +136,7 @@ public:
         slot.bitDepth = sourceBitDepth;
         slot.pixelFormat = frame.pixel_format;
         slot.frameId = frame.frame_id;
+        slot.generation = clearGeneration_.load(std::memory_order_acquire);
         slot.state = SlotState::Pending;
         workerCv_.notify_one();
 #if GVFG_INTERNAL_DIAGNOSTICS
@@ -170,6 +171,30 @@ public:
             return false;
         return ensureDevice() &&
                ensurePipeline(width, height, sourceBitDepth > 0 ? sourceBitDepth : 8);
+    }
+
+    bool clear()
+    {
+        clearGeneration_.fetch_add(1, std::memory_order_acq_rel);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!configured_ || !pipeline_)
+                return false;
+            for (UploadSlot &slot : slots_)
+            {
+                if (slot.state == SlotState::Pending)
+                {
+                    slot.commands.Reset();
+                    slot.state = SlotState::Free;
+                }
+            }
+        }
+
+        std::lock_guard<std::mutex> d3dLock(d3dMutex_);
+        const bool cleared = pipeline_->clear_preview_black();
+        if (cleared)
+            clearActiveInfo();
+        return cleared;
     }
 
     void shutdown()
@@ -259,6 +284,7 @@ private:
         int bitDepth = 0;
         int pixelFormat = -1;
         uint64_t frameId = 0;
+        uint64_t generation = 0;
     };
 
     struct D3DState
@@ -523,18 +549,22 @@ private:
                 gvfg::internal::GVFG_PREVIEW_PRESENT_FAILED;
             if (ready)
             {
-                d3d_->context->ExecuteCommandList(work.commands.Get(), FALSE);
-                const gvfg::internal::gvfg_render_pixfmt_t renderFmt =
-                    work.pixelFormat == GVFG_PREVIEW_PIXFMT_Y210
-                        ? gvfg::internal::GVFG_RENDER_FMT_Y210
-                        : gvfg::internal::GVFG_RENDER_FMT_YUY2;
-                rendered = pipeline_->render_texture_to_fp16(work.texture.Get(), renderFmt,
-                                                              work.width, work.height);
-                copied = rendered && pipeline_->copy_fp16_to_scene();
-                blitted = copied && (pipeline_->preview_swapchain_10bit() ||
-                                     pipeline_->blit_fp16_to_rgba8(work.width, work.height));
-                if (blitted)
-                    presentResult = pipeline_->present_preview(work.width, work.height);
+                std::lock_guard<std::mutex> d3dLock(d3dMutex_);
+                if (work.generation == clearGeneration_.load(std::memory_order_acquire))
+                {
+                    d3d_->context->ExecuteCommandList(work.commands.Get(), FALSE);
+                    const gvfg::internal::gvfg_render_pixfmt_t renderFmt =
+                        work.pixelFormat == GVFG_PREVIEW_PIXFMT_Y210
+                            ? gvfg::internal::GVFG_RENDER_FMT_Y210
+                            : gvfg::internal::GVFG_RENDER_FMT_YUY2;
+                    rendered = pipeline_->render_texture_to_fp16(work.texture.Get(), renderFmt,
+                                                                  work.width, work.height);
+                    copied = rendered && pipeline_->copy_fp16_to_scene();
+                    blitted = copied && (pipeline_->preview_swapchain_10bit() ||
+                                         pipeline_->blit_fp16_to_rgba8(work.width, work.height));
+                    if (blitted)
+                        presentResult = pipeline_->present_preview(work.width, work.height);
+                }
             }
             const auto end = Clock::now();
 
@@ -590,6 +620,8 @@ private:
     }
 
     mutable std::mutex mutex_;
+    std::mutex d3dMutex_;
+    std::atomic<uint64_t> clearGeneration_{0};
     void *hwnd_ = nullptr;
     bool configured_ = false;
     std::atomic<int> width_{0};
@@ -708,6 +740,13 @@ extern "C"
             return GVFG_PREVIEW_EINVAL;
 
         return handle->renderer.render(*frame) ? GVFG_PREVIEW_OK : GVFG_PREVIEW_ERENDER;
+    }
+
+    gvfg_preview_status_t gvfg_preview_clear(gvfg_preview_handle handle)
+    {
+        if (!handle)
+            return GVFG_PREVIEW_EINVAL;
+        return handle->renderer.clear() ? GVFG_PREVIEW_OK : GVFG_PREVIEW_ERENDER;
     }
 
     gvfg_preview_status_t gvfg_preview_get_info(gvfg_preview_handle handle,

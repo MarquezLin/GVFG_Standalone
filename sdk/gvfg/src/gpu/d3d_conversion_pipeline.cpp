@@ -1429,6 +1429,19 @@ gvfg_preview_present_result_t D3DPreviewPipeline::present_preview(int src_w, int
     return GVFG_PREVIEW_PRESENTED;
 }
 
+bool D3DPreviewPipeline::clear_preview_black()
+{
+    if (!preview_enabled_ || !preview_swapchain_ || !preview_rtv_ || !ctx_)
+        return false;
+
+    ID3D11RenderTargetView *rtv = preview_rtv_.Get();
+    ctx_->OMSetRenderTargets(1, &rtv, nullptr);
+    const float black[4] = {0, 0, 0, 1};
+    ctx_->ClearRenderTargetView(rtv, black);
+    ctx_->Flush();
+    return SUCCEEDED(preview_swapchain_->Present(0, 0));
+}
+
 DXGI_FORMAT D3DPreviewPipeline::preview_backbuffer_format() const
 {
     if (preview_swapchain_format_ != DXGI_FORMAT_UNKNOWN)

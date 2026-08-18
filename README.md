@@ -52,6 +52,21 @@ build/.../lib/gvfg_preview.lib
 build/.../bin/gvfg_qt_preview.exe
 ```
 
+## Driver compatibility
+
+此版本只支援新版 PCIE S2MM driver，不再 backward compatible 舊版 driver。
+新版 driver 必須支援：
+
+- `IOCTL_GIGA_VIDEO_START`（function `0x808`）。
+- `IOCTL_GIGA_VIDEO_STOP`（function `0x809`）。
+- `IOCTL_PCIES2MM_GET_FRAME` 接受 `frameIndex = MAXULONG`（`0xFFFFFFFF`），
+  由 driver 自行選擇已完成的 frame。
+
+SDK 不再呼叫 `IOCTL_PCIES2MM_GET_VIDEO_DONE_INDEX`，也不會在新 IOCTL
+不支援時退回直接寫入 `VIDEO_DMA_EN_OFFSET`、`VIDEO_EN_OFFSET` 或
+`IRQ_MASK_W1S_OFFSET`。若搭配舊版 driver，stream start 或 frame capture
+可能失敗。
+
 `gvfg_qt_preview.exe` 只使用 public API，主畫面只顯示 input 與 Preview
 狀態；IRQ、DMA、ring slot 等資訊只存在 internal diagnostic tool。
 

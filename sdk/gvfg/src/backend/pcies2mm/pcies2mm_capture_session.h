@@ -52,6 +52,8 @@ namespace gvfg::internal
 
         bool read_reg(uint32_t offset, uint32_t &out) const;
         bool write_reg(uint32_t offset, uint32_t value) const;
+        bool start_video(uint32_t channelIndex) const;
+        bool stop_video(uint32_t channelIndex) const;
         bool register_event(uint32_t channelIndex, uint32_t eventType, HANDLE eventHandle);
         void unregister_event(uint32_t channelIndex, uint32_t eventType);
         bool create_and_register_events(uint32_t channelIndex);
@@ -59,7 +61,6 @@ namespace gvfg::internal
         void stop_event_monitoring();
         void unregister_events(uint32_t channelIndex);
         void close_event_handles();
-        bool get_video_done_index(uint32_t channelIndex, uint32_t &doneIndex) const;
         int get_frame(uint32_t channelIndex, uint32_t frameIndex, uint8_t *buffer, DWORD bufferSize) const;
 
         void capture_thread_proc();
@@ -131,8 +132,6 @@ namespace gvfg::internal
         size_t active_delivery_slot_ = static_cast<size_t>(-1);
         uint64_t latest_sequence_ = 0;
         uint64_t delivered_sequence_ = 0;
-        bool have_last_done_index_ = false;
-        uint32_t last_done_index_ = 0;
         uint64_t wait_timeout_count_ = 0;
         std::chrono::steady_clock::time_point active_delivery_started_{};
         std::chrono::steady_clock::time_point last_delivery_started_{};

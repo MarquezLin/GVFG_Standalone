@@ -17,6 +17,7 @@
 #include <QStringList>
 #include <QTimer>
 
+#include <algorithm>
 #include <chrono>
 
 namespace
@@ -193,7 +194,7 @@ MainWindow::MainWindow(QWidget *parent)
             { startCapture(); });
     connect(ui_->outputFormatCombo, &QComboBox::currentIndexChanged, this, [this](int)
             {
-                if (handle_)
+                if (handle_ && !captureRunning_.load(std::memory_order_acquire))
                 {
                     applyOutputFormat();
                     updateSignalStatus();
@@ -371,7 +372,7 @@ void MainWindow::closeDevice()
 
 bool MainWindow::applyOutputFormat()
 {
-    if (!handle_)
+    if (!handle_ || captureRunning_.load(std::memory_order_acquire))
         return false;
 
     const gvfg_pixel_format_t format = ui_->outputFormatCombo->currentIndex() == 1
@@ -442,7 +443,12 @@ void MainWindow::startCapture()
     previewFailureCount_ = 0;
     previewCallAverageMs_.store(0.0, std::memory_order_relaxed);
     previewCallMaximumMs_.store(0.0, std::memory_order_relaxed);
+    previewCallWindowMaximumMs_.store(0.0, std::memory_order_relaxed);
     previewCallSamples_.store(0, std::memory_order_relaxed);
+    readFrameCallAverageMs_.store(0.0, std::memory_order_relaxed);
+    readFrameCallMaximumMs_.store(0.0, std::memory_order_relaxed);
+    readFrameCallWindowMaximumMs_.store(0.0, std::memory_order_relaxed);
+    readFrameCallSamples_.store(0, std::memory_order_relaxed);
 #if GVFG_INTERNAL_DIAGNOSTICS
     haveDebugBaseline_ = false;
     lastDebugDmaErrors_ = 0;
@@ -539,6 +545,9 @@ void MainWindow::processPendingEvents()
             eventType == GVFG_EVENT_STREAM_READY)
             updateSignalStatus();
 
+        if (eventType == GVFG_EVENT_SIGNAL_DISCONNECTED && previewHandle_)
+            gvfg_preview_clear(previewHandle_);
+
         event = {};
         event.struct_size = sizeof(event);
     }
@@ -607,7 +616,12 @@ void MainWindow::updateSignalStatus(bool queryHardware)
                                           : QStringLiteral("%1 FPS").arg(previewFps);
     const double previewCallAverageMs = previewCallAverageMs_.load(std::memory_order_relaxed);
     const double previewCallMaximumMs = previewCallMaximumMs_.load(std::memory_order_relaxed);
+    const double previewCallWindowMaximumMs = previewCallWindowMaximumMs_.load(std::memory_order_relaxed);
     const uint64_t previewCallSamples = previewCallSamples_.load(std::memory_order_relaxed);
+    const double readFrameCallAverageMs = readFrameCallAverageMs_.load(std::memory_order_relaxed);
+    const double readFrameCallMaximumMs = readFrameCallMaximumMs_.load(std::memory_order_relaxed);
+    const double readFrameCallWindowMaximumMs = readFrameCallWindowMaximumMs_.load(std::memory_order_relaxed);
+    const uint64_t readFrameCallSamples = readFrameCallSamples_.load(std::memory_order_relaxed);
     QStringList statusLines;
     statusLines << (signal.connected
                         ? QStringLiteral("Input   | CH%1 | Connected | %2")
@@ -617,14 +631,22 @@ void MainWindow::updateSignalStatus(bool queryHardware)
                               .arg(signal.channel));
     statusLines << (previewInfoOk
                         ? previewCallSamples > 0
-                              ? QStringLiteral("Preview | %1 | %2 | GPU call avg=%3 max=%4 ms/frame samples=%5")
+                              ? QStringLiteral("Preview | %1 | %2 | GPU call avg=%3 max300=%4 max=%5 ms/frame samples=%6")
                                     .arg(previewState, previewFrame)
                                     .arg(previewCallAverageMs, 0, 'f', 3)
+                                    .arg(previewCallWindowMaximumMs, 0, 'f', 3)
                                     .arg(previewCallMaximumMs, 0, 'f', 3)
                                     .arg(static_cast<qulonglong>(previewCallSamples))
                               : QStringLiteral("Preview | %1 | %2 | GPU call measuring")
                                     .arg(previewState, previewFrame)
                         : QStringLiteral("Preview | Inactive"));
+    statusLines << (readFrameCallSamples > 0
+                        ? QStringLiteral("GetFrame| app call avg=%1 max300=%2 max=%3 ms/frame samples=%4")
+                              .arg(readFrameCallAverageMs, 0, 'f', 3)
+                              .arg(readFrameCallWindowMaximumMs, 0, 'f', 3)
+                              .arg(readFrameCallMaximumMs, 0, 'f', 3)
+                              .arg(static_cast<qulonglong>(readFrameCallSamples))
+                        : QStringLiteral("GetFrame| app call measuring"));
 
 #if GVFG_INTERNAL_DIAGNOSTICS
     statusLines << (haveBackendStats
@@ -714,7 +736,7 @@ void MainWindow::updateUiState()
     ui_->fullscreenPreviewButton->setEnabled(viewAvailable);
     ui_->refreshButton->setEnabled(!deviceOpen && !captureRunning_);
     ui_->deviceCombo->setEnabled(!deviceOpen && !captureRunning_);
-    ui_->outputFormatCombo->setEnabled(deviceOpen);
+    ui_->outputFormatCombo->setEnabled(deviceOpen && !captureRunning_);
 }
 
 void MainWindow::showError(const QString &apiName, gvfg_status_t status)
@@ -849,13 +871,50 @@ void MainWindow::captureReadLoop()
     uint64_t previewTimingWarmupCount = 0;
     uint64_t previewTimingSampleCount = 0;
     double previewTimingTotalMs = 0.0;
+    double previewTimingMaximumMs = 0.0;
+    uint64_t readFrameTimingWarmupCount = 0;
+    uint64_t readFrameTimingSampleCount = 0;
+    double readFrameTimingTotalMs = 0.0;
+    double readFrameTimingMaximumMs = 0.0;
 
     while (!captureStop_.load(std::memory_order_acquire))
     {
         gvfg_frame_t frame{};
+        const auto readFrameStart = std::chrono::steady_clock::now();
         const gvfg_status_t st = gvfg_read_frame(handle_, &frame, 200);
+        const auto readFrameEnd = std::chrono::steady_clock::now();
+        const double readFrameElapsedMs =
+            std::chrono::duration<double, std::milli>(readFrameEnd - readFrameStart).count();
         if (st == GVFG_OK)
         {
+            if (readFrameTimingWarmupCount < kPreviewTimingWarmupFrames)
+            {
+                ++readFrameTimingWarmupCount;
+            }
+            else
+            {
+                double observedReadFrameMaximum = readFrameCallMaximumMs_.load(std::memory_order_relaxed);
+                while (readFrameElapsedMs > observedReadFrameMaximum &&
+                       !readFrameCallMaximumMs_.compare_exchange_weak(
+                           observedReadFrameMaximum, readFrameElapsedMs, std::memory_order_relaxed))
+                {
+                }
+                readFrameTimingTotalMs += readFrameElapsedMs;
+                readFrameTimingMaximumMs = (std::max)(readFrameTimingMaximumMs, readFrameElapsedMs);
+                ++readFrameTimingSampleCount;
+                if (readFrameTimingSampleCount >= kPreviewTimingSampleFrames)
+                {
+                    readFrameCallAverageMs_.store(
+                        readFrameTimingTotalMs / static_cast<double>(readFrameTimingSampleCount),
+                        std::memory_order_relaxed);
+                    readFrameCallWindowMaximumMs_.store(readFrameTimingMaximumMs, std::memory_order_relaxed);
+                    readFrameCallSamples_.store(kPreviewTimingSampleFrames, std::memory_order_relaxed);
+                    readFrameTimingSampleCount = 0;
+                    readFrameTimingTotalMs = 0.0;
+                    readFrameTimingMaximumMs = 0.0;
+                }
+            }
+
             consecutiveTimeouts = 0;
             if (!frameAvailable_.exchange(true, std::memory_order_acq_rel))
             {
@@ -901,12 +960,6 @@ void MainWindow::captureReadLoop()
                 const auto previewEnd = std::chrono::steady_clock::now();
                 const double previewElapsedMs =
                     std::chrono::duration<double, std::milli>(previewEnd - previewStart).count();
-                double observedMaximum = previewCallMaximumMs_.load(std::memory_order_relaxed);
-                while (previewElapsedMs > observedMaximum &&
-                       !previewCallMaximumMs_.compare_exchange_weak(
-                           observedMaximum, previewElapsedMs, std::memory_order_relaxed))
-                {
-                }
 #if GVFG_INTERNAL_DIAGNOSTICS
                 if (previewElapsedMs >= 10.0)
                 {
@@ -945,7 +998,14 @@ void MainWindow::captureReadLoop()
                     }
                     else
                     {
+                        double observedMaximum = previewCallMaximumMs_.load(std::memory_order_relaxed);
+                        while (previewElapsedMs > observedMaximum &&
+                               !previewCallMaximumMs_.compare_exchange_weak(
+                                   observedMaximum, previewElapsedMs, std::memory_order_relaxed))
+                        {
+                        }
                         previewTimingTotalMs += previewElapsedMs;
+                        previewTimingMaximumMs = (std::max)(previewTimingMaximumMs, previewElapsedMs);
                         ++previewTimingSampleCount;
 
                         if (previewTimingSampleCount >= kPreviewTimingSampleFrames)
@@ -953,10 +1013,12 @@ void MainWindow::captureReadLoop()
                             const double averageMs =
                                 previewTimingTotalMs / static_cast<double>(previewTimingSampleCount);
                             previewCallAverageMs_.store(averageMs, std::memory_order_relaxed);
+                            previewCallWindowMaximumMs_.store(previewTimingMaximumMs, std::memory_order_relaxed);
                             previewCallSamples_.store(kPreviewTimingSampleFrames, std::memory_order_relaxed);
 
                             previewTimingSampleCount = 0;
                             previewTimingTotalMs = 0.0;
+                            previewTimingMaximumMs = 0.0;
                         }
                     }
                 }

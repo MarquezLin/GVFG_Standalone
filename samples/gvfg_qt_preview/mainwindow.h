@@ -77,7 +77,12 @@ private:
     uint64_t previewFailureCount_ = 0;
     std::atomic<double> previewCallAverageMs_{0.0};
     std::atomic<double> previewCallMaximumMs_{0.0};
+    std::atomic<double> previewCallWindowMaximumMs_{0.0};
     std::atomic<uint64_t> previewCallSamples_{0};
+    std::atomic<double> readFrameCallAverageMs_{0.0};
+    std::atomic<double> readFrameCallMaximumMs_{0.0};
+    std::atomic<double> readFrameCallWindowMaximumMs_{0.0};
+    std::atomic<uint64_t> readFrameCallSamples_{0};
     QTimer *runtimeStatusTimer_ = nullptr;
     gvfg_signal_status_t cachedSignalStatus_{};
     bool haveCachedSignalStatus_ = false;
