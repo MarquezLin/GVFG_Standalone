@@ -317,6 +317,15 @@ bool MainWindow::openDevice()
         return false;
     }
 
+    const bool zeroCopyEnabled = ui_->zeroCopyCheckBox->isChecked();
+    st = gvfg_set_zero_copy_enabled(handle_, zeroCopyEnabled ? 1 : 0);
+    if (st != GVFG_OK)
+    {
+        showError(QStringLiteral("gvfg_set_zero_copy_enabled"), st);
+        closeDevice();
+        return false;
+    }
+
     const int selection = ui_->deviceCombo->currentData().toInt();
     const int deviceIndex = selection / 2;
     const int channelIndex = selection % 2;
@@ -335,7 +344,10 @@ bool MainWindow::openDevice()
     }
 
     lastSignalStatusText_.clear();
-    appendLog(QStringLiteral("Opened device index %1 CH%2").arg(deviceIndex).arg(channelIndex));
+    appendLog(QStringLiteral("Opened device index %1 CH%2 | mode=%3")
+                  .arg(deviceIndex)
+                  .arg(channelIndex)
+                  .arg(zeroCopyEnabled ? QStringLiteral("zero-copy") : QStringLiteral("copy")));
     appendLog(QStringLiteral("Signal monitoring active"));
     updateSignalStatus();
     runtimeStatusTimer_->start();
@@ -629,6 +641,10 @@ void MainWindow::updateSignalStatus(bool queryHardware)
                               .arg(signalFrameText(signal))
                         : QStringLiteral("Input   | CH%1 | No signal")
                               .arg(signal.channel));
+    statusLines << QStringLiteral("Mode    | %1")
+                       .arg(ui_->zeroCopyCheckBox->isChecked()
+                                ? QStringLiteral("Zero-copy")
+                                : QStringLiteral("Copy"));
     statusLines << (previewInfoOk
                         ? previewCallSamples > 0
                               ? QStringLiteral("Preview | %1 | %2 | GPU call avg=%3 max300=%4 max=%5 ms/frame samples=%6")
@@ -736,7 +752,8 @@ void MainWindow::updateUiState()
     ui_->fullscreenPreviewButton->setEnabled(viewAvailable);
     ui_->refreshButton->setEnabled(!deviceOpen && !captureRunning_);
     ui_->deviceCombo->setEnabled(!deviceOpen && !captureRunning_);
-    ui_->outputFormatCombo->setEnabled(deviceOpen && !captureRunning_);
+    ui_->outputFormatCombo->setEnabled(!captureRunning_);
+    ui_->zeroCopyCheckBox->setEnabled(!deviceOpen && !captureRunning_);
 }
 
 void MainWindow::showError(const QString &apiName, gvfg_status_t status)
@@ -1023,7 +1040,14 @@ void MainWindow::captureReadLoop()
                     }
                 }
             }
-            gvfg_release_frame(handle_, &frame);
+            const gvfg_status_t releaseStatus = gvfg_release_frame(handle_, &frame);
+            if (releaseStatus != GVFG_OK)
+            {
+                QMetaObject::invokeMethod(this, [this, releaseStatus]()
+                                          { showError(QStringLiteral("gvfg_release_frame"), releaseStatus); },
+                                          Qt::QueuedConnection);
+                break;
+            }
 
             continue;
         }

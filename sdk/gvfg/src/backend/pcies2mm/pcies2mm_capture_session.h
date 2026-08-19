@@ -29,6 +29,8 @@ namespace gvfg::internal
         pcies2mm_status_t close();
 
         pcies2mm_status_t set_channel(uint32_t channel);
+        pcies2mm_status_t set_zero_copy_enabled(bool enabled);
+        bool zero_copy_enabled() const { return zero_copy_enabled_; }
         pcies2mm_status_t set_video_format(pcies2mm_pixel_format_t format);
         pcies2mm_status_t get_signal_status(pcies2mm_signal_status_t &out) const;
 
@@ -54,6 +56,9 @@ namespace gvfg::internal
         bool write_reg(uint32_t offset, uint32_t value) const;
         bool start_video(uint32_t channelIndex) const;
         bool stop_video(uint32_t channelIndex) const;
+        bool acquire_zero_copy_frame(uint32_t channelIndex, const uint8_t *&outData) const;
+        bool release_zero_copy_frame(uint32_t channelIndex) const;
+        pcies2mm_status_t release_all_zero_copy_frames(bool includeInUse);
         bool register_event(uint32_t channelIndex, uint32_t eventType, HANDLE eventHandle);
         void unregister_event(uint32_t channelIndex, uint32_t eventType);
         bool create_and_register_events(uint32_t channelIndex);
@@ -86,6 +91,8 @@ namespace gvfg::internal
         struct FrameSlot
         {
             std::vector<uint8_t> data;  // Frame byte storage for this ring slot.
+            const uint8_t *external_data = nullptr; // Driver-owned zero-copy frame.
+            bool zero_copy = false;
             size_t bytes = 0;           // Number of valid bytes read into data.
             uint64_t sequence = 0;      // Monotonic frame sequence assigned on publish.
             bool ready = false;         // True after the data thread publishes a frame.
@@ -106,6 +113,7 @@ namespace gvfg::internal
         uint32_t channel_ = 0;
         bool opened_ = false;
         bool configured_ = false;
+        bool zero_copy_enabled_ = false;
 
         std::atomic<bool> running_{false};
         std::atomic<bool> monitoring_{false};

@@ -228,7 +228,26 @@ struct gvfg_handle_t
             return map_status(stChannel);
         }
 
+        if (zeroCopyRequested)
+        {
+            const pcies2mm_status_t stZeroCopy = backend->set_zero_copy_enabled(true);
+            if (stZeroCopy != PCIES2MM_OK)
+            {
+                recordError(pcies2mm_error_text(stZeroCopy, backend.get()));
+                close();
+                return map_status(stZeroCopy);
+            }
+        }
+
         querySignal();
+        return GVFG_OK;
+    }
+
+    gvfg_status_t setZeroCopyEnabled(bool enabled)
+    {
+        if (backend)
+            return GVFG_ESTATE;
+        zeroCopyRequested = enabled;
         return GVFG_OK;
     }
 
@@ -265,9 +284,13 @@ struct gvfg_handle_t
         running = false;
         eventCv.notify_all();
         releaseHeldFrameForStop();
-        if (backend)
-            backend->stop_stream();
-        return GVFG_OK;
+        if (!backend)
+            return GVFG_OK;
+
+        const pcies2mm_status_t st = backend->stop_stream();
+        if (st != PCIES2MM_OK)
+            recordError(pcies2mm_error_text(st, backend.get()));
+        return map_status(st);
     }
 
     void close()
@@ -734,6 +757,7 @@ struct gvfg_handle_t
     std::unique_ptr<gvfg::internal::PcieS2mmCaptureSession> backend;
     int currentIndex = -1;
     uint32_t selectedChannel = GVFG_CHANNEL_0;
+    bool zeroCopyRequested = false;
 
     uint32_t width = 0;
     uint32_t height = 0;
@@ -813,6 +837,21 @@ extern "C"
         if (!handle)
             return GVFG_EINVAL;
         return handle->open(device_index, channel_index);
+    }
+
+    gvfg_status_t gvfg_set_zero_copy_enabled(gvfg_handle handle, int enabled)
+    {
+        if (!handle || (enabled != 0 && enabled != 1))
+            return GVFG_EINVAL;
+        return handle->setZeroCopyEnabled(enabled != 0);
+    }
+
+    gvfg_status_t gvfg_get_zero_copy_enabled(gvfg_handle handle, int *out_enabled)
+    {
+        if (!handle || !out_enabled)
+            return GVFG_EINVAL;
+        *out_enabled = handle->zeroCopyRequested ? 1 : 0;
+        return GVFG_OK;
     }
 
     gvfg_status_t gvfg_start(gvfg_handle handle)

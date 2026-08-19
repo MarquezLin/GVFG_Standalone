@@ -1,106 +1,51 @@
-<mxfile host="app.diagrams.net" modified="2026-07-30T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
-  <diagram id="gvfg-dma-ring-flow" name="GVFG DMA Ring Data Flow">
-    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1100" math="0" shadow="0">
+<mxfile host="app.diagrams.net" modified="2026-08-19T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
+  <diagram id="gvfg-dma-flow" name="GVFG Copy and Zero-Copy Flow">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" page="1" pageScale="1" pageWidth="1600" pageHeight="1100">
       <root>
         <mxCell id="0"/>
         <mxCell id="1" parent="0"/>
-        <mxCell id="title" value="GVFG driver DMA buffer to SDK ring data flow" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=28;fontStyle=1" vertex="1" parent="1">
-          <mxGeometry x="360" y="30" width="880" height="40" as="geometry"/>
-        </mxCell>
+        <mxCell id="title" value="GVFG DMA delivery — copy and zero-copy modes" style="text;html=1;strokeColor=none;align=center;fontSize=26;fontStyle=1" vertex="1" parent="1"><mxGeometry x="300" y="25" width="1000" height="45" as="geometry"/></mxCell>
+        <mxCell id="abi" value="Requires new driver ABI: VIDEO_START/STOP, GET_FRAME(MAXULONG), ZERO-COPY ENABLE/ACQUIRE/RELEASE/DISABLE" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13" vertex="1" parent="1"><mxGeometry x="300" y="80" width="1000" height="45" as="geometry"/></mxCell>
+        <mxCell id="hw" value="FPGA / driver DMA buffer&#xa;DMA complete interrupt" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=14;fontStyle=1" vertex="1" parent="1"><mxGeometry x="100" y="160" width="240" height="80" as="geometry"/></mxCell>
+        <mxCell id="event" value="dma_event_ wakes&#xa;capture_thread_proc()&#xa;handle_dma_event(channel)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14" vertex="1" parent="1"><mxGeometry x="450" y="150" width="260" height="100" as="geometry"/></mxCell>
+        <mxCell id="mode" value="zero-copy enabled?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;fontStyle=1" vertex="1" parent="1"><mxGeometry x="850" y="145" width="220" height="110" as="geometry"/></mxCell>
 
-        <mxCell id="hw" value="Video source / FPGA&#xa;writes DMA buffer N&#xa;DMA complete interrupt" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=14;fontStyle=1" vertex="1" parent="1">
-          <mxGeometry x="80" y="130" width="210" height="80" as="geometry"/>
-        </mxCell>
-        <mxCell id="event" value="Kernel driver&#xa;SetEvent(dma_event_)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1" vertex="1" parent="1">
-          <mxGeometry x="360" y="130" width="230" height="80" as="geometry"/>
-        </mxCell>
-        <mxCell id="pending" value="single capture_thread_proc()&#xa;WaitForMultipleObjects() wakes&#xa;dispatches DMA event" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14" vertex="1" parent="1">
-          <mxGeometry x="660" y="130" width="230" height="80" as="geometry"/>
-        </mxCell>
-        <mxCell id="datawait" value="handle_dma_event()&#xa;IOCTL_GET_VIDEO_DONE_INDEX" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;fontStyle=1" vertex="1" parent="1">
-          <mxGeometry x="960" y="130" width="260" height="80" as="geometry"/>
-        </mxCell>
-        <mxCell id="clear" value="frameIndex = doneIndex % 16&#xa;select completed driver DMA buffer N" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14" vertex="1" parent="1">
-          <mxGeometry x="1280" y="130" width="240" height="90" as="geometry"/>
-        </mxCell>
+        <mxCell id="copyLane" value="COPY MODE — SDK 3-slot ring" style="swimlane;html=1;startSize=34;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=17;fontStyle=1" vertex="1" parent="1"><mxGeometry x="60" y="310" width="700" height="500" as="geometry"/></mxCell>
+        <mxCell id="copySlot" value="Select writable FrameSlot&#xa;ready=false, in_use=false&#xa;ring pressure may drop oldest unread frame" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=13" vertex="1" parent="1"><mxGeometry x="90" y="370" width="280" height="100" as="geometry"/></mxCell>
+        <mxCell id="copyGet" value="IOCTL_PCIES2MM_GET_FRAME&#xa;input {channel, 0xFFFFFFFF}&#xa;one copy: driver DMA → slot.data&#xa;GET_VIDEO_DONE_INDEX removed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=13;fontStyle=1" vertex="1" parent="1"><mxGeometry x="440" y="360" width="280" height="120" as="geometry"/></mxCell>
+        <mxCell id="copyPublish" value="publish_frame()&#xa;slot.ready=true, in_use=false&#xa;frame_cv_.notify_one()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;fontSize=13" vertex="1" parent="1"><mxGeometry x="250" y="520" width="300" height="90" as="geometry"/></mxCell>
+        <mxCell id="copyRead" value="gvfg_read_frame()&#xa;frame.data = slot.data.data()&#xa;SDK-owned until release" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13" vertex="1" parent="1"><mxGeometry x="90" y="665" width="270" height="95" as="geometry"/></mxCell>
+        <mxCell id="copyRelease" value="gvfg_release_frame()&#xa;validate token&#xa;slot.in_use=false&#xa;slot reusable" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;fontStyle=1" vertex="1" parent="1"><mxGeometry x="450" y="655" width="270" height="105" as="geometry"/></mxCell>
 
-        <mxCell id="findslot" value="SDK 3-slot frame_ring_&#xa;search slot.in_use == false" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;fontStyle=1" vertex="1" parent="1">
-          <mxGeometry x="80" y="310" width="240" height="80" as="geometry"/>
-        </mxCell>
-        <mxCell id="droptest" value="Free slot available?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13" vertex="1" parent="1">
-          <mxGeometry x="390" y="300" width="190" height="100" as="geometry"/>
-        </mxCell>
-        <mxCell id="drop" value="No: capture thread waits&#xa;data_cv_.wait_for()&#xa;driver buffers may advance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14" vertex="1" parent="1">
-          <mxGeometry x="650" y="290" width="230" height="70" as="geometry"/>
-        </mxCell>
-        <mxCell id="markwriting" value="Mark slot writing&#xa;ready = false&#xa;in_use = true" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14" vertex="1" parent="1">
-          <mxGeometry x="650" y="390" width="230" height="90" as="geometry"/>
-        </mxCell>
-        <mxCell id="readc2h" value="IOCTL_GET_FRAME&#xa;driver DMA buffer N -&gt; one copy -&gt; slot.data&#xa;validate bytesReturned == expected" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;fontStyle=1" vertex="1" parent="1">
-          <mxGeometry x="960" y="330" width="260" height="80" as="geometry"/>
-        </mxCell>
-        <mxCell id="publish" value="publish_frame(slotIndex, bytes)&#xa;slot.ready = true&#xa;slot.in_use = false&#xa;frame_cv_.notify_one()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14" vertex="1" parent="1">
-          <mxGeometry x="1280" y="310" width="260" height="120" as="geometry"/>
-        </mxCell>
+        <mxCell id="zcLane" value="ZERO-COPY MODE — one outstanding driver frame" style="swimlane;html=1;startSize=34;rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=17;fontStyle=1" vertex="1" parent="1"><mxGeometry x="830" y="310" width="700" height="500" as="geometry"/></mxCell>
+        <mxCell id="zcEnable" value="Open device&#xa;ENABLE_FRAME_ZEROCOPY(channel)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=13" vertex="1" parent="1"><mxGeometry x="860" y="365" width="260" height="85" as="geometry"/></mxCell>
+        <mxCell id="zcHeld" value="frame ready or held?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13" vertex="1" parent="1"><mxGeometry x="1220" y="355" width="230" height="105" as="geometry"/></mxCell>
+        <mxCell id="zcAcquire" value="No: ACQUIRE_VIDEO_FRAME_ZEROCOPY&#xa;input {channel, 0xFFFFFFFF}&#xa;output driver-owned pointer&#xa;no SDK payload copy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=13;fontStyle=1" vertex="1" parent="1"><mxGeometry x="860" y="520" width="300" height="115" as="geometry"/></mxCell>
+        <mxCell id="zcSkip" value="Yes: skip this acquire event&#xa;keep held driver pointer valid&#xa;no loss statistic or event" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13" vertex="1" parent="1"><mxGeometry x="1210" y="525" width="270" height="95" as="geometry"/></mxCell>
+        <mxCell id="zcRead" value="gvfg_read_frame()&#xa;returns driver pointer&#xa;valid until release" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13" vertex="1" parent="1"><mxGeometry x="860" y="675" width="270" height="85" as="geometry"/></mxCell>
+        <mxCell id="zcRelease" value="gvfg_release_frame()&#xa;validate token&#xa;RELEASE_VIDEO_FRAME(channel)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;fontStyle=1" vertex="1" parent="1"><mxGeometry x="1210" y="665" width="290" height="95" as="geometry"/></mxCell>
 
-        <mxCell id="wait" value="gvfg_read_frame()&#xa;backend-&gt;wait_frame(timeout, frame)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;fontStyle=1" vertex="1" parent="1">
-          <mxGeometry x="80" y="560" width="270" height="80" as="geometry"/>
-        </mxCell>
-        <mxCell id="select" value="wait_frame() selects newest ready slot&#xa;slot.ready = false&#xa;slot.in_use = true&#xa;out.data = slot.data.data()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14" vertex="1" parent="1">
-          <mxGeometry x="430" y="540" width="310" height="120" as="geometry"/>
-        </mxCell>
-        <mxCell id="render" value="optional frame consumers before release&#xa;gvfg_preview_render_frame()&#xa;gvfg_gpu_convert_to_buffer()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14" vertex="1" parent="1">
-          <mxGeometry x="820" y="540" width="270" height="90" as="geometry"/>
-        </mxCell>
-        <mxCell id="appUse" value="app uses frame&#xa;data valid until gvfg_release_frame()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14" vertex="1" parent="1">
-          <mxGeometry x="1160" y="540" width="300" height="90" as="geometry"/>
-        </mxCell>
-        <mxCell id="release" value="release_frame(frame)&#xa;slot.in_use = false&#xa;data_cv_.notify_all()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;fontStyle=1" vertex="1" parent="1">
-          <mxGeometry x="630" y="740" width="300" height="90" as="geometry"/>
-        </mxCell>
+        <mxCell id="consumer" value="Before release: application may preview, convert, record, or copy. Return the frame descriptor unchanged." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14" vertex="1" parent="1"><mxGeometry x="300" y="855" width="1000" height="60" as="geometry"/></mxCell>
+        <mxCell id="close" value="Stop / close / exit: release held frame first; zero-copy sends DISABLE_FRAME_ZEROCOPY(channel), then closes device" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=14;fontStyle=1" vertex="1" parent="1"><mxGeometry x="450" y="960" width="700" height="70" as="geometry"/></mxCell>
 
-        <mxCell id="stateTitle" value="FrameSlot state lifecycle" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontStyle=1" vertex="1" parent="1">
-          <mxGeometry x="80" y="900" width="280" height="30" as="geometry"/>
-        </mxCell>
-        <mxCell id="sfree" value="Free&#xa;ready=false&#xa;in_use=false" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=13" vertex="1" parent="1">
-          <mxGeometry x="380" y="875" width="150" height="80" as="geometry"/>
-        </mxCell>
-        <mxCell id="swriting" value="Writing&#xa;ready=false&#xa;in_use=true" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13" vertex="1" parent="1">
-          <mxGeometry x="600" y="875" width="150" height="80" as="geometry"/>
-        </mxCell>
-        <mxCell id="sready" value="Ready&#xa;ready=true&#xa;in_use=false" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13" vertex="1" parent="1">
-          <mxGeometry x="820" y="875" width="150" height="80" as="geometry"/>
-        </mxCell>
-        <mxCell id="sdelivered" value="Delivered&#xa;ready=false&#xa;in_use=true" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13" vertex="1" parent="1">
-          <mxGeometry x="1040" y="875" width="160" height="80" as="geometry"/>
-        </mxCell>
-        <mxCell id="srelease" value="Released&#xa;ready=false&#xa;in_use=false" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=13" vertex="1" parent="1">
-          <mxGeometry x="1270" y="875" width="160" height="80" as="geometry"/>
-        </mxCell>
-
-        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="hw" target="event"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="event" target="pending"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="pending" target="datawait"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="datawait" target="clear"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="clear" target="findslot"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1400" y="260"/><mxPoint x="200" y="260"/></Array></mxGeometry></mxCell>
-        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="findslot" target="droptest"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e7" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="droptest" target="markwriting"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e8" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="droptest" target="drop"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e9" value="release wakes waiter" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;dashed=1" edge="1" parent="1" source="drop" target="findslot"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="markwriting" target="readc2h"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="readc2h" target="publish"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="publish" target="wait"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1410" y="500"/><mxPoint x="220" y="500"/></Array></mxGeometry></mxCell>
-        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="wait" target="select"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="select" target="render"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="render" target="appUse"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="appUse" target="release"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1310" y="700"/><mxPoint x="780" y="700"/></Array></mxGeometry></mxCell>
-        <mxCell id="e17" value="slot reusable" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;dashed=1" edge="1" parent="1" source="release" target="findslot"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="780" y="850"/><mxPoint x="40" y="850"/><mxPoint x="40" y="350"/></Array></mxGeometry></mxCell>
-
-        <mxCell id="se1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block" edge="1" parent="1" source="sfree" target="swriting"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="se2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block" edge="1" parent="1" source="swriting" target="sready"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="se3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block" edge="1" parent="1" source="sready" target="sdelivered"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="se4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block" edge="1" parent="1" source="sdelivered" target="srelease"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="se5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;dashed=1" edge="1" parent="1" source="srelease" target="sfree"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1350" y="1000"/><mxPoint x="455" y="1000"/></Array></mxGeometry></mxCell>
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="hw" target="event"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2" edge="1" parent="1" source="event" target="mode"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" value="no / copy" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;strokeColor=#82b366" edge="1" parent="1" source="mode" target="copySlot"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="960" y="280"/><mxPoint x="230" y="280"/></Array></mxGeometry></mxCell>
+        <mxCell id="e4" value="yes / zero-copy" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;strokeColor=#6c8ebf" edge="1" parent="1" source="mode" target="zcHeld"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="c1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#82b366" edge="1" parent="1" source="copySlot" target="copyGet"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="c2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#82b366" edge="1" parent="1" source="copyGet" target="copyPublish"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="c3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#82b366" edge="1" parent="1" source="copyPublish" target="copyRead"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="c4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#9673a6" edge="1" parent="1" source="copyRead" target="copyRelease"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="c5" value="slot reusable" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#82b366" edge="1" parent="1" source="copyRelease" target="copySlot"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="585" y="790"/><mxPoint x="40" y="790"/><mxPoint x="40" y="420"/></Array></mxGeometry></mxCell>
+        <mxCell id="z0" value="enabled at open" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#6c8ebf" edge="1" parent="1" source="zcEnable" target="zcHeld"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="z1" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#6c8ebf" edge="1" parent="1" source="zcHeld" target="zcAcquire"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="z2" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#d6b656" edge="1" parent="1" source="zcHeld" target="zcSkip"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="z3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#6c8ebf" edge="1" parent="1" source="zcAcquire" target="zcRead"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="z4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#9673a6" edge="1" parent="1" source="zcRead" target="zcRelease"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="z5" value="driver frame reusable" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#6c8ebf" edge="1" parent="1" source="zcRelease" target="zcHeld"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1355" y="790"/><mxPoint x="1510" y="790"/><mxPoint x="1510" y="407"/></Array></mxGeometry></mxCell>
+        <mxCell id="a1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#9673a6" edge="1" parent="1" source="copyRead" target="consumer"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#9673a6" edge="1" parent="1" source="zcRead" target="consumer"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block" edge="1" parent="1" source="consumer" target="close"><mxGeometry relative="1" as="geometry"/></mxCell>
       </root>
     </mxGraphModel>
   </diagram>

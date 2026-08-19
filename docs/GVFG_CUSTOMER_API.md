@@ -32,6 +32,7 @@ bin/gvfg_preview.dll
 ```text
 gvfg_enumerate_devices
 -> gvfg_create
+-> gvfg_set_zero_copy_enabled (optional, before open)
 -> gvfg_open_channel
 -> gvfg_start
 -> 重複：
@@ -90,8 +91,9 @@ int main(void)
 - API 是 pull model；應用程式自行決定在哪個執行緒呼叫
   `gvfg_read_frame()`。GUI 程式建議在 worker thread 讀取，再把 UI 更新送回
   UI thread。
-- `frame.data` 由 SDK 擁有，只在對應的 `gvfg_release_frame()` 前有效。資料若要
-  長期保存，必須先複製。
+- Copy mode 的 `frame.data` 由 SDK 擁有；zero-copy mode 則指向 driver-owned
+  buffer。兩種模式都只在對應的 `gvfg_release_frame()` 前有效，資料若要長期
+  保存，必須先複製。
 - 每個 handle 同時最多持有一個 frame。尚未 release 又呼叫
   `gvfg_read_frame()`，會回傳 `GVFG_ESTATE`。
 - release 時必須傳回原本的完整 `gvfg_frame_t`，不可修改欄位。
@@ -149,6 +151,9 @@ int main(void)
 - `gvfg_enumerate_devices(out_devices, max_devices)`：列舉裝置。傳入
   `NULL, 0` 可只查數量；回傳值是寫入數量或可用裝置數，無裝置時為 `0`。
 - `gvfg_create(&handle)`：建立 closed session。
+- `gvfg_set_zero_copy_enabled(handle, enabled)`：選用 zero-copy；只能在
+  `gvfg_open_channel()` 前呼叫，預設為關閉。
+- `gvfg_get_zero_copy_enabled(handle, &enabled)`：查詢 session 選擇的模式。
 - `gvfg_open_channel(handle, device_index, channel)`：開啟列舉所得裝置，channel
   必須為 `GVFG_CHANNEL_0` 或 `GVFG_CHANNEL_1`。
 - `gvfg_start(handle)`：開始擷取。若目前無訊號，成功進入訊號監看模式；此時
@@ -156,10 +161,19 @@ int main(void)
 - `gvfg_stop(handle)`：停止擷取；重複呼叫仍回傳成功。
 - `gvfg_destroy(handle)`：必要時先停止，再銷毀 handle。銷毀後不得再使用。
 
+Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，每次成功
+`gvfg_read_frame()` 後由 `gvfg_release_frame()` 歸還 driver frame，destroy/close
+前 disable。Device open 後不可直接切換；應 destroy session、重新 create、設定模式
+後再 open。
+
 ### Frame
 
-- `gvfg_read_frame(handle, &frame, timeout_ms)`：取得一個 SDK-owned frame。
+- `gvfg_read_frame(handle, &frame, timeout_ms)`：取得一個 frame；ownership 依 copy/
+  zero-copy mode 而定，但 release contract 相同。
 - `gvfg_release_frame(handle, &frame)`：釋放原 frame token。
+
+`gvfg_set_video_format()` 只能在 stream 尚未開始或已 stop 時呼叫；streaming 中
+切換會回傳 `GVFG_ESTATE`。應用程式應在 UI 上同步鎖定格式選項。
 
 ### 查詢
 

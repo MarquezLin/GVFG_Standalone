@@ -67,6 +67,22 @@ SDK 不再呼叫 `IOCTL_PCIES2MM_GET_VIDEO_DONE_INDEX`，也不會在新 IOCTL
 `IRQ_MASK_W1S_OFFSET`。若搭配舊版 driver，stream start 或 frame capture
 可能失敗。
 
+### Zero-copy selection
+
+上層程式可在 `gvfg_create()` 後、`gvfg_open_channel()` 前選擇 zero-copy：
+
+```c
+gvfg_handle handle = NULL;
+gvfg_create(&handle);
+gvfg_set_zero_copy_enabled(handle, 1); /* 0: copy, 1: zero-copy */
+gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
+```
+
+預設為 copy mode。Device open 後不可切換模式；如需切換，必須 destroy
+並重建 session。Zero-copy mode 仍使用相同的 `gvfg_read_frame()` /
+`gvfg_release_frame()` ownership contract，每次成功 read 都必須 release。
+SDK 會在 open 時 enable zero-copy，並在 close/destroy 時 disable。
+
 `gvfg_qt_preview.exe` 只使用 public API，主畫面只顯示 input 與 Preview
 狀態；IRQ、DMA、ring slot 等資訊只存在 internal diagnostic tool。
 

@@ -65,14 +65,14 @@ Created/Closed -> Opened -> Running -> Opened -> Destroyed
 
 ## 4. DMA 與 frame ring
 
-目前資料路徑：
+Copy mode 資料路徑：
 
 ```text
 source frame
 -> hardware/driver DMA buffer
 -> DMA complete event
--> capture worker 查詢 done index
--> IOCTL_GET_FRAME 複製到 SDK ring free slot
+-> capture worker 收到 DMA complete event
+-> IOCTL_GET_FRAME(frameIndex=0xFFFFFFFF) 複製到 SDK ring free slot
 -> slot ready + sequence 更新 + frame_cv notify
 -> wait_frame 選取 ready frame
 -> facade 回傳指向 slot.data 的 gvfg_frame_t
@@ -94,6 +94,26 @@ ring 滿時的行為是即時擷取的 drop/backpressure policy，不是 lossles
 internal stats 觀察 `frames_dropped`。不要將 slot 數、driver DMA buffer 數或 done-index
 演算法暴露為客戶契約。
 
+Zero-copy mode 資料路徑：
+
+```text
+gvfg_create
+-> gvfg_set_zero_copy_enabled(1)
+-> open channel 時 IOCTL_GIGA_ENABLE_FRAME_ZEROCOPY(channel)
+-> DMA complete event
+-> IOCTL_GIGA_ACQUIRE_VIDEO_FRAME_ZEROCOPY(channel, 0xFFFFFFFF)
+-> facade 回傳 driver-owned pointer
+-> customer/preview/conversion
+-> gvfg_release_frame
+-> IOCTL_GIGA_RELEASE_VIDEO_FRAME(channel)
+-> close/destroy 時 IOCTL_GIGA_DISABLE_FRAME_ZEROCOPY(channel)
+```
+
+Zero-copy 同時只允許一張 outstanding frame。若下一個 DMA event 到達時 caller 尚未
+release，backend 只會跳過該次 acquire，不會覆寫仍由 caller 使用的 driver pointer。
+這種情況不計入 `frames_dropped`，也不送出 `GVFG_EVENT_FRAME_LOSS`；driver 目前沒有
+提供可用來確認實際遺失 frame 的 sequence/drop counter。
+
 ## 5. Frame token 與 ABI
 
 Facade 在 release 時驗證原 token 的 data、size、width、height、stride、format、
@@ -102,6 +122,20 @@ bit depth 與 frame ID。任何欄位遭修改都回傳 `GVFG_EINVAL`。
 x64 `gvfg_frame_t` ABI 已在 `gvfg_capture.cpp` 以 static assertions 固定為 48 bytes
 及明確欄位 offsets。修改公開 struct 時必須視為 ABI 變更，不能只重新編譯 DLL。
 新增 metadata 優先考慮新 query API 或帶 size/version 的新 struct。
+
+## Driver ABI requirement
+
+目前 SDK 只支援新版 PCIE S2MM driver，必要 private ABI 包含：
+
+- `IOCTL_GIGA_VIDEO_START` (`0x808`) / `IOCTL_GIGA_VIDEO_STOP` (`0x809`)。
+- `IOCTL_GIGA_RELEASE_VIDEO_FRAME` (`0x80A`)。
+- `IOCTL_GIGA_ACQUIRE_VIDEO_FRAME_ZEROCOPY` (`0x80B`)。
+- `IOCTL_GIGA_ENABLE_FRAME_ZEROCOPY` (`0x80C`) /
+  `IOCTL_GIGA_DISABLE_FRAME_ZEROCOPY` (`0x80D`)。
+- Copy mode 的 `IOCTL_PCIES2MM_GET_FRAME` 接受 `frameIndex=0xFFFFFFFF`。
+
+不再呼叫 `GET_VIDEO_DONE_INDEX`，也不再 fallback 直接寫入 video enable、DMA enable
+或 IRQ mask registers。舊 driver 不屬於此 revision 的支援範圍。
 
 目前原生格式：
 

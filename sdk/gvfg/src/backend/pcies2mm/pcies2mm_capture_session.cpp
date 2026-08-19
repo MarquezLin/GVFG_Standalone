@@ -178,11 +178,18 @@ namespace gvfg::internal
 
     pcies2mm_status_t PcieS2mmCaptureSession::close()
     {
-        stop_stream();
+        pcies2mm_status_t result = stop_stream();
         stop_event_monitoring();
+        if (zero_copy_enabled_ && device_ != INVALID_HANDLE_VALUE)
+        {
+            const pcies2mm_status_t disableStatus = set_zero_copy_enabled(false);
+            if (result == PCIES2MM_OK)
+                result = disableStatus;
+        }
         close_handles();
         opened_ = false;
         configured_ = false;
+        zero_copy_enabled_ = false;
         signal_presence_known_.store(false, std::memory_order_release);
         signal_present_.store(false, std::memory_order_release);
         signal_probe_active_.store(false, std::memory_order_release);
@@ -190,7 +197,7 @@ namespace gvfg::internal
         base_path_.clear();
         friendly_name_.clear();
         reset_stats(stats_, PCIES2MM_STREAM_STOPPED);
-        return PCIES2MM_OK;
+        return result;
     }
 
     void PcieS2mmCaptureSession::close_handles()
@@ -215,6 +222,38 @@ namespace gvfg::internal
         signal_metadata_valid_ = false;
         if (!start_event_monitoring())
             return fail(PCIES2MM_EIO, "start event monitoring");
+        return PCIES2MM_OK;
+    }
+
+    pcies2mm_status_t PcieS2mmCaptureSession::set_zero_copy_enabled(bool enabled)
+    {
+        if (!opened_ || device_ == INVALID_HANDLE_VALUE)
+            return PCIES2MM_ESTATE;
+        if (running_)
+            return PCIES2MM_ESTATE;
+        if (zero_copy_enabled_ == enabled)
+            return PCIES2MM_OK;
+
+        if (!enabled)
+        {
+            // Even while the stream is nominally stopped, an earlier failed
+            // teardown may have left a driver frame in the ring. No disable
+            // IOCTL is allowed until the acquire thread is joined and every
+            // outstanding frame has been returned successfully.
+            stop_event_monitoring();
+            const pcies2mm_status_t releaseStatus = release_all_zero_copy_frames(true);
+            if (releaseStatus != PCIES2MM_OK)
+                return releaseStatus;
+        }
+
+        ULONG channel = active_channel();
+        DWORD bytesReturned = 0;
+        const DWORD ioctl = enabled ? IOCTL_GIGA_ENABLE_FRAME_ZEROCOPY
+                                    : IOCTL_GIGA_DISABLE_FRAME_ZEROCOPY;
+        if (!DeviceIoControl(device_, ioctl, &channel, sizeof(channel), nullptr, 0,
+                             &bytesReturned, nullptr))
+            return fail(PCIES2MM_EIO, enabled ? "enable zero copy" : "disable zero copy");
+        zero_copy_enabled_ = enabled;
         return PCIES2MM_OK;
     }
 
@@ -246,12 +285,12 @@ namespace gvfg::internal
         out.channel = channel_;
 
         uint32_t modeLocked = 0;
-        uint32_t timingLocked = 0;
+        uint32_t rxTLocked = 0;
         if (!read_reg(video_base() + VIDEO_RX_MODE_LOCKED_OFFSET, modeLocked) ||
-            !read_reg(video_base() + VIDEO_RX_T_LOCKED_OFFSET, timingLocked))
+            !read_reg(video_base() + VIDEO_RX_T_LOCKED_OFFSET, rxTLocked))
             return fail(PCIES2MM_EIO, "read signal lock registers");
 
-        const bool signalPresent = modeLocked == 1u && timingLocked == 1u;
+        const bool signalPresent = modeLocked == 1u && rxTLocked == 1u;
         signal_presence_known_.store(true, std::memory_order_release);
         signal_present_.store(signalPresent, std::memory_order_release);
         if (!signalPresent)
@@ -343,15 +382,22 @@ namespace gvfg::internal
         if (running_)
             return PCIES2MM_OK;
 
+        // Do not overwrite a retained token from an earlier failed release.
+        // Retry it before rebuilding the ring or restarting DMA.
+        const pcies2mm_status_t pendingReleaseStatus = release_all_zero_copy_frames(true);
+        if (pendingReleaseStatus != PCIES2MM_OK)
+            return pendingReleaseStatus;
+
         const size_t bytes = frame_size_bytes();
         if (bytes == 0 || bytes > (std::numeric_limits<DWORD>::max)())
             return fail(PCIES2MM_EINVAL, "frame_size_bytes", ERROR_INVALID_PARAMETER);
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            frame_ring_.assign(stream_desc_.buffer_count, FrameSlot{});
+            frame_ring_.assign(zero_copy_enabled_ ? 1u : stream_desc_.buffer_count, FrameSlot{});
             for (FrameSlot &slot : frame_ring_)
-                slot.data.assign(bytes, 0);
+                if (!zero_copy_enabled_)
+                    slot.data.assign(bytes, 0);
             next_write_slot_ = 0;
             active_delivery_slot_ = static_cast<size_t>(-1);
             active_delivery_started_ = {};
@@ -365,8 +411,11 @@ namespace gvfg::internal
         }
 
         const uint32_t channel = active_channel();
-        if (!monitoring_.load(std::memory_order_acquire))
-            return fail(PCIES2MM_ESTATE, "event monitoring is not active", ERROR_INVALID_STATE);
+        // stop_stream() joins the event thread so no zero-copy acquire can race
+        // teardown. Recreate event monitoring when the same open handle starts
+        // another stream.
+        if (!monitoring_.load(std::memory_order_acquire) && !start_event_monitoring())
+            return fail(PCIES2MM_EIO, "start event monitoring");
         // Events are edge-triggered, so a source connected before registration
         // may not produce a plug-in event. Probe DMA using the register layout,
         // but do not report connected until a full frame is received.
@@ -390,7 +439,10 @@ namespace gvfg::internal
     pcies2mm_status_t PcieS2mmCaptureSession::stop_stream()
     {
         if (!running_)
-            return PCIES2MM_OK;
+        {
+            stop_event_monitoring();
+            return release_all_zero_copy_frames(true);
+        }
 
         running_ = false;
         capture_active_ = false;
@@ -400,6 +452,13 @@ namespace gvfg::internal
 
         if (device_ != INVALID_HANDLE_VALUE)
             stop_video(active_channel());
+
+        // The event thread owns acquire/publish. Join it before examining the
+        // ring; otherwise an acquire can complete immediately after the ring
+        // was drained and leave a driver frame outstanding.
+        stop_event_monitoring();
+
+        const pcies2mm_status_t releaseStatus = release_all_zero_copy_frames(true);
 
         if (dma_event_)
             SetEvent(dma_event_);
@@ -416,7 +475,7 @@ namespace gvfg::internal
         }
         frame_cv_.notify_all();
         data_cv_.notify_all();
-        return PCIES2MM_OK;
+        return releaseStatus;
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::wait_frame(uint32_t timeoutMs, pcies2mm_frame_t &out)
@@ -520,7 +579,7 @@ namespace gvfg::internal
         delivered_sequence_ = slot.sequence;
         ++stats_.frames_delivered;
 
-        out.data = slot.data.data();
+        out.data = slot.zero_copy ? slot.external_data : slot.data.data();
         out.data_size_bytes = slot.bytes;
         out.frame_id = delivered_sequence_;
         out.width = stream_desc_.width;
@@ -532,12 +591,13 @@ namespace gvfg::internal
 
     pcies2mm_status_t PcieS2mmCaptureSession::release_frame(const pcies2mm_frame_t &frame)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
         if (active_delivery_slot_ >= frame_ring_.size())
             return PCIES2MM_ESTATE;
 
         const FrameSlot &slot = frame_ring_[active_delivery_slot_];
-        if (frame.data != slot.data.data() ||
+        const uint8_t *expectedData = slot.zero_copy ? slot.external_data : slot.data.data();
+        if (frame.data != expectedData ||
             frame.data_size_bytes != slot.bytes ||
             frame.frame_id != delivered_sequence_ ||
             frame.width != stream_desc_.width ||
@@ -546,7 +606,16 @@ namespace gvfg::internal
             frame.bit_depth != stream_bit_depth_)
             return PCIES2MM_EINVAL;
 
-        frame_ring_[active_delivery_slot_].in_use = false;
+        if (slot.zero_copy && !release_zero_copy_frame(active_channel()))
+        {
+            const DWORD err = GetLastError();
+            lock.unlock();
+            return fail(PCIES2MM_EIO, "release zero-copy frame", err);
+        }
+        FrameSlot &releasedSlot = frame_ring_[active_delivery_slot_];
+        releasedSlot.in_use = false;
+        releasedSlot.external_data = nullptr;
+        releasedSlot.zero_copy = false;
         const double heldMs = active_delivery_started_.time_since_epoch().count() != 0
                                   ? std::chrono::duration<double, std::milli>(
                                         std::chrono::steady_clock::now() - active_delivery_started_).count()
@@ -657,6 +726,63 @@ namespace gvfg::internal
                                0,
                                &bytesReturned,
                                nullptr) != FALSE;
+    }
+
+    bool PcieS2mmCaptureSession::acquire_zero_copy_frame(uint32_t channelIndex,
+                                                         const uint8_t *&outData) const
+    {
+        ULONG input[2] = {channelIndex, (std::numeric_limits<ULONG>::max)()};
+        void *buffer = nullptr;
+        DWORD bytesReturned = 0;
+        const BOOL ok = DeviceIoControl(device_,
+                                        IOCTL_GIGA_ACQUIRE_VIDEO_FRAME_ZEROCOPY,
+                                        input,
+                                        sizeof(input),
+                                        &buffer,
+                                        sizeof(buffer),
+                                        &bytesReturned,
+                                        nullptr);
+        if (!ok || !buffer)
+            return false;
+        outData = static_cast<const uint8_t *>(buffer);
+        return true;
+    }
+
+    bool PcieS2mmCaptureSession::release_zero_copy_frame(uint32_t channelIndex) const
+    {
+        ULONG channel = channelIndex;
+        DWORD bytesReturned = 0;
+        return DeviceIoControl(device_,
+                               IOCTL_GIGA_RELEASE_VIDEO_FRAME,
+                               &channel,
+                               sizeof(channel),
+                               nullptr,
+                               0,
+                               &bytesReturned,
+                               nullptr) != FALSE;
+    }
+
+    pcies2mm_status_t PcieS2mmCaptureSession::release_all_zero_copy_frames(bool includeInUse)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        for (FrameSlot &slot : frame_ring_)
+        {
+            if (!slot.zero_copy || !slot.external_data || (!includeInUse && slot.in_use))
+                continue;
+
+            if (!release_zero_copy_frame(active_channel()))
+            {
+                const DWORD err = GetLastError();
+                lock.unlock();
+                return fail(PCIES2MM_EIO, "release pending zero-copy frame", err);
+            }
+
+            slot.external_data = nullptr;
+            slot.zero_copy = false;
+            slot.ready = false;
+            slot.in_use = false;
+        }
+        return PCIES2MM_OK;
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::debug_write_register(uint32_t offset,
@@ -951,11 +1077,18 @@ namespace gvfg::internal
             {
                 for (const FrameSlot &slot : frame_ring_)
                 {
-                    if (!slot.in_use)
+                    if (!slot.in_use && (!zero_copy_enabled_ || !slot.ready))
                         return true;
                 }
                 return false;
             };
+
+            if (zero_copy_enabled_ && !hasWritableSlot())
+            {
+                if (pending_events_ > 0)
+                    --pending_events_;
+                return;
+            }
 
             while (running_ && !hasWritableSlot())
                 data_cv_.wait_for(lock, std::chrono::seconds(1));
@@ -973,7 +1106,7 @@ namespace gvfg::internal
                     break;
                 }
             }
-            if (slotIndex == frame_ring_.size())
+            if (!zero_copy_enabled_ && slotIndex == frame_ring_.size())
             {
                 uint64_t oldestSequence = (std::numeric_limits<uint64_t>::max)();
                 for (size_t i = 0; i < frame_ring_.size(); ++i)
@@ -1021,9 +1154,14 @@ namespace gvfg::internal
             }
             slot.ready = false;
             slot.in_use = true;
-            if (slot.data.size() < bytes)
-                slot.data.resize(bytes);
-            slotData = slot.data.data();
+            slot.external_data = nullptr;
+            slot.zero_copy = zero_copy_enabled_;
+            if (!zero_copy_enabled_)
+            {
+                if (slot.data.size() < bytes)
+                    slot.data.resize(bytes);
+                slotData = slot.data.data();
+            }
             next_write_slot_ = (slotIndex + 1) % frame_ring_.size();
         }
 
@@ -1032,14 +1170,21 @@ namespace gvfg::internal
 
         constexpr uint32_t frameIndex = (std::numeric_limits<uint32_t>::max)();
         const auto getFrameStarted = std::chrono::steady_clock::now();
-        const int ret = get_frame(channel, frameIndex, slotData, bytes);
+        const uint8_t *zeroCopyData = nullptr;
+        const int ret = zero_copy_enabled_
+                            ? (acquire_zero_copy_frame(channel, zeroCopyData) ? static_cast<int>(bytes) : -1)
+                            : get_frame(channel, frameIndex, slotData, bytes);
         const double getFrameMs = std::chrono::duration<double, std::milli>(
                                       std::chrono::steady_clock::now() - getFrameStarted).count();
         if (getFrameMs >= 10.0)
             PCIES2MM_LOG("slow GET_FRAME: frame_index=0x%08X elapsed_ms=%.3f ret=%d",
                          frameIndex, getFrameMs, ret);
         if (!running_)
+        {
+            if (zero_copy_enabled_ && zeroCopyData)
+                release_zero_copy_frame(channel);
             return;
+        }
         if (ret < 0 || static_cast<DWORD>(ret) != bytes)
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -1056,6 +1201,13 @@ namespace gvfg::internal
                                ret,
                                bytes);
             return;
+        }
+
+        if (zero_copy_enabled_)
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (slotIndex < frame_ring_.size())
+                frame_ring_[slotIndex].external_data = zeroCopyData;
         }
 
         if (signal_probe_active_.exchange(false, std::memory_order_acq_rel))
@@ -1123,6 +1275,12 @@ namespace gvfg::internal
         signal_presence_known_.store(true, std::memory_order_release);
         stop_video(channel);
         capture_active_ = false;
+        // A ready frame is driver-owned even if the application has not read
+        // it yet. Return it before invalidating the ready queue. A caller-held
+        // frame remains valid until its matching release_frame().
+        const pcies2mm_status_t releaseStatus = release_all_zero_copy_frames(false);
+        if (releaseStatus != PCIES2MM_OK)
+            PCIES2MM_ERROR_LOG("unplug could not release pending zero-copy frame");
         emit_event(PCIES2MM_EVENT_PLUG_OUT);
 
         {
@@ -1236,6 +1394,11 @@ namespace gvfg::internal
             return false;
         }
 
+        // Ring replacement must not discard a ready driver pointer. This runs
+        // on the single event thread, so no new DMA acquire can interleave.
+        if (resizeRing && release_all_zero_copy_frames(false) != PCIES2MM_OK)
+            return false;
+
         std::unique_lock<std::mutex> lock(mutex_);
         const bool wasRunning = running_.load(std::memory_order_acquire);
         if (resizeRing && wasRunning)
@@ -1259,9 +1422,10 @@ namespace gvfg::internal
         signal_metadata_valid_ = true;
         if (resizeRing)
         {
-            frame_ring_.assign(stream_desc_.buffer_count, FrameSlot{});
+            frame_ring_.assign(zero_copy_enabled_ ? 1u : stream_desc_.buffer_count, FrameSlot{});
             for (FrameSlot &slot : frame_ring_)
-                slot.data.assign(bytes, 0);
+                if (!zero_copy_enabled_)
+                    slot.data.assign(bytes, 0);
             next_write_slot_ = 0;
             active_delivery_slot_ = static_cast<size_t>(-1);
             pending_events_ = 0;

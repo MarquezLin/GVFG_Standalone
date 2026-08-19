@@ -86,7 +86,7 @@ register 與 DMA 實作不屬於本文件。
 
 | 欄位                 | 型別             | 說明                                           |
 | ------------------ | -------------- | -------------------------------------------- |
-| `data`             | `const void *` | SDK-owned 原生 frame buffer；release 或 stop 後失效 |
+| `data`             | `const void *` | Copy mode 為 SDK-owned、zero-copy 為 driver-owned；release 或 stop 後失效 |
 | `data_size`        | `uint64_t`     | `data` 指向的總 byte 數                           |
 | `width`            | `int`          | frame 寬度，單位 pixel                            |
 | `height`           | `int`          | frame 高度，單位 pixel                            |
@@ -191,6 +191,33 @@ gvfg_status_t gvfg_open_channel(gvfg_handle handle,
 對同一 handle 再次 open 會先關閉原 backend session；應用程式仍應依正常 lifecycle
 先 stop，再切換裝置或 channel。
 
+### Zero-copy mode selection
+
+```c
+gvfg_status_t gvfg_set_zero_copy_enabled(gvfg_handle handle, int enabled);
+gvfg_status_t gvfg_get_zero_copy_enabled(gvfg_handle handle, int *out_enabled);
+```
+
+- `set` 只能在 `gvfg_create()` 後、`gvfg_open_channel()` 前呼叫。
+- `enabled` 只接受 0（copy）或 1（zero-copy），預設為 0。
+- Device 已 open 時呼叫 `set` 會回傳 `GVFG_ESTATE`。
+- `get` 可查詢 session 選定模式；`out_enabled` 不可為 NULL。
+- Zero-copy mode 的 `frame.data` 為 driver-owned pointer；仍必須以相同 descriptor
+  呼叫 `gvfg_release_frame()`，且同一 handle 同時最多持有一張 frame。
+- SDK 在 open 時 enable driver zero-copy，在 destroy/close 前 disable。
+
+### `gvfg_set_video_format`
+
+```c
+gvfg_status_t gvfg_set_video_format(gvfg_handle handle,
+                                    gvfg_pixel_format_t format);
+```
+
+- 支援 `GVFG_PIXFMT_YUY2` 與 `GVFG_PIXFMT_Y210`。
+- Device 必須已 open，且 stream 必須尚未 start 或已 stop。
+- Streaming 中呼叫回傳 `GVFG_ESTATE`；不支援的 format 回傳 `GVFG_ENOTSUP` 或
+  `GVFG_EINVAL`。
+
 ### 1.17 `gvfg_start`
 
 ```c
@@ -220,6 +247,9 @@ gvfg_status_t gvfg_read_frame(gvfg_handle handle,
 - `GVFG_ETIMEOUT`：期限內沒有 frame。
 - `GVFG_EIO`／`GVFG_ENOTSUP`：frame/backend 無效或格式不支援。
 
+Copy mode 回傳 SDK ring buffer；zero-copy mode 回傳 driver-owned buffer。兩者的
+pointer 都只保證有效到對應的 `gvfg_release_frame()`。
+
 ### 1.19 `gvfg_release_frame`
 
 ```c
@@ -229,7 +259,7 @@ gvfg_status_t gvfg_release_frame(gvfg_handle handle,
 
 - `handle`：取得該 frame 的同一個 handle。
 - `frame`：`gvfg_read_frame()` 原封不動回傳的完整 descriptor。
-- `GVFG_OK`：成功歸還 frame，slot 可再次使用。
+- `GVFG_OK`：成功歸還 frame；copy slot 可再次使用，或 zero-copy frame 已歸還 driver。
 - `GVFG_EINVAL`：NULL 或 token 內容與 held frame 不符。
 - `GVFG_ESTATE`：沒有 backend、目前沒有 held frame，或 backend release 狀態不正確。
 

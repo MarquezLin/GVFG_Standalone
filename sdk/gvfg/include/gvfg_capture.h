@@ -259,9 +259,25 @@ extern "C"
         _In_ int channel_index);
 
     /*
-     * Select the native capture format. This may be called before or during
-     * capture. A running stream reports GVFG_EVENT_FORMAT_CHANGE_BEGIN while
-     * the new format is applied.
+     * Select driver zero-copy frame delivery.
+     *
+     * Call after gvfg_create() and before gvfg_open_channel(). The default is
+     * disabled. Once a device is open the mode cannot be changed. In zero-copy
+     * mode, gvfg_read_frame() returns driver-owned memory and every successful
+     * read must be paired with gvfg_release_frame().
+     */
+    GVFG_API gvfg_status_t gvfg_set_zero_copy_enabled(
+        _In_ gvfg_handle handle,
+        _In_ int enabled);
+
+    GVFG_API gvfg_status_t gvfg_get_zero_copy_enabled(
+        _In_ gvfg_handle handle,
+        _Out_ int *out_enabled);
+
+    /*
+     * Select the native capture format. Call after opening the device and
+     * before gvfg_start(), or after gvfg_stop(). A running stream rejects the
+     * change with GVFG_ESTATE.
      *
      * Currently the SDK implements this through a temporary hardware register;
      * applications must use this API so the backend can move to an IOCTL later.
@@ -307,8 +323,9 @@ extern "C"
      * - GVFG_ETIMEOUT if no frame is ready before timeout_ms expires.
      * - GVFG_EIO for driver/backend failures.
      *
-     * The returned data pointer is owned by the SDK and remains valid until
-     * gvfg_release_frame() is called. A handle may hold only one frame at a time.
+     * In copy mode the returned data pointer is owned by the SDK. In zero-copy
+     * mode it points to driver-owned memory. In both modes it remains valid
+     * until gvfg_release_frame() is called, and a handle may hold only one frame.
      */
     GVFG_API gvfg_status_t gvfg_read_frame(
         _In_ gvfg_handle handle,

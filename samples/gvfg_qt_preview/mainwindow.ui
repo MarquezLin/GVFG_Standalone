@@ -127,6 +127,16 @@
       </widget>
      </item>
      <item>
+      <widget class="QCheckBox" name="zeroCopyCheckBox">
+       <property name="toolTip">
+        <string>Must be selected before opening the device</string>
+       </property>
+       <property name="text">
+        <string>Zero-copy</string>
+       </property>
+      </widget>
+     </item>
+     <item>
       <spacer name="formatSpacer">
        <property name="orientation">
         <enum>Qt::Orientation::Horizontal</enum>
