@@ -17,8 +17,8 @@ extern "C" {
 
 typedef struct
 {
-    int width;        /* Width of the most recent frame returned by gvfg_read_frame(). */
-    int height;       /* Height of the most recent frame returned by gvfg_read_frame(). */
+    int width;        /* Width of the most recent frame returned by gvfg_read_channel_frame(). */
+    int height;       /* Height of the most recent frame returned by gvfg_read_channel_frame(). */
     int bit_depth;    /* Bits per color channel of the frame buffer. */
     int pixel_format; /* gvfg_pixel_format_t value: YUY2 or Y210. */
     int valid;        /* Non-zero after a frame is returned during the current running session. */
@@ -50,16 +50,23 @@ typedef struct
     uint64_t backend_active_delivery_slot; /* UINT64_MAX when no frame is held by the caller. */
     uint64_t backend_next_write_slot;
     uint64_t backend_ring_size;
+
+    int get_frame_zero_copy;
+    uint64_t get_frame_timing_samples;
+    double get_frame_timing_average_us;
+    double get_frame_timing_max300_us;
+    double get_frame_timing_max_us;
 } gvfg_debug_backend_stats_t;
 
 /*
  * Query driver-neutral internal backend counters.
  *
  * This exposes implementation-level counters for internal tools only. Customer
- * applications should use gvfg_get_runtime_info() instead.
+ * applications should use gvfg_get_channel_runtime_info() instead.
  */
-GVFG_API gvfg_status_t gvfg_debug_get_backend_stats(
+GVFG_API gvfg_status_t gvfg_debug_get_channel_backend_stats(
     _In_ gvfg_handle handle,
+    _In_ int channel_index,
     _Out_ gvfg_debug_backend_stats_t *out_stats);
 
 /*
@@ -67,8 +74,9 @@ GVFG_API gvfg_status_t gvfg_debug_get_backend_stats(
  *
  * The message is UTF-8 and null-terminated when out_message_size is non-zero.
  */
-GVFG_API gvfg_status_t gvfg_debug_get_last_error_detail(
+GVFG_API gvfg_status_t gvfg_debug_get_channel_last_error_detail(
     _In_ gvfg_handle handle,
+    _In_ int channel_index,
     _Out_writes_to_opt_(out_message_size, out_message_size) char *out_message,
     _In_ uint32_t out_message_size);
 

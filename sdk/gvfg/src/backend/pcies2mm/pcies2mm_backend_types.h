@@ -78,6 +78,11 @@ typedef struct pcies2mm_debug_state_t
     uint64_t active_delivery_slot;
     uint64_t next_write_slot;
     uint64_t ring_size;
+    int get_frame_zero_copy;
+    uint64_t get_frame_timing_samples;
+    double get_frame_timing_average_us;
+    double get_frame_timing_max300_us;
+    double get_frame_timing_max_us;
 } pcies2mm_debug_state_t;
 
 typedef enum pcies2mm_event_type_t

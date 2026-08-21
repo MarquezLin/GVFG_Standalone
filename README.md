@@ -8,7 +8,7 @@ import library、runtime DLL 來使用 GVFG，不要直接把 GVFG source 編進
 ## 內容
 
 - `sdk/gvfg`：GVFG customer C API、internal debug API、PCIES2MM backend。
-- `helpers/gvfg_preview`：可選的 preview helper DLL，在 `gvfg_read_frame()` 後使用。
+- `helpers/gvfg_preview`：可選的 preview helper DLL，在 `gvfg_read_channel_frame()` 後使用。
 - `samples/gvfg_qt_preview`：Qt preview sample；診斷功能由 build option 控制。
 - `docs`：API 與整合說明。
 
@@ -57,8 +57,10 @@ build/.../bin/gvfg_qt_preview.exe
 此版本只支援新版 PCIE S2MM driver，不再 backward compatible 舊版 driver。
 新版 driver 必須支援：
 
-- `IOCTL_GIGA_VIDEO_START`（function `0x808`）。
-- `IOCTL_GIGA_VIDEO_STOP`（function `0x809`）。
+- `IOCTL_GIGA_VIDEO_START`（function `0x830`）。
+- `IOCTL_GIGA_VIDEO_STOP`（function `0x831`）。
+- `IOCTL_GIGA_RELEASE_VIDEO_FRAME` 到 `IOCTL_GIGA_CLOSE_VIDEO`
+  使用 function `0x832` 到 `0x837`。
 - `IOCTL_PCIES2MM_GET_FRAME` 接受 `frameIndex = MAXULONG`（`0xFFFFFFFF`），
   由 driver 自行選擇已完成的 frame。
 
@@ -78,10 +80,45 @@ gvfg_set_zero_copy_enabled(handle, 1); /* 0: copy, 1: zero-copy */
 gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
 ```
 
+每個 channel 可在 open 前選擇要註冊／接收的事件：
+
+```c
+uint32_t events = GVFG_EVENT_MASK_SIGNAL_CONNECTED |
+                  GVFG_EVENT_MASK_SIGNAL_DISCONNECTED |
+                  GVFG_EVENT_MASK_FRAME_LOSS;
+gvfg_set_channel_event_mask(handle, GVFG_CHANNEL_0, events);
+gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
+```
+
+`VIDEO_DMA` 為 frame capture 必需，SDK 固定註冊。Plug-in、Unplug 與
+Format-change driver event 則依 mask 註冊；關閉它們也會停用對應的自動訊號恢復。
+
 預設為 copy mode。Device open 後不可切換模式；如需切換，必須 destroy
-並重建 session。Zero-copy mode 仍使用相同的 `gvfg_read_frame()` /
-`gvfg_release_frame()` ownership contract，每次成功 read 都必須 release。
+並重建 session。Zero-copy mode 仍使用相同的 `gvfg_read_channel_frame()` /
+`gvfg_release_channel_frame()` ownership contract，每次成功 read 都必須 release。
 SDK 會在 open 時 enable zero-copy，並在 close/destroy 時 disable。
+
+### 同一裝置雙 channel
+
+同一個 `gvfg_handle` 可對同一個 device index 開啟 CH0、CH1。SDK 只建立一個
+Windows device handle；兩個 channel 各自保有 capture thread、event、frame ring
+以及 held-frame/zero-copy ownership：
+
+```c
+gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
+gvfg_open_channel(handle, device_index, GVFG_CHANNEL_1);
+gvfg_start_channel(handle, GVFG_CHANNEL_0);
+gvfg_start_channel(handle, GVFG_CHANNEL_1);
+
+gvfg_frame_t frame0 = {0};
+if (gvfg_read_channel_frame(handle, GVFG_CHANNEL_0, &frame0, 1000) == GVFG_OK)
+    gvfg_release_channel_frame(handle, GVFG_CHANNEL_0, &frame0);
+
+gvfg_stop(handle); /* stop both channels */
+```
+
+兩個 channel 應由不同 worker thread 讀取。所有 stream、frame、event、signal 與
+runtime API 都明確要求 `channel_index`；不再保留隱含 selected-channel 的舊 API。
 
 `gvfg_qt_preview.exe` 只使用 public API，主畫面只顯示 input 與 Preview
 狀態；IRQ、DMA、ring slot 等資訊只存在 internal diagnostic tool。

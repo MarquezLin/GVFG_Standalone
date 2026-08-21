@@ -59,14 +59,14 @@ int main(void)
     if (gvfg_create(&h) != GVFG_OK)
         return 2;
 
-    gvfg_status_t st = gvfg_open_channel(h, devices[0].index, GVFG_CHANNEL_0);
+    gvfg_status_t st = gvfg_open_channel(h, 0, GVFG_CHANNEL_0);
     if (st == GVFG_OK)
-        st = gvfg_start(h);
+        st = gvfg_start_channel(h, GVFG_CHANNEL_0);
 
     if (st == GVFG_OK) {
         for (int i = 0; i < 100; ++i) {
             gvfg_frame_t frame = {0};
-            st = gvfg_read_frame(h, &frame, 1000);
+            st = gvfg_read_channel_frame(h, GVFG_CHANNEL_0, &frame, 1000);
             if (st == GVFG_ETIMEOUT)
                 continue;
             if (st != GVFG_OK)
@@ -74,7 +74,7 @@ int main(void)
 
             /* 在 release 前處理、轉換或複製 frame.data。 */
 
-            st = gvfg_release_frame(h, &frame);
+            st = gvfg_release_channel_frame(h, GVFG_CHANNEL_0, &frame);
             if (st != GVFG_OK)
                 break;
         }
@@ -89,13 +89,13 @@ int main(void)
 ## 3. 執行緒與 frame 所有權
 
 - API 是 pull model；應用程式自行決定在哪個執行緒呼叫
-  `gvfg_read_frame()`。GUI 程式建議在 worker thread 讀取，再把 UI 更新送回
+  `gvfg_read_channel_frame()`。GUI 程式建議每個 channel 使用一個 worker thread，再把 UI 更新送回
   UI thread。
 - Copy mode 的 `frame.data` 由 SDK 擁有；zero-copy mode 則指向 driver-owned
-  buffer。兩種模式都只在對應的 `gvfg_release_frame()` 前有效，資料若要長期
+  buffer。兩種模式都只在對應的 `gvfg_release_channel_frame()` 前有效，資料若要長期
   保存，必須先複製。
-- 每個 handle 同時最多持有一個 frame。尚未 release 又呼叫
-  `gvfg_read_frame()`，會回傳 `GVFG_ESTATE`。
+- 每個 channel 同時最多持有一個 frame。尚未 release 又對同一 channel 呼叫
+  `gvfg_read_channel_frame()`，會回傳 `GVFG_ESTATE`。
 - release 時必須傳回原本的完整 `gvfg_frame_t`，不可修改欄位。
 - `gvfg_stop()` 會中止等待並使尚未 release 的 frame 失效。
 - 同一個 handle 的 lifecycle 操作應由應用程式自行序列化；不要同時 open、
@@ -121,7 +121,7 @@ int main(void)
 可用 `gvfg_get_version()` 查詢目前實際載入的 `gvfg.dll` 版本。回傳值為
 靜態字串，例如 `"0.1.0"`，呼叫端不可釋放。
 需要記錄最近一次失敗的詳細原因時，可在 API 失敗後立即呼叫
-`gvfg_get_last_error_detail()`；driver/register 等內部診斷仍保留在 debug API。
+`gvfg_get_channel_last_error_detail()`；driver/register 等內部診斷仍保留在 debug API。
 
 ## 5. 資料格式
 
@@ -156,36 +156,39 @@ int main(void)
 - `gvfg_get_zero_copy_enabled(handle, &enabled)`：查詢 session 選擇的模式。
 - `gvfg_open_channel(handle, device_index, channel)`：開啟列舉所得裝置，channel
   必須為 `GVFG_CHANNEL_0` 或 `GVFG_CHANNEL_1`。
-- `gvfg_start(handle)`：開始擷取。若目前無訊號，成功進入訊號監看模式；此時
+- `gvfg_set_channel_event_mask(handle, channel, mask)`：在 open 前設定指定 channel
+  要註冊及通知的事件；預設 `GVFG_EVENT_MASK_ALL`。DMA event 為擷取必要項目，
+  不受 mask 控制。
+- `gvfg_start_channel(handle, channel)`：開始指定 channel 擷取。若目前無訊號，成功進入訊號監看模式；此時
   frame read 會 timeout，訊號接上後 SDK 會自動開始擷取。
 - `gvfg_stop(handle)`：停止擷取；重複呼叫仍回傳成功。
 - `gvfg_destroy(handle)`：必要時先停止，再銷毀 handle。銷毀後不得再使用。
 
 Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，每次成功
-`gvfg_read_frame()` 後由 `gvfg_release_frame()` 歸還 driver frame，destroy/close
+`gvfg_read_channel_frame()` 後由 `gvfg_release_channel_frame()` 歸還 driver frame，destroy/close
 前 disable。Device open 後不可直接切換；應 destroy session、重新 create、設定模式
 後再 open。
 
 ### Frame
 
-- `gvfg_read_frame(handle, &frame, timeout_ms)`：取得一個 frame；ownership 依 copy/
+- `gvfg_read_channel_frame(handle, channel, &frame, timeout_ms)`：取得一個 frame；ownership 依 copy/
   zero-copy mode 而定，但 release contract 相同。
-- `gvfg_release_frame(handle, &frame)`：釋放原 frame token。
+- `gvfg_release_channel_frame(handle, channel, &frame)`：釋放原 frame token。
 
-`gvfg_set_video_format()` 只能在 stream 尚未開始或已 stop 時呼叫；streaming 中
+`gvfg_set_channel_video_format()` 只能在指定 stream 尚未開始或已 stop 時呼叫；streaming 中
 切換會回傳 `GVFG_ESTATE`。應用程式應在 UI 上同步鎖定格式選項。
 
 ### 查詢
 
-- `gvfg_get_signal_status(handle, &status)`：查詢 selected channel 的連線、尺寸、
+- `gvfg_get_channel_signal_status(handle, channel, &status)`：查詢指定 channel 的連線、尺寸、
   原生格式與 bit depth。沒有輸入訊號是正常狀態：回傳 `GVFG_OK` 且
   `connected == 0`。
-- `gvfg_get_runtime_info(handle, &info)`：取得 SDK 已交付 frame 數、SDK 能確定的
+- `gvfg_get_channel_runtime_info(handle, channel, &info)`：取得指定 channel 已交付 frame 數、SDK 能確定的
   `lost_frames` 與依 read 間隔估算的 `capture_fps`。start 時統計值重設。
 
 ### Event
 
-`gvfg_poll_event(handle, &event, timeout_ms)` 一次取出一個事件，只能在 running
+`gvfg_poll_channel_event(handle, channel, &event, timeout_ms)` 一次取出指定 channel 的事件，只能在 running
 狀態使用。stop 會喚醒阻塞中的 poll，並回傳 `GVFG_ESTATE`。
 
 | Event                            | 應用程式動作                      |
@@ -197,12 +200,12 @@ Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，每次成
 | `GVFG_EVENT_FRAME_LOSS`          | 記錄錄影內容可能不完整；`event.count` 是本次已知 loss 數量 |
 
 呼叫前應將 `gvfg_event_t` 清零並設定 `struct_size = sizeof(gvfg_event_t)`。
-事件是狀態通知，不取代 `gvfg_get_signal_status()`；需要完整 metadata 時應重新查詢。
+事件是狀態通知，不取代 `gvfg_get_channel_signal_status()`；需要完整 metadata 時應重新查詢。
 
 ## 7. GPU 同步轉換
 
 GPU 轉換在 `gvfg.dll` 內完成，呼叫是同步的。必須在
-`gvfg_release_frame()` 前轉換；函式返回後 SDK 不保留 source 或 destination
+`gvfg_release_channel_frame()` 前轉換；函式返回後 SDK 不保留 source 或 destination
 pointer。
 
 支援輸出：

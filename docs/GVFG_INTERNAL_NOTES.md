@@ -1,5 +1,12 @@
 # GVFG 內部設計與維護說明
 
+## Driver IOCTL DLL 邊界
+
+`gvfg.dll` 保留裝置列舉、`CreateFile`/`CloseHandle`、channel session、event、
+thread 與 frame ring。Driver IOCTL code、request layout 及所有
+`DeviceIoControl` 呼叫集中在內部 `giga_ioctl.dll`；GVFG 僅呼叫其具名 C API，
+失敗時沿用 `GetLastError()`。`giga_ioctl.h` 是內部相依，不屬於客戶公開 API。
+
 本文件只供 GVFG SDK、driver、FPGA 與內部診斷工具維護者使用。客戶行為與公開
 契約請以 `GVFG_CUSTOMER_API.md`、`GVFG_CUSTOMER_API_REFERENCE.md` 和
 `gvfg_capture.h` 為準。本文件中的 IOCTL、
@@ -127,11 +134,11 @@ x64 `gvfg_frame_t` ABI 已在 `gvfg_capture.cpp` 以 static assertions 固定為
 
 目前 SDK 只支援新版 PCIE S2MM driver，必要 private ABI 包含：
 
-- `IOCTL_GIGA_VIDEO_START` (`0x808`) / `IOCTL_GIGA_VIDEO_STOP` (`0x809`)。
-- `IOCTL_GIGA_RELEASE_VIDEO_FRAME` (`0x80A`)。
-- `IOCTL_GIGA_ACQUIRE_VIDEO_FRAME_ZEROCOPY` (`0x80B`)。
-- `IOCTL_GIGA_ENABLE_FRAME_ZEROCOPY` (`0x80C`) /
-  `IOCTL_GIGA_DISABLE_FRAME_ZEROCOPY` (`0x80D`)。
+- `IOCTL_GIGA_VIDEO_START` (`0x830`) / `IOCTL_GIGA_VIDEO_STOP` (`0x831`)。
+- `IOCTL_GIGA_RELEASE_VIDEO_FRAME` (`0x832`)。
+- `IOCTL_GIGA_ACQUIRE_VIDEO_FRAME_ZEROCOPY` (`0x833`)。
+- `IOCTL_GIGA_ENABLE_FRAME_ZEROCOPY` (`0x834`) /
+  `IOCTL_GIGA_DISABLE_FRAME_ZEROCOPY` (`0x835`)。
 - Copy mode 的 `IOCTL_PCIES2MM_GET_FRAME` 接受 `frameIndex=0xFFFFFFFF`。
 
 不再呼叫 `GET_VIDEO_DONE_INDEX`，也不再 fallback 直接寫入 video enable、DMA enable
@@ -156,6 +163,14 @@ Backend event 映射：
 | `PCIES2MM_EVENT_STREAM_READY` | `GVFG_EVENT_STREAM_READY` |
 | `PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN` | `GVFG_EVENT_FORMAT_CHANGE_BEGIN` |
 
+每個 channel 的 public event mask 在 open 前設定。Video DMA event 永遠註冊；
+format-change、plug-in、unplug driver event 依 mask 選擇性註冊。關閉 driver event
+同時代表 backend 不執行該事件所驅動的自動 recovery。
+
+Register read 必須排除純 write-only 位址：global `0x080`，以及每個 video/audio
+channel 的 descriptor-write pulse 與 DMA soft-reset register。Interrupt
+`0x000/0x004/0x008` 是 read-status/write-control 雙語意位址，讀取其 RO status 合法。
+
 Facade queue 上限為 64；滿時丟棄最舊事件。`pollEvent()` 只允許 running 狀態，支援
 non-blocking、有限 timeout 與 infinite wait；stop 透過 `eventCv` 喚醒 waiter。
 
@@ -167,16 +182,16 @@ non-blocking、有限 timeout 與 infinite wait；stop 透過 `eventCv` 喚醒 w
 
 `gvfg_debug.h` 僅供內部工具，包含：
 
-- `gvfg_debug_get_backend_stats()`：facade/backend state、frame/drop/DMA/IRQ/timeout、
+- `gvfg_debug_get_channel_backend_stats()`：指定 channel 的 facade/backend state、frame/drop/DMA/IRQ/timeout、
   queue/ring/sequence counters。
-- `gvfg_debug_get_last_error_detail()`：複製 UTF-8 backend 詳細錯誤。
+- `gvfg_debug_get_channel_last_error_detail()`：複製指定 channel 的 UTF-8 backend 詳細錯誤。
 - `gvfg_debug_read_register()`：讀取 4-byte aligned BAR-relative register。
 - `gvfg_debug_write_register()`：寫入 register。
 
 Register write 可能中斷 DMA、interrupt 或 capture。工具必須確認裝置、offset 與當前
 stream 狀態，且不得將 register API 包裝成客戶功能。
 
-客戶診斷只應使用 `gvfg_get_signal_status()`、`gvfg_get_runtime_info()`、event 與
+客戶診斷只應使用 `gvfg_get_channel_signal_status()`、`gvfg_get_channel_runtime_info()`、event 與
 `gvfg_strerror()`。
 
 ## 8. GPU conversion
@@ -204,7 +219,7 @@ internal debug header，但客戶 sample/package 不應包含 internal diagnosti
 
 ## 10. 已知限制與發佈檢查表
 
-目前設計限制：Windows only、每 handle 單一 channel、每 handle 最多一個 held
+目前設計限制：Windows only、每 handle 可開同一 device 的兩個 channel、每 channel 最多一個 held
 frame、原生格式限 YUY2/Y210、event queue 非持久化且可能淘汰最舊事件。
 
 每次發佈前確認：

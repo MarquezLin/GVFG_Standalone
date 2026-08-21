@@ -4,6 +4,7 @@
 #include "pcies2mm_capture_session.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <climits>
@@ -26,6 +27,12 @@ using namespace gvfg::internal;
 
 namespace
 {
+    static_assert(GVFG_EVENT_MASK_SIGNAL_CONNECTED == PCIES2MM_EVENT_MASK_PLUG_IN);
+    static_assert(GVFG_EVENT_MASK_SIGNAL_DISCONNECTED == PCIES2MM_EVENT_MASK_PLUG_OUT);
+    static_assert(GVFG_EVENT_MASK_STREAM_READY == PCIES2MM_EVENT_MASK_STREAM_READY);
+    static_assert(GVFG_EVENT_MASK_FORMAT_CHANGE_BEGIN == PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN);
+    static_assert(GVFG_EVENT_MASK_FRAME_LOSS == PCIES2MM_EVENT_MASK_FRAME_LOSS);
+
 #if INTPTR_MAX == INT64_MAX
     static_assert(std::is_standard_layout_v<gvfg_frame_t>);
     static_assert(sizeof(gvfg_frame_t) == 48, "gvfg_frame_t x64 ABI must remain frozen");
@@ -194,21 +201,26 @@ namespace
 
 }
 
-struct gvfg_handle_t
+struct gvfg_channel_session_t
 {
-    ~gvfg_handle_t()
+    ~gvfg_channel_session_t()
     {
         close();
     }
 
-    gvfg_status_t open(int index, int channelIndex = GVFG_CHANNEL_0)
+    gvfg_status_t open(int index,
+                       int channelIndex = GVFG_CHANNEL_0,
+                       gvfg::internal::PcieS2mmCaptureSession *sharedDeviceSource = nullptr)
     {
         if (index < 0 || (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1))
             return GVFG_EINVAL;
         close();
 
         backend = std::make_unique<gvfg::internal::PcieS2mmCaptureSession>();
-        const pcies2mm_status_t stOpen = backend->open_device_index(static_cast<size_t>(index));
+        const pcies2mm_status_t stOpen = sharedDeviceSource
+                                             ? backend->open_shared_device(*sharedDeviceSource,
+                                                                           static_cast<uint32_t>(channelIndex))
+                                             : backend->open_device_index(static_cast<size_t>(index));
         if (stOpen != PCIES2MM_OK)
         {
             recordError(pcies2mm_error_text(stOpen, backend.get()));
@@ -350,14 +362,14 @@ struct gvfg_handle_t
     {
         if (!backend)
             return;
-        backend->set_event_callback(&gvfg_handle_t::onBackendEvent,
+        backend->set_event_callback(&gvfg_channel_session_t::onBackendEvent,
                                     this,
-                                    PCIES2MM_EVENT_MASK_DEFAULT);
+                                    eventMask);
     }
 
     static void onBackendEvent(pcies2mm_event_type_t event, void *user)
     {
-        auto *self = static_cast<gvfg_handle_t *>(user);
+        auto *self = static_cast<gvfg_channel_session_t *>(user);
         if (!self)
             return;
         self->emitEvent(event);
@@ -671,6 +683,11 @@ struct gvfg_handle_t
             out.backend_active_delivery_slot = debugState.active_delivery_slot;
             out.backend_next_write_slot = debugState.next_write_slot;
             out.backend_ring_size = debugState.ring_size;
+            out.get_frame_zero_copy = debugState.get_frame_zero_copy;
+            out.get_frame_timing_samples = debugState.get_frame_timing_samples;
+            out.get_frame_timing_average_us = debugState.get_frame_timing_average_us;
+            out.get_frame_timing_max300_us = debugState.get_frame_timing_max300_us;
+            out.get_frame_timing_max_us = debugState.get_frame_timing_max_us;
         }
 
         return GVFG_OK;
@@ -774,6 +791,7 @@ struct gvfg_handle_t
     int currentIndex = -1;
     uint32_t selectedChannel = GVFG_CHANNEL_0;
     bool zeroCopyRequested = false;
+    uint32_t eventMask = GVFG_EVENT_MASK_ALL;
 
     uint32_t width = 0;
     uint32_t height = 0;
@@ -802,6 +820,103 @@ struct gvfg_handle_t
     std::deque<gvfg_event_t> eventQueue;
 };
 
+struct gvfg_handle_t
+{
+    gvfg_channel_session_t *findChannel(int channelIndex)
+    {
+        if (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1)
+            return nullptr;
+        return channels[static_cast<size_t>(channelIndex)].get();
+    }
+
+    gvfg_channel_session_t *firstOpenChannel()
+    {
+        if (channels[GVFG_CHANNEL_0])
+            return channels[GVFG_CHANNEL_0].get();
+        return channels[GVFG_CHANNEL_1].get();
+    }
+
+    gvfg_status_t openChannel(int index, int channelIndex)
+    {
+        if (index < 0 || (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1))
+            return GVFG_EINVAL;
+        if (currentIndex >= 0 && currentIndex != index)
+            return GVFG_ESTATE;
+
+        const size_t slot = static_cast<size_t>(channelIndex);
+        if (channels[slot])
+            return GVFG_OK;
+
+        auto channel = std::make_unique<gvfg_channel_session_t>();
+        channel->zeroCopyRequested = zeroCopyRequested;
+        channel->eventMask = eventMasks[slot];
+
+        gvfg::internal::PcieS2mmCaptureSession *sharedSource = nullptr;
+        if (gvfg_channel_session_t *existing = firstOpenChannel())
+            sharedSource = existing->backend.get();
+
+        const gvfg_status_t status = channel->open(index, channelIndex, sharedSource);
+        if (status != GVFG_OK)
+            return status;
+
+        channels[slot] = std::move(channel);
+        currentIndex = index;
+        return GVFG_OK;
+    }
+
+    gvfg_status_t setZeroCopyEnabled(bool enabled)
+    {
+        if (firstOpenChannel())
+            return GVFG_ESTATE;
+        zeroCopyRequested = enabled;
+        return GVFG_OK;
+    }
+
+    gvfg_status_t setChannelEventMask(int channelIndex, uint32_t eventMask)
+    {
+        if (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1)
+            return GVFG_EINVAL;
+        if ((eventMask & ~static_cast<uint32_t>(GVFG_EVENT_MASK_ALL)) != 0)
+            return GVFG_EINVAL;
+        const size_t slot = static_cast<size_t>(channelIndex);
+        if (channels[slot])
+            return GVFG_ESTATE;
+        eventMasks[slot] = eventMask;
+        return GVFG_OK;
+    }
+
+    gvfg_status_t stopAll()
+    {
+        gvfg_status_t result = GVFG_OK;
+        for (const auto &channel : channels)
+        {
+            if (!channel)
+                continue;
+            const gvfg_status_t status = channel->stop();
+            if (result == GVFG_OK)
+                result = status;
+        }
+        return result;
+    }
+
+    gvfg_status_t debugReadRegister(uint32_t offset, uint32_t &outValue)
+    {
+        gvfg_channel_session_t *channel = firstOpenChannel();
+        return channel ? channel->debugReadRegister(offset, outValue) : GVFG_ESTATE;
+    }
+
+    gvfg_status_t debugWriteRegister(uint32_t offset, uint32_t value)
+    {
+        gvfg_channel_session_t *channel = firstOpenChannel();
+        return channel ? channel->debugWriteRegister(offset, value) : GVFG_ESTATE;
+    }
+
+    std::array<std::unique_ptr<gvfg_channel_session_t>, 2> channels;
+    std::array<uint32_t, 2> eventMasks{GVFG_EVENT_MASK_ALL, GVFG_EVENT_MASK_ALL};
+    int currentIndex = -1;
+    bool zeroCopyRequested = false;
+};
+
 extern "C"
 {
     int gvfg_enumerate_devices(gvfg_device_info_t *out_devices, int max_devices)
@@ -820,7 +935,6 @@ extern "C"
         for (int i = 0; i < written; ++i)
         {
             out_devices[i] = {};
-            out_devices[i].index = i;
             copy_cstr(out_devices[i].name, sizeof(out_devices[i].name),
                       "GVFG Capture");
             copy_wide_to_utf8(devices[static_cast<size_t>(i)].friendly_name,
@@ -852,7 +966,27 @@ extern "C"
     {
         if (!handle)
             return GVFG_EINVAL;
-        return handle->open(device_index, channel_index);
+        return handle->openChannel(device_index, channel_index);
+    }
+
+    gvfg_status_t gvfg_set_channel_event_mask(gvfg_handle handle,
+                                               int channel_index,
+                                               uint32_t event_mask)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        return handle->setChannelEventMask(channel_index, event_mask);
+    }
+
+    gvfg_status_t gvfg_get_channel_event_mask(gvfg_handle handle,
+                                               int channel_index,
+                                               uint32_t *out_event_mask)
+    {
+        if (!handle || !out_event_mask ||
+            (channel_index != GVFG_CHANNEL_0 && channel_index != GVFG_CHANNEL_1))
+            return GVFG_EINVAL;
+        *out_event_mask = handle->eventMasks[static_cast<size_t>(channel_index)];
+        return GVFG_OK;
     }
 
     gvfg_status_t gvfg_set_zero_copy_enabled(gvfg_handle handle, int enabled)
@@ -870,41 +1004,58 @@ extern "C"
         return GVFG_OK;
     }
 
-    gvfg_status_t gvfg_start(gvfg_handle handle)
+    gvfg_status_t gvfg_start_channel(gvfg_handle handle, int channel_index)
     {
         if (!handle)
             return GVFG_EINVAL;
-        return handle->start();
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->start() : GVFG_ESTATE;
     }
 
-    gvfg_status_t gvfg_set_video_format(gvfg_handle handle, gvfg_pixel_format_t format)
+    gvfg_status_t gvfg_set_channel_video_format(gvfg_handle handle,
+                                                 int channel_index,
+                                                 gvfg_pixel_format_t format)
     {
         if (!handle)
             return GVFG_EINVAL;
-        return handle->setVideoFormat(format);
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->setVideoFormat(format) : GVFG_ESTATE;
     }
 
-    gvfg_status_t gvfg_read_frame(gvfg_handle handle, gvfg_frame_t *out_frame, uint32_t timeout_ms)
+    gvfg_status_t gvfg_read_channel_frame(gvfg_handle handle,
+                                           int channel_index,
+                                           gvfg_frame_t *out_frame,
+                                           uint32_t timeout_ms)
     {
         if (!handle || !out_frame)
             return GVFG_EINVAL;
-        return handle->readFrame(*out_frame, timeout_ms);
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->readFrame(*out_frame, timeout_ms) : GVFG_ESTATE;
     }
 
-    gvfg_status_t gvfg_release_frame(gvfg_handle handle, const gvfg_frame_t *frame)
+    gvfg_status_t gvfg_release_channel_frame(gvfg_handle handle,
+                                              int channel_index,
+                                              const gvfg_frame_t *frame)
     {
         if (!handle || !frame)
             return GVFG_EINVAL;
-        return handle->releaseFrame(*frame);
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->releaseFrame(*frame) : GVFG_ESTATE;
     }
 
-    gvfg_status_t gvfg_poll_event(gvfg_handle handle, gvfg_event_t *out_event, uint32_t timeout_ms)
+    gvfg_status_t gvfg_poll_channel_event(gvfg_handle handle,
+                                           int channel_index,
+                                           gvfg_event_t *out_event,
+                                           uint32_t timeout_ms)
     {
         if (!handle || !out_event || out_event->struct_size < sizeof(gvfg_event_t))
             return GVFG_EINVAL;
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        if (!channel)
+            return GVFG_ESTATE;
         gvfg_event_t event{};
         event.struct_size = sizeof(event);
-        const gvfg_status_t status = handle->pollEvent(event, timeout_ms);
+        const gvfg_status_t status = channel->pollEvent(event, timeout_ms);
         if (status == GVFG_OK)
             *out_event = event;
         return status;
@@ -914,33 +1065,37 @@ extern "C"
     {
         if (!handle)
             return GVFG_EINVAL;
-        return handle->stop();
+        return handle->stopAll();
     }
 
-    gvfg_status_t gvfg_get_signal_status(gvfg_handle handle, gvfg_signal_status_t *out_status)
+    gvfg_status_t gvfg_stop_channel(gvfg_handle handle, int channel_index)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->stop() : GVFG_ESTATE;
+    }
+
+    gvfg_status_t gvfg_get_channel_signal_status(gvfg_handle handle,
+                                                  int channel_index,
+                                                  gvfg_signal_status_t *out_status)
     {
         if (!handle || !out_status)
             return GVFG_EINVAL;
-        gvfg_signal_status_t statusInfo{};
-        const gvfg_status_t status = handle->getSignalStatus(statusInfo);
-        if (status != GVFG_OK)
-            return status;
-
-        *out_status = statusInfo;
-        return GVFG_OK;
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        if (!channel)
+            return GVFG_ESTATE;
+        return channel->getSignalStatus(*out_status);
     }
 
-    gvfg_status_t gvfg_get_runtime_info(gvfg_handle handle, gvfg_runtime_info_t *out_info)
+    gvfg_status_t gvfg_get_channel_runtime_info(gvfg_handle handle,
+                                                 int channel_index,
+                                                 gvfg_runtime_info_t *out_info)
     {
         if (!handle || !out_info)
             return GVFG_EINVAL;
-        gvfg_runtime_info_t runtimeInfo{};
-        const gvfg_status_t status = handle->getRuntimeInfo(runtimeInfo);
-        if (status != GVFG_OK)
-            return status;
-
-        *out_info = runtimeInfo;
-        return GVFG_OK;
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->getRuntimeInfo(*out_info) : GVFG_ESTATE;
     }
 
     const char *gvfg_get_version(void)
@@ -976,23 +1131,29 @@ extern "C"
         }
     }
 
-    gvfg_status_t gvfg_get_last_error_detail(gvfg_handle handle,
-                                             char *out_message,
-                                             uint32_t out_message_size)
+    gvfg_status_t gvfg_get_channel_last_error_detail(gvfg_handle handle,
+                                                     int channel_index,
+                                                     char *out_message,
+                                                     uint32_t out_message_size)
     {
         if (!handle)
             return GVFG_EINVAL;
-        return handle->getLastErrorDetail(out_message, out_message_size);
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->getLastErrorDetail(out_message, out_message_size) : GVFG_ESTATE;
     }
 
-    gvfg_status_t gvfg_debug_get_backend_stats(gvfg_handle handle,
-                                               gvfg_debug_backend_stats_t *out_stats)
+    gvfg_status_t gvfg_debug_get_channel_backend_stats(gvfg_handle handle,
+                                                       int channel_index,
+                                                       gvfg_debug_backend_stats_t *out_stats)
     {
         if (!handle || !out_stats)
             return GVFG_EINVAL;
 
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        if (!channel)
+            return GVFG_ESTATE;
         gvfg_debug_backend_stats_t stats{};
-        const gvfg_status_t status = handle->getDebugBackendStats(stats);
+        const gvfg_status_t status = channel->getDebugBackendStats(stats);
         if (status != GVFG_OK)
             return status;
 
@@ -1000,13 +1161,15 @@ extern "C"
         return GVFG_OK;
     }
 
-    gvfg_status_t gvfg_debug_get_last_error_detail(gvfg_handle handle,
-                                                   char *out_message,
-                                                   uint32_t out_message_size)
+    gvfg_status_t gvfg_debug_get_channel_last_error_detail(gvfg_handle handle,
+                                                           int channel_index,
+                                                           char *out_message,
+                                                           uint32_t out_message_size)
     {
         if (!handle)
             return GVFG_EINVAL;
-        return handle->getLastErrorDetail(out_message, out_message_size);
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->getLastErrorDetail(out_message, out_message_size) : GVFG_ESTATE;
     }
 
     gvfg_status_t gvfg_debug_read_register(gvfg_handle handle,

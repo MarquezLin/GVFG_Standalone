@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -26,6 +27,8 @@ namespace gvfg::internal
         ~PcieS2mmCaptureSession();
 
         pcies2mm_status_t open_device_index(size_t deviceIndex);
+        pcies2mm_status_t open_shared_device(const PcieS2mmCaptureSession &source,
+                                             uint32_t channel);
         pcies2mm_status_t close();
 
         pcies2mm_status_t set_channel(uint32_t channel);
@@ -49,6 +52,12 @@ namespace gvfg::internal
         pcies2mm_status_t debug_write_register(uint32_t offset, uint32_t value) const;
 
     private:
+        struct SharedDevice
+        {
+            HANDLE handle = INVALID_HANDLE_VALUE;
+            ~SharedDevice();
+        };
+
         pcies2mm_status_t open_device(const PcieS2mmDevice &device);
         void close_handles();
 
@@ -103,6 +112,7 @@ namespace gvfg::internal
         std::wstring friendly_name_;
 
         HANDLE device_ = INVALID_HANDLE_VALUE;
+        std::shared_ptr<SharedDevice> shared_device_;
         HANDLE dma_event_ = nullptr;
         HANDLE format_change_event_ = nullptr;
         HANDLE plug_in_event_ = nullptr;
@@ -141,6 +151,12 @@ namespace gvfg::internal
         uint64_t latest_sequence_ = 0;
         uint64_t delivered_sequence_ = 0;
         uint64_t wait_timeout_count_ = 0;
+        uint64_t get_frame_timing_samples_ = 0;
+        uint32_t get_frame_timing_window_samples_ = 0;
+        double get_frame_timing_total_us_ = 0.0;
+        double get_frame_timing_window_max_us_ = 0.0;
+        double get_frame_timing_last_max300_us_ = 0.0;
+        double get_frame_timing_lifetime_max_us_ = 0.0;
         std::chrono::steady_clock::time_point active_delivery_started_{};
         std::chrono::steady_clock::time_point last_delivery_started_{};
         bool stream_error_ = false;

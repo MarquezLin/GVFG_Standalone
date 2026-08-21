@@ -16,17 +16,17 @@
  *   gvfg_handle h = NULL;
  *   if (gvfg_create(&h) != GVFG_OK)
  *       return;
- *   if (gvfg_open_channel(h, devices[0].index, GVFG_CHANNEL_0) != GVFG_OK ||
- *       gvfg_start(h) != GVFG_OK) {
+ *   if (gvfg_open_channel(h, 0, GVFG_CHANNEL_0) != GVFG_OK ||
+ *       gvfg_start_channel(h, GVFG_CHANNEL_0) != GVFG_OK) {
  *       gvfg_destroy(h);
  *       return;
  *   }
  *
  *   while (running) {
  *       gvfg_frame_t frame = {};
- *       if (gvfg_read_frame(h, &frame, 1000) == GVFG_OK) {
+ *       if (gvfg_read_channel_frame(h, GVFG_CHANNEL_0, &frame, 1000) == GVFG_OK) {
  *           // Use frame.data before releasing the frame.
- *           gvfg_release_frame(h, &frame);
+ *           gvfg_release_channel_frame(h, GVFG_CHANNEL_0, &frame);
  *       }
  *   }
  *
@@ -34,11 +34,11 @@
  *   gvfg_destroy(h);
  *
  * Threading notes:
- * - The main frame API is pull-based: applications call gvfg_read_frame() from
+ * - The frame API is pull-based: applications call gvfg_read_channel_frame() from
  *   the thread they choose.
- * - The frame data pointer remains valid until gvfg_release_frame() is called.
+ * - The frame data pointer remains valid until gvfg_release_channel_frame() is called.
  *   Copy the data if it must outlive that call.
- * - At most one frame may be held by a handle at a time.
+ * - At most one frame may be held by each channel at a time.
  */
 
 #ifdef _WIN32
@@ -111,7 +111,6 @@ extern "C"
 
     typedef struct
     {
-        int index;      /* Device index to pass to gvfg_open_channel(). */
         char name[128]; /* Display name for UI/logging. UTF-8, null-terminated. */
     } gvfg_device_info_t;
 
@@ -127,22 +126,22 @@ extern "C"
 
     typedef struct
     {
-        double capture_fps;        /* Runtime FPS measured from frames returned by gvfg_read_frame(). */
-        uint64_t delivered_frames; /* Number of frames returned by gvfg_read_frame(). */
+        double capture_fps;        /* Runtime FPS measured from frames returned by gvfg_read_channel_frame(). */
+        uint64_t delivered_frames; /* Number of frames returned by gvfg_read_channel_frame(). */
         /* Frames known by the SDK to have been lost before application delivery. */
         uint64_t lost_frames;
     } gvfg_runtime_info_t;
 
     typedef struct
     {
-        const void *data;     /* Native frame buffer. Valid until gvfg_release_frame() is called. */
+        const void *data;     /* Native frame buffer. Valid until gvfg_release_channel_frame() is called. */
         uint64_t data_size;   /* Total bytes available from data. */
         int width;            /* Frame width in pixels. */
         int height;           /* Frame height in pixels. */
         int row_stride_bytes; /* Byte distance between the starts of adjacent rows. */
         int pixel_format;     /* gvfg_pixel_format_t value. */
         int bit_depth;        /* Bits per color channel of the native frame. */
-        uint64_t frame_id;    /* Monotonic identifier within the current gvfg_start()/stop() run. */
+        uint64_t frame_id;    /* Monotonic identifier within the current channel start/stop run. */
     } gvfg_frame_t;
 
     /* Formats produced by gvfg_gpu_convert_to_buffer(). */
@@ -177,9 +176,20 @@ extern "C"
         GVFG_EVENT_FRAME_LOSS = 5
     } gvfg_event_type_t;
 
+    typedef enum
+    {
+        GVFG_EVENT_MASK_NONE = 0,
+        GVFG_EVENT_MASK_SIGNAL_CONNECTED = 1u << 0,
+        GVFG_EVENT_MASK_SIGNAL_DISCONNECTED = 1u << 1,
+        GVFG_EVENT_MASK_STREAM_READY = 1u << 2,
+        GVFG_EVENT_MASK_FORMAT_CHANGE_BEGIN = 1u << 3,
+        GVFG_EVENT_MASK_FRAME_LOSS = 1u << 4,
+        GVFG_EVENT_MASK_ALL = (1u << 5) - 1u
+    } gvfg_event_mask_t;
+
     typedef struct
     {
-        /* Set to sizeof(gvfg_event_t) before calling gvfg_poll_event(). */
+        /* Set to sizeof(gvfg_event_t) before calling gvfg_poll_channel_event(). */
         uint32_t struct_size;
         int32_t type;   /* gvfg_event_type_t value. */
         uint64_t count; /* Loss count for GVFG_EVENT_FRAME_LOSS; otherwise zero. */
@@ -244,7 +254,7 @@ extern "C"
      *
      * Parameters:
      * - handle: Session handle returned by gvfg_create().
-     * - device_index: Device index from gvfg_device_info_t::index.
+     * - device_index: Zero-based position returned by gvfg_enumerate_devices().
      * - channel_index: GVFG_CHANNEL_0 or GVFG_CHANNEL_1.
      *
      * Returns:
@@ -259,12 +269,34 @@ extern "C"
         _In_ int channel_index);
 
     /*
+     * Select events for one channel before gvfg_open_channel(). VIDEO_DMA is
+     * always registered because frame capture requires it. Disabling plug,
+     * unplug, or format-change events also disables the corresponding automatic
+     * signal/format recovery path.
+     */
+    GVFG_API gvfg_status_t gvfg_set_channel_event_mask(
+        _In_ gvfg_handle handle,
+        _In_ int channel_index,
+        _In_ uint32_t event_mask);
+
+    GVFG_API gvfg_status_t gvfg_get_channel_event_mask(
+        _In_ gvfg_handle handle,
+        _In_ int channel_index,
+        _Out_ uint32_t *out_event_mask);
+
+    /*
+     * A handle may open both channels of the same device. The first call opens
+     * the Windows device; the second channel shares that device connection and
+     * owns independent capture, event, frame-ring, and zero-copy state.
+     */
+
+    /*
      * Select driver zero-copy frame delivery.
      *
      * Call after gvfg_create() and before gvfg_open_channel(). The default is
      * disabled. Once a device is open the mode cannot be changed. In zero-copy
-     * mode, gvfg_read_frame() returns driver-owned memory and every successful
-     * read must be paired with gvfg_release_frame().
+     * mode, gvfg_read_channel_frame() returns driver-owned memory and every
+     * successful read must be paired with gvfg_release_channel_frame().
      */
     GVFG_API gvfg_status_t gvfg_set_zero_copy_enabled(
         _In_ gvfg_handle handle,
@@ -276,14 +308,15 @@ extern "C"
 
     /*
      * Select the native capture format. Call after opening the device and
-     * before gvfg_start(), or after gvfg_stop(). A running stream rejects the
+     * before gvfg_start_channel(), or after gvfg_stop_channel(). A running stream rejects the
      * change with GVFG_ESTATE.
      *
      * Currently the SDK implements this through a temporary hardware register;
      * applications must use this API so the backend can move to an IOCTL later.
      */
-    GVFG_API gvfg_status_t gvfg_set_video_format(
+    GVFG_API gvfg_status_t gvfg_set_channel_video_format(
         _In_ gvfg_handle handle,
+        _In_ int channel_index,
         _In_ gvfg_pixel_format_t format);
 
     /*
@@ -299,12 +332,14 @@ extern "C"
      * - GVFG_ESTATE if no device is open.
      * - GVFG_EIO or another status code if stream configuration/start fails.
      *
-     * After success, call gvfg_read_frame() to receive frames and gvfg_poll_event()
+     * After success, call gvfg_read_channel_frame() to receive frames and
+     * gvfg_poll_channel_event()
      * to receive capture events. With no input signal, frame reads time out; capture
      * starts automatically after a signal-connected event.
      */
-    GVFG_API gvfg_status_t gvfg_start(
-        _In_ gvfg_handle handle);
+    GVFG_API gvfg_status_t gvfg_start_channel(
+        _In_ gvfg_handle handle,
+        _In_ int channel_index);
 
     /*
      * Read one captured frame.
@@ -325,19 +360,21 @@ extern "C"
      *
      * In copy mode the returned data pointer is owned by the SDK. In zero-copy
      * mode it points to driver-owned memory. In both modes it remains valid
-     * until gvfg_release_frame() is called, and a handle may hold only one frame.
+     * until gvfg_release_channel_frame() is called, and each channel may hold
+     * only one frame.
      */
-    GVFG_API gvfg_status_t gvfg_read_frame(
+    GVFG_API gvfg_status_t gvfg_read_channel_frame(
         _In_ gvfg_handle handle,
+        _In_ int channel_index,
         _Out_ gvfg_frame_t *out_frame,
         _In_ uint32_t timeout_ms);
 
     /*
-     * Release a frame returned by gvfg_read_frame().
+     * Release a frame returned by gvfg_read_channel_frame().
      *
      * Parameters:
      * - handle: Running capture session.
-     * - frame: Frame previously returned by gvfg_read_frame(). The SDK currently
+     * - frame: Frame previously returned by gvfg_read_channel_frame(). The SDK currently
      *   uses this as a lifetime token; pass the same descriptor back.
      *
      * Returns:
@@ -345,8 +382,9 @@ extern "C"
      * - GVFG_EINVAL if handle or frame is NULL.
      * - GVFG_ESTATE if no frame is currently held.
      */
-    GVFG_API gvfg_status_t gvfg_release_frame(
+    GVFG_API gvfg_status_t gvfg_release_channel_frame(
         _In_ gvfg_handle handle,
+        _In_ int channel_index,
         _In_ const gvfg_frame_t *frame);
 
     /*
@@ -355,8 +393,8 @@ extern "C"
      *
      * This call is synchronous. The source frame and destination buffer must
      * remain valid until it returns; the SDK retains neither pointer. A frame
-     * returned by gvfg_read_frame() must therefore be converted before
-     * gvfg_release_frame().
+     * returned by gvfg_read_channel_frame() must therefore be converted before
+     * gvfg_release_channel_frame().
      *
      * BGRA8 and RGB10A2 require at least width * 4 bytes per row and
      * output->data_size >= output->row_bytes * height.
@@ -415,8 +453,9 @@ extern "C"
      * - GVFG_ESTATE if no capture device is open or capture has been stopped.
      * - GVFG_ETIMEOUT if no event is available before timeout_ms expires.
      */
-    GVFG_API gvfg_status_t gvfg_poll_event(
+    GVFG_API gvfg_status_t gvfg_poll_channel_event(
         _In_ gvfg_handle handle,
+        _In_ int channel_index,
         _Inout_ gvfg_event_t *out_event,
         _In_ uint32_t timeout_ms);
 
@@ -431,10 +470,15 @@ extern "C"
      * - GVFG_EINVAL if handle is NULL.
      *
      * This stops DMA capture and signal/format event monitoring, invalidates
-     * any unreleased frame, and wakes blocking gvfg_poll_event() calls.
+     * any unreleased frames, and wakes blocking gvfg_poll_channel_event() calls.
      */
     GVFG_API gvfg_status_t gvfg_stop(
         _In_ gvfg_handle handle);
+
+    /* gvfg_stop() stops every opened channel; this function stops only one. */
+    GVFG_API gvfg_status_t gvfg_stop_channel(
+        _In_ gvfg_handle handle,
+        _In_ int channel_index);
 
     /*
      * Query current signal information and delivered buffer format.
@@ -451,8 +495,9 @@ extern "C"
      * No input signal is a normal state: the function returns GVFG_OK with
      * out_status->connected set to 0.
      */
-    GVFG_API gvfg_status_t gvfg_get_signal_status(
+    GVFG_API gvfg_status_t gvfg_get_channel_signal_status(
         _In_ gvfg_handle handle,
+        _In_ int channel_index,
         _Out_ gvfg_signal_status_t *out_status);
 
     /*
@@ -468,10 +513,11 @@ extern "C"
      *
      * The result includes SDK-measured capture FPS and the number of frames
      * delivered by the SDK. Query current input signal metadata separately with
-     * gvfg_get_signal_status().
+     * gvfg_get_channel_signal_status().
      */
-    GVFG_API gvfg_status_t gvfg_get_runtime_info(
+    GVFG_API gvfg_status_t gvfg_get_channel_runtime_info(
         _In_ gvfg_handle handle,
+        _In_ int channel_index,
         _Out_ gvfg_runtime_info_t *out_info);
 
     /* Return the loaded GVFG runtime DLL version, for example "0.1.0". */
@@ -494,8 +540,9 @@ extern "C"
         _In_ gvfg_status_t status);
 
     /* Copy the most recent detailed error for this handle. */
-    GVFG_API gvfg_status_t gvfg_get_last_error_detail(
+    GVFG_API gvfg_status_t gvfg_get_channel_last_error_detail(
         _In_ gvfg_handle handle,
+        _In_ int channel_index,
         _Out_ char *out_message,
         _In_ uint32_t out_message_size);
 

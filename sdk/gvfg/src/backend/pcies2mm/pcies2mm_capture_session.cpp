@@ -1,5 +1,5 @@
 #include "pcies2mm_capture_session.h"
-#include "pcies2mm_ioctl.h"
+#include "giga_ioctl.h"
 #include "pcies2mm_reg.h"
 #include "pcies2mm_video_format.h"
 
@@ -18,6 +18,26 @@ namespace
     constexpr uint32_t kDefaultHeight = 1080;
     constexpr uint32_t kDefaultRingBufferCount = 3;
     constexpr uint32_t kMaxRingBufferCount = 16;
+
+    static bool is_write_only_register(uint32_t offset)
+    {
+        if (offset == VIDEO_OUTPUT_FORMAT_REGISTER)
+            return true;
+
+        for (uint32_t channel = 0; channel < kMaxChannels; ++channel)
+        {
+            const uint32_t videoBase = CH_VIDEO_BASE(channel);
+            if (offset == videoBase + VIDEO_DMA_DESC_WR_OFFSET ||
+                offset == videoBase + VIDEO_DMA_SOFT_RESET_OFFSET)
+                return true;
+
+            const uint32_t audioBase = CH_AUDIO_BASE(channel);
+            if (offset == audioBase + AUDIO_DMA_DESC_WR_OFFSET ||
+                offset == audioBase + AUDIO_DMA_SOFT_RESET_OFFSET)
+                return true;
+        }
+        return false;
+    }
 
     static bool should_log_counter(uint64_t count)
     {
@@ -122,6 +142,12 @@ namespace
 
 namespace gvfg::internal
 {
+    PcieS2mmCaptureSession::SharedDevice::~SharedDevice()
+    {
+        if (handle != INVALID_HANDLE_VALUE)
+            CloseHandle(handle);
+    }
+
     PcieS2mmCaptureSession::PcieS2mmCaptureSession()
     {
         stream_desc_.width = kDefaultWidth;
@@ -151,19 +177,22 @@ namespace gvfg::internal
         base_path_ = device.interface_path;
         friendly_name_ = device.friendly_name.empty() ? L"PcieS2mm Capture Device" : device.friendly_name;
 
-        device_ = CreateFileW(base_path_.c_str(),
-                              GENERIC_READ | GENERIC_WRITE,
-                              FILE_SHARE_READ | FILE_SHARE_WRITE,
-                              nullptr,
-                              OPEN_EXISTING,
-                              FILE_ATTRIBUTE_NORMAL,
-                              nullptr);
-        if (device_ == INVALID_HANDLE_VALUE)
+        auto sharedDevice = std::make_shared<SharedDevice>();
+        sharedDevice->handle = CreateFileW(base_path_.c_str(),
+                                           GENERIC_READ | GENERIC_WRITE,
+                                           FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                           nullptr,
+                                           OPEN_EXISTING,
+                                           FILE_ATTRIBUTE_NORMAL,
+                                           nullptr);
+        if (sharedDevice->handle == INVALID_HANDLE_VALUE)
         {
             const DWORD err = GetLastError();
             close_handles();
             return fail(PCIES2MM_EIO, "CreateFile(PcieS2mm)", err);
         }
+        shared_device_ = std::move(sharedDevice);
+        device_ = shared_device_->handle;
 
         opened_ = true;
         configured_ = false;
@@ -173,6 +202,31 @@ namespace gvfg::internal
         signal_metadata_valid_ = false;
         clear_last_error();
         PCIES2MM_LOG("open_device: %s", wide_to_utf8(base_path_).c_str());
+        return PCIES2MM_OK;
+    }
+
+    pcies2mm_status_t PcieS2mmCaptureSession::open_shared_device(
+        const PcieS2mmCaptureSession &source,
+        uint32_t channel)
+    {
+        if (channel >= kMaxChannels)
+            return PCIES2MM_EINVAL;
+        if (!source.opened_ || !source.shared_device_ ||
+            source.shared_device_->handle == INVALID_HANDLE_VALUE)
+            return PCIES2MM_ESTATE;
+
+        close();
+        shared_device_ = source.shared_device_;
+        device_ = shared_device_->handle;
+        base_path_ = source.base_path_;
+        friendly_name_ = source.friendly_name_;
+        opened_ = true;
+        configured_ = false;
+        signal_presence_known_.store(false, std::memory_order_release);
+        signal_present_.store(false, std::memory_order_release);
+        signal_probe_active_.store(false, std::memory_order_release);
+        signal_metadata_valid_ = false;
+        clear_last_error();
         return PCIES2MM_OK;
     }
 
@@ -203,11 +257,8 @@ namespace gvfg::internal
     void PcieS2mmCaptureSession::close_handles()
     {
         close_event_handles();
-        if (device_ != INVALID_HANDLE_VALUE)
-        {
-            CloseHandle(device_);
-            device_ = INVALID_HANDLE_VALUE;
-        }
+        device_ = INVALID_HANDLE_VALUE;
+        shared_device_.reset();
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::set_channel(uint32_t channel)
@@ -246,12 +297,7 @@ namespace gvfg::internal
                 return releaseStatus;
         }
 
-        ULONG channel = active_channel();
-        DWORD bytesReturned = 0;
-        const DWORD ioctl = enabled ? IOCTL_GIGA_ENABLE_FRAME_ZEROCOPY
-                                    : IOCTL_GIGA_DISABLE_FRAME_ZEROCOPY;
-        if (!DeviceIoControl(device_, ioctl, &channel, sizeof(channel), nullptr, 0,
-                             &bytesReturned, nullptr))
+        if (!giga_ioctl_set_frame_zerocopy(device_, active_channel(), enabled ? TRUE : FALSE))
             return fail(PCIES2MM_EIO, enabled ? "enable zero copy" : "disable zero copy");
         zero_copy_enabled_ = enabled;
         return PCIES2MM_OK;
@@ -341,7 +387,7 @@ namespace gvfg::internal
         std::lock_guard<std::mutex> lock(event_callback_mutex_);
         event_callback_ = callback;
         event_callback_user_ = user;
-        event_mask_filter_ = eventMask ? eventMask : PCIES2MM_EVENT_MASK_DEFAULT;
+        event_mask_filter_ = eventMask;
         return PCIES2MM_OK;
     }
 
@@ -407,6 +453,12 @@ namespace gvfg::internal
             latest_sequence_ = 0;
             delivered_sequence_ = 0;
             wait_timeout_count_ = 0;
+            get_frame_timing_samples_ = 0;
+            get_frame_timing_window_samples_ = 0;
+            get_frame_timing_total_us_ = 0.0;
+            get_frame_timing_window_max_us_ = 0.0;
+            get_frame_timing_last_max300_us_ = 0.0;
+            get_frame_timing_lifetime_max_us_ = 0.0;
             stream_error_ = false;
             reset_stats(stats_, PCIES2MM_STREAM_CONFIGURED);
         }
@@ -417,12 +469,16 @@ namespace gvfg::internal
         // another stream.
         if (!monitoring_.load(std::memory_order_acquire) && !start_event_monitoring())
             return fail(PCIES2MM_EIO, "start event monitoring");
-        // Events are edge-triggered, so a source connected before registration
-        // may not produce a plug-in event. Probe DMA using the register layout,
-        // but do not report connected until a full frame is received.
+        // configureStream() immediately preceded this call and already read
+        // and validated the signal descriptor. Reuse it for the initial DMA
+        // probe instead of reading width/height/format a second time.
+        const bool probeAvailable = signal_presence_known_.load(std::memory_order_acquire) &&
+                                    signal_present_.load(std::memory_order_acquire) &&
+                                    stream_desc_.width > 0 &&
+                                    stream_desc_.height > 0 &&
+                                    stream_desc_.pixel_format != PCIES2MM_PIXFMT_UNKNOWN;
         signal_presence_known_.store(false, std::memory_order_release);
         signal_present_.store(false, std::memory_order_release);
-        const bool probeAvailable = refresh_stream_from_registers(true);
 
         running_ = true;
         capture_active_ = false;
@@ -490,7 +546,13 @@ namespace gvfg::internal
             const bool presenceKnown = signal_presence_known_.load(std::memory_order_acquire);
             const bool signalPresent = signal_present_.load(std::memory_order_acquire);
             probingSignal = !presenceKnown;
-            if (!presenceKnown || signalPresent)
+            // start_stream() already refreshed width/height/format before it
+            // armed the initial signal probe. Reuse that validated descriptor
+            // for the first read instead of issuing the same three register
+            // reads again immediately.
+            if (!presenceKnown && signal_probe_active_.load(std::memory_order_acquire))
+                descriptorReady = true;
+            else if (!presenceKnown || signalPresent)
                 descriptorReady = refresh_stream_from_registers(true);
         }
 
@@ -654,25 +716,21 @@ namespace gvfg::internal
                                                 : static_cast<uint64_t>(active_delivery_slot_);
         outDebugState.next_write_slot = static_cast<uint64_t>(next_write_slot_);
         outDebugState.ring_size = static_cast<uint64_t>(frame_ring_.size());
+        outDebugState.get_frame_zero_copy = zero_copy_enabled_ ? 1 : 0;
+        outDebugState.get_frame_timing_samples = get_frame_timing_samples_;
+        outDebugState.get_frame_timing_average_us =
+            get_frame_timing_samples_ > 0
+                ? get_frame_timing_total_us_ / static_cast<double>(get_frame_timing_samples_)
+                : 0.0;
+        outDebugState.get_frame_timing_max300_us = get_frame_timing_last_max300_us_;
+        outDebugState.get_frame_timing_max_us = get_frame_timing_lifetime_max_us_;
     }
 
     bool PcieS2mmCaptureSession::read_reg(uint32_t offset, uint32_t &out) const
     {
-        PCIES2MM_REG_ACCESS reg{};
-        reg.Offset = offset;
-        DWORD bytesReturned = 0;
-        const BOOL ok = DeviceIoControl(device_,
-                                        IOCTL_PCIES2MM_READ_REG,
-                                        &reg,
-                                        sizeof(reg),
-                                        &reg,
-                                        sizeof(reg),
-                                        &bytesReturned,
-                                        nullptr);
-        if (!ok)
+        if (is_write_only_register(offset))
             return false;
-        out = reg.Value;
-        return true;
+        return giga_ioctl_read_register(device_, offset, &out) != FALSE;
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::debug_read_register(uint32_t offset,
@@ -680,70 +738,31 @@ namespace gvfg::internal
     {
         if (!opened_ || device_ == INVALID_HANDLE_VALUE)
             return PCIES2MM_ESTATE;
-        if ((offset & 0x3u) != 0)
+        if ((offset & 0x3u) != 0 || is_write_only_register(offset))
             return PCIES2MM_EINVAL;
         return read_reg(offset, outValue) ? PCIES2MM_OK : fail(PCIES2MM_EIO, "debug_read_register");
     }
 
     bool PcieS2mmCaptureSession::write_reg(uint32_t offset, uint32_t value) const
     {
-        PCIES2MM_REG_ACCESS reg{};
-        reg.Offset = offset;
-        reg.Value = value;
-        DWORD bytesReturned = 0;
-        return DeviceIoControl(device_,
-                               IOCTL_PCIES2MM_WRITE_REG,
-                               &reg,
-                               sizeof(reg),
-                               nullptr,
-                               0,
-                               &bytesReturned,
-                               nullptr) != FALSE;
+        return giga_ioctl_write_register(device_, offset, value) != FALSE;
     }
 
     bool PcieS2mmCaptureSession::start_video(uint32_t channelIndex) const
     {
-        ULONG channel = channelIndex;
-        DWORD bytesReturned = 0;
-        return DeviceIoControl(device_,
-                               IOCTL_GIGA_VIDEO_START,
-                               &channel,
-                               sizeof(channel),
-                               nullptr,
-                               0,
-                               &bytesReturned,
-                               nullptr) != FALSE;
+        return giga_ioctl_video_start(device_, channelIndex) != FALSE;
     }
 
     bool PcieS2mmCaptureSession::stop_video(uint32_t channelIndex) const
     {
-        ULONG channel = channelIndex;
-        DWORD bytesReturned = 0;
-        return DeviceIoControl(device_,
-                               IOCTL_GIGA_VIDEO_STOP,
-                               &channel,
-                               sizeof(channel),
-                               nullptr,
-                               0,
-                               &bytesReturned,
-                               nullptr) != FALSE;
+        return giga_ioctl_video_stop(device_, channelIndex) != FALSE;
     }
 
     bool PcieS2mmCaptureSession::acquire_zero_copy_frame(uint32_t channelIndex,
                                                          const uint8_t *&outData) const
     {
-        ULONG input[2] = {channelIndex, (std::numeric_limits<ULONG>::max)()};
-        void *buffer = nullptr;
-        DWORD bytesReturned = 0;
-        const BOOL ok = DeviceIoControl(device_,
-                                        IOCTL_GIGA_ACQUIRE_VIDEO_FRAME_ZEROCOPY,
-                                        input,
-                                        sizeof(input),
-                                        &buffer,
-                                        sizeof(buffer),
-                                        &bytesReturned,
-                                        nullptr);
-        if (!ok || !buffer)
+        const void *buffer = nullptr;
+        if (!giga_ioctl_acquire_video_frame_zerocopy(device_, channelIndex, &buffer))
             return false;
         outData = static_cast<const uint8_t *>(buffer);
         return true;
@@ -751,16 +770,7 @@ namespace gvfg::internal
 
     bool PcieS2mmCaptureSession::release_zero_copy_frame(uint32_t channelIndex) const
     {
-        ULONG channel = channelIndex;
-        DWORD bytesReturned = 0;
-        return DeviceIoControl(device_,
-                               IOCTL_GIGA_RELEASE_VIDEO_FRAME,
-                               &channel,
-                               sizeof(channel),
-                               nullptr,
-                               0,
-                               &bytesReturned,
-                               nullptr) != FALSE;
+        return giga_ioctl_release_video_frame(device_, channelIndex) != FALSE;
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::release_all_zero_copy_frames(bool includeInUse)
@@ -798,36 +808,12 @@ namespace gvfg::internal
 
     bool PcieS2mmCaptureSession::register_event(uint32_t channelIndex, uint32_t eventType, HANDLE eventHandle)
     {
-        PCIES2MM_EVENT_REG eventReg{};
-        eventReg.Type = eventType;
-        eventReg.ChannelIndex = channelIndex;
-        eventReg.EventHandle = eventHandle;
-        DWORD bytesReturned = 0;
-        return DeviceIoControl(device_,
-                               IOCTL_PCIES2MM_REGISTER_EVENT,
-                               &eventReg,
-                               sizeof(eventReg),
-                               nullptr,
-                               0,
-                               &bytesReturned,
-                               nullptr) != FALSE;
+        return giga_ioctl_register_event(device_, channelIndex, eventType, eventHandle) != FALSE;
     }
 
     void PcieS2mmCaptureSession::unregister_event(uint32_t channelIndex, uint32_t eventType)
     {
-        PCIES2MM_EVENT_REG eventReg{};
-        eventReg.Type = eventType;
-        eventReg.ChannelIndex = channelIndex;
-        eventReg.EventHandle = nullptr;
-        DWORD bytesReturned = 0;
-        DeviceIoControl(device_,
-                        IOCTL_PCIES2MM_UNREGISTER_EVENT,
-                        &eventReg,
-                        sizeof(eventReg),
-                        nullptr,
-                        0,
-                        &bytesReturned,
-                        nullptr);
+        giga_ioctl_unregister_event(device_, channelIndex, eventType);
     }
 
     bool PcieS2mmCaptureSession::create_and_register_events(uint32_t channelIndex)
@@ -839,23 +825,29 @@ namespace gvfg::internal
         if (!dma_event_ || !format_change_event_ || !plug_in_event_ || !plug_out_event_)
             return false;
 
-        if (!register_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_DMA, dma_event_))
+        if (!register_event(channelIndex, GIGA_IOCTL_EVENT_VIDEO_DMA, dma_event_))
             return false;
-        if (!register_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_FORMAT_CHANGE, format_change_event_))
+        if ((event_mask_filter_ & PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN) != 0 &&
+            !register_event(channelIndex, GIGA_IOCTL_EVENT_VIDEO_FORMAT_CHANGE, format_change_event_))
             return false;
-        if (!register_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_PLUGIN, plug_in_event_))
+        if ((event_mask_filter_ & PCIES2MM_EVENT_MASK_PLUG_IN) != 0 &&
+            !register_event(channelIndex, GIGA_IOCTL_EVENT_VIDEO_PLUGIN, plug_in_event_))
             return false;
-        if (!register_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_UNPLUG, plug_out_event_))
+        if ((event_mask_filter_ & PCIES2MM_EVENT_MASK_PLUG_OUT) != 0 &&
+            !register_event(channelIndex, GIGA_IOCTL_EVENT_VIDEO_UNPLUG, plug_out_event_))
             return false;
         return true;
     }
 
     void PcieS2mmCaptureSession::unregister_events(uint32_t channelIndex)
     {
-        unregister_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_DMA);
-        unregister_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_FORMAT_CHANGE);
-        unregister_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_PLUGIN);
-        unregister_event(channelIndex, PCIES2MM_EVENT_TYPE_VIDEO_UNPLUG);
+        unregister_event(channelIndex, GIGA_IOCTL_EVENT_VIDEO_DMA);
+        if ((event_mask_filter_ & PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN) != 0)
+            unregister_event(channelIndex, GIGA_IOCTL_EVENT_VIDEO_FORMAT_CHANGE);
+        if ((event_mask_filter_ & PCIES2MM_EVENT_MASK_PLUG_IN) != 0)
+            unregister_event(channelIndex, GIGA_IOCTL_EVENT_VIDEO_PLUGIN);
+        if ((event_mask_filter_ & PCIES2MM_EVENT_MASK_PLUG_OUT) != 0)
+            unregister_event(channelIndex, GIGA_IOCTL_EVENT_VIDEO_UNPLUG);
     }
 
     void PcieS2mmCaptureSession::close_event_handles()
@@ -928,16 +920,9 @@ namespace gvfg::internal
 
     int PcieS2mmCaptureSession::get_frame(uint32_t channelIndex, uint32_t frameIndex, uint8_t *buffer, DWORD bufferSize) const
     {
-        ULONG input[2] = {channelIndex, frameIndex};
-        DWORD bytesReturned = 0;
-        const BOOL ok = DeviceIoControl(device_,
-                                        IOCTL_PCIES2MM_GET_FRAME,
-                                        input,
-                                        sizeof(input),
-                                        buffer,
-                                        bufferSize,
-                                        &bytesReturned,
-                                        nullptr);
+        uint32_t bytesReturned = 0;
+        const BOOL ok = giga_ioctl_get_frame(device_, channelIndex, frameIndex,
+                                              buffer, bufferSize, &bytesReturned);
         if (!ok)
             return -1;
         return static_cast<int>(bytesReturned);
@@ -1175,11 +1160,34 @@ namespace gvfg::internal
         const int ret = zero_copy_enabled_
                             ? (acquire_zero_copy_frame(channel, zeroCopyData) ? static_cast<int>(bytes) : -1)
                             : get_frame(channel, frameIndex, slotData, bytes);
-        const double getFrameMs = std::chrono::duration<double, std::milli>(
+        const double getFrameUs = std::chrono::duration<double, std::micro>(
                                       std::chrono::steady_clock::now() - getFrameStarted).count();
-        if (getFrameMs >= 10.0)
-            PCIES2MM_LOG("slow GET_FRAME: frame_index=0x%08X elapsed_ms=%.3f ret=%d",
-                         frameIndex, getFrameMs, ret);
+        const bool getFrameSucceeded = ret >= 0 && static_cast<DWORD>(ret) == bytes;
+        if (getFrameSucceeded)
+        {
+            std::lock_guard<std::mutex> timingLock(mutex_);
+            ++get_frame_timing_samples_;
+            ++get_frame_timing_window_samples_;
+            get_frame_timing_total_us_ += getFrameUs;
+            get_frame_timing_window_max_us_ =
+                (std::max)(get_frame_timing_window_max_us_, getFrameUs);
+            get_frame_timing_lifetime_max_us_ =
+                (std::max)(get_frame_timing_lifetime_max_us_, getFrameUs);
+
+            if (get_frame_timing_window_samples_ >= 300)
+            {
+                get_frame_timing_last_max300_us_ = get_frame_timing_window_max_us_;
+                PCIES2MM_LOG("%s avg=%.3f us max300=%.3f us max=%.3f us samples=%llu",
+                             zero_copy_enabled_ ? "ZEROCOPY_ACQUIRE" : "COPY_GET_FRAME",
+                             get_frame_timing_total_us_ /
+                                 static_cast<double>(get_frame_timing_samples_),
+                             get_frame_timing_last_max300_us_,
+                             get_frame_timing_lifetime_max_us_,
+                             static_cast<unsigned long long>(get_frame_timing_samples_));
+                get_frame_timing_window_samples_ = 0;
+                get_frame_timing_window_max_us_ = 0.0;
+            }
+        }
         if (!running_)
         {
             if (zero_copy_enabled_ && zeroCopyData)

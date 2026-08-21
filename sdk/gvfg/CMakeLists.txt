@@ -11,7 +11,6 @@ add_library(gvfg SHARED
     src/backend/pcies2mm/pcies2mm_capture_session.h
     src/backend/pcies2mm/pcies2mm_device.cpp
     src/backend/pcies2mm/pcies2mm_device.h
-    src/backend/pcies2mm/pcies2mm_ioctl.h
     src/backend/pcies2mm/pcies2mm_reg.h
     src/backend/pcies2mm/pcies2mm_video_format.cpp
     src/backend/pcies2mm/pcies2mm_video_format.h
@@ -45,6 +44,7 @@ target_compile_definitions(gvfg PRIVATE
 )
 
 target_link_libraries(gvfg PRIVATE
+    giga_ioctl
     setupapi
     user32
     dxgi

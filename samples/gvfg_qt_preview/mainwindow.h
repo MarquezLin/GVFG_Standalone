@@ -69,6 +69,7 @@ private:
     std::array<gvfg_device_info_t, GVFG_MAX_DEVICES> devices_{};
     int deviceCount_ = 0;
     gvfg_handle handle_ = nullptr;
+    int selectedChannel_ = GVFG_CHANNEL_0;
     gvfg_preview_handle previewHandle_ = nullptr;
     std::atomic<bool> captureRunning_{false};
     std::atomic<bool> captureStop_{false};
@@ -79,10 +80,6 @@ private:
     std::atomic<double> previewCallMaximumMs_{0.0};
     std::atomic<double> previewCallWindowMaximumMs_{0.0};
     std::atomic<uint64_t> previewCallSamples_{0};
-    std::atomic<double> readFrameCallAverageMs_{0.0};
-    std::atomic<double> readFrameCallMaximumMs_{0.0};
-    std::atomic<double> readFrameCallWindowMaximumMs_{0.0};
-    std::atomic<uint64_t> readFrameCallSamples_{0};
     QTimer *runtimeStatusTimer_ = nullptr;
     gvfg_signal_status_t cachedSignalStatus_{};
     bool haveCachedSignalStatus_ = false;
