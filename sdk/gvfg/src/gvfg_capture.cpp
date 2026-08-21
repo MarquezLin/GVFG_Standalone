@@ -239,7 +239,7 @@ struct gvfg_handle_t
             }
         }
 
-        querySignal();
+        // querySignal();
         return GVFG_OK;
     }
 
@@ -282,14 +282,23 @@ struct gvfg_handle_t
     gvfg_status_t stop()
     {
         running = false;
-        eventCv.notify_all();
         releaseHeldFrameForStop();
-        if (!backend)
-            return GVFG_OK;
 
-        const pcies2mm_status_t st = backend->stop_stream();
-        if (st != PCIES2MM_OK)
-            recordError(pcies2mm_error_text(st, backend.get()));
+        pcies2mm_status_t st = PCIES2MM_OK;
+        if (backend)
+        {
+            // stop_stream() joins the backend event thread, so no new event can
+            // be queued after it returns.
+            st = backend->stop_stream();
+            if (st != PCIES2MM_OK)
+                recordError(pcies2mm_error_text(st, backend.get()));
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(eventMutex);
+            eventQueue.clear();
+        }
+        eventCv.notify_all();
         return map_status(st);
     }
 
@@ -318,9 +327,7 @@ struct gvfg_handle_t
             out.pixel_format = to_gvfg_pixel_format(pixelFormat);
             out.bit_depth = static_cast<int>(bitDepth);
         }
-        // A disconnected input is a normal query result, not a missing-device
-        // error. The opened device remains usable for plug-in monitoring.
-        return status == PCIES2MM_ENODEV ? GVFG_OK : map_status(status);
+        return map_status(status);
     }
 
     gvfg_status_t getRuntimeInfo(gvfg_runtime_info_t &out)
@@ -377,7 +384,6 @@ struct gvfg_handle_t
             eventQueue.push_back(out);
         }
         eventCv.notify_one();
-
     }
 
     pcies2mm_status_t querySignal()
@@ -403,17 +409,25 @@ struct gvfg_handle_t
             return GVFG_ESTATE;
 
         const pcies2mm_status_t signalStatus = querySignal();
-        if (signalStatus != PCIES2MM_OK && signalStatus != PCIES2MM_ENODEV)
+        if (signalStatus != PCIES2MM_OK)
             return map_status(signalStatus);
 
-        const bool waitingForSignal = signalStatus == PCIES2MM_ENODEV;
+        bool waitingForSignal = false;
+        uint32_t configureWidth = 0;
+        uint32_t configureHeight = 0;
+        pcies2mm_pixel_format_t configureFormat = PCIES2MM_PIXFMT_UNKNOWN;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex);
+            waitingForSignal = !signalConnected;
+            configureWidth = waitingForSignal ? 2 : width;
+            configureHeight = waitingForSignal ? 1 : height;
+            configureFormat =
+                waitingForSignal || pixelFormat == PCIES2MM_PIXFMT_UNKNOWN ? PCIES2MM_PIXFMT_YUY2 : pixelFormat;
+        }
+
         // configure_stream() is also used to enter event-monitoring mode. Keep
         // its inactive placeholder ring minimal; the real signal descriptor
         // replaces it before DMA is enabled after reconnect.
-        const uint32_t configureWidth = waitingForSignal ? 2 : width;
-        const uint32_t configureHeight = waitingForSignal ? 1 : height;
-        const pcies2mm_pixel_format_t configureFormat =
-            waitingForSignal || pixelFormat == PCIES2MM_PIXFMT_UNKNOWN ? PCIES2MM_PIXFMT_YUY2 : pixelFormat;
 
         pcies2mm_stream_desc_t desc{};
         desc.width = configureWidth;
@@ -575,35 +589,37 @@ struct gvfg_handle_t
             return GVFG_ESTATE;
 
         std::unique_lock<std::mutex> lock(eventMutex);
-        const auto eventAvailable = [this]()
+        const auto eventAvailableOrStopped = [this]()
         {
-            return !eventQueue.empty();
+            return !eventQueue.empty() ||
+                   !running.load(std::memory_order_acquire);
         };
 
         bool waitConditionMet = false;
         if (timeoutMs == 0)
         {
             // Non-blocking: inspect the current state without sleeping.
-            waitConditionMet = eventAvailable();
+            waitConditionMet = eventAvailableOrStopped();
         }
         else if (timeoutMs == GVFG_TIMEOUT_INFINITE)
         {
             // Wake when an event arrives or capture is stopped.
-            eventCv.wait(lock, eventAvailable);
+            eventCv.wait(lock, eventAvailableOrStopped);
             waitConditionMet = true;
         }
         else
         {
             waitConditionMet = eventCv.wait_for(lock,
                                                 std::chrono::milliseconds(timeoutMs),
-                                                eventAvailable);
+                                                eventAvailableOrStopped);
         }
 
         if (!waitConditionMet)
             return GVFG_ETIMEOUT;
 
         if (eventQueue.empty())
-            return GVFG_ETIMEOUT;
+            return running.load(std::memory_order_acquire) ? GVFG_ETIMEOUT
+                                                           : GVFG_ESTATE;
 
         out = eventQueue.front();
         eventQueue.pop_front();
@@ -1011,6 +1027,3 @@ extern "C"
         return handle->debugWriteRegister(offset, value);
     }
 }
-
-
-

@@ -295,9 +295,10 @@ namespace gvfg::internal
         signal_present_.store(signalPresent, std::memory_order_release);
         if (!signalPresent)
         {
+            out.connected = 0;
             std::lock_guard<std::mutex> lock(mutex_);
             signal_metadata_valid_ = false;
-            return PCIES2MM_ENODEV;
+            return PCIES2MM_OK;
         }
 
         std::lock_guard<std::mutex> lock(mutex_);

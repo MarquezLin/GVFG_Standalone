@@ -412,7 +412,7 @@ extern "C"
      * Returns:
      * - GVFG_OK on success.
      * - GVFG_EINVAL if handle/out_event is NULL or struct_size is invalid.
-     * - GVFG_ESTATE if no capture device is open.
+     * - GVFG_ESTATE if no capture device is open or capture has been stopped.
      * - GVFG_ETIMEOUT if no event is available before timeout_ms expires.
      */
     GVFG_API gvfg_status_t gvfg_poll_event(
@@ -430,8 +430,8 @@ extern "C"
      * - GVFG_OK on success, including when capture is already stopped.
      * - GVFG_EINVAL if handle is NULL.
      *
-     * This stops DMA capture and invalidates any unreleased frame. Signal and
-     * format event monitoring remains active until gvfg_destroy().
+     * This stops DMA capture and signal/format event monitoring, invalidates
+     * any unreleased frame, and wakes blocking gvfg_poll_event() calls.
      */
     GVFG_API gvfg_status_t gvfg_stop(
         _In_ gvfg_handle handle);
