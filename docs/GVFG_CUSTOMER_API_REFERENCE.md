@@ -77,7 +77,6 @@ register 與 DMA 實作不屬於本文件。
 | ------------------ | ---------- | ------------------------------------------------------- |
 | `capture_fps`      | `double`   | 依 `gvfg_read_channel_frame()` 成功交付時間估算並平滑化的 FPS；尚無足夠 frame 時為 0 |
 | `delivered_frames` | `uint64_t` | 此次 running session 中成功交付給 caller 的 frame 數              |
-| `lost_frames`      | `uint64_t` | SDK 能確定在交付前遺失的 frame 數；目前包含 capture FIFO 覆蓋       |
 
 ### 1.8 `gvfg_frame_t`
 
@@ -124,11 +123,9 @@ Caller 不得修改任何欄位再 release。SDK 會將完整 token 與目前 he
 | `GVFG_EVENT_SIGNAL_DISCONNECTED` | 2   | 輸入訊號中斷                        |
 | `GVFG_EVENT_STREAM_READY`        | 3   | 啟動、重新接線或格式恢復後，第一個完整 frame 已就緒 |
 | `GVFG_EVENT_FORMAT_CHANGE_BEGIN` | 4   | 輸入格式正在改變，應暫停使用舊格式資源           |
-| `GVFG_EVENT_FRAME_LOSS`           | 5   | SDK 確定一個或多個 frame 在交付前遺失          |
 
 `gvfg_event_t` 是 `gvfg_poll_channel_event()` 的輸出。呼叫前將結構清零並把
-`struct_size` 設為 `sizeof(gvfg_event_t)`。`type` 是上述事件型別；只有
-`GVFG_EVENT_FRAME_LOSS` 使用 `count`，表示這筆事件合併的已知 loss 數量。
+`struct_size` 設為 `sizeof(gvfg_event_t)`。`type` 是上述事件型別。
 
 `gvfg_event_mask_t` 提供對應的 `GVFG_EVENT_MASK_*` bit，可在 channel open 前用
 `gvfg_set_channel_event_mask()` 組合。預設為 `GVFG_EVENT_MASK_ALL`；mask 為 0
@@ -252,7 +249,7 @@ gvfg_status_t gvfg_read_channel_frame(gvfg_handle handle,
 - `GVFG_ETIMEOUT`：期限內沒有 frame。
 - `GVFG_EIO`／`GVFG_ENOTSUP`：frame/backend 無效或格式不支援。
 
-Copy mode 回傳 SDK ring buffer；zero-copy mode 回傳 driver-owned buffer。兩者的
+Copy mode 回傳 SDK 的單一 frame buffer；zero-copy mode 回傳 driver-owned buffer。兩者的
 pointer 都只保證有效到對應的 `gvfg_release_channel_frame()`。
 
 ### 1.19 `gvfg_release_channel_frame`
@@ -265,7 +262,7 @@ gvfg_status_t gvfg_release_channel_frame(gvfg_handle handle,
 
 - `handle`：取得該 frame 的同一個 handle。
 - `frame`：`gvfg_read_channel_frame()` 原封不動回傳的完整 descriptor。
-- `GVFG_OK`：成功歸還 frame；copy slot 可再次使用，或 zero-copy frame 已歸還 driver。
+- `GVFG_OK`：成功歸還 frame；copy buffer 可再次使用，或 zero-copy frame 已歸還 driver。
 - `GVFG_EINVAL`：NULL 或 token 內容與 held frame 不符。
 - `GVFG_ESTATE`：沒有 backend、目前沒有 held frame，或 backend release 狀態不正確。
 

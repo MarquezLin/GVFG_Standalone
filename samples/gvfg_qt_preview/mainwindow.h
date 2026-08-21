@@ -75,6 +75,10 @@ private:
     std::atomic<bool> captureStop_{false};
     std::atomic<bool> frameAvailable_{false};
     std::thread captureThread_;
+    std::atomic<double> getFrameAverageMs_{0.0};
+    std::atomic<double> getFrameMaximumMs_{0.0};
+    std::atomic<double> getFrameWindowMaximumMs_{0.0};
+    std::atomic<uint64_t> getFrameSamples_{0};
     uint64_t previewFailureCount_ = 0;
     std::atomic<double> previewCallAverageMs_{0.0};
     std::atomic<double> previewCallMaximumMs_{0.0};
@@ -88,9 +92,6 @@ private:
 #if GVFG_INTERNAL_DIAGNOSTICS
     QString lastLoggedBackendError_;
     uint64_t lastDebugDmaErrors_ = 0;
-    uint64_t lastDebugDroppedFrames_ = 0;
-    uint64_t pendingDroppedFrames_ = 0;
-    qint64 lastDroppedWarningMs_ = 0;
     bool haveDebugBaseline_ = false;
 #endif
     QFile logFile_;

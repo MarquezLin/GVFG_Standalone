@@ -5,6 +5,11 @@
 這個 repo 以 GVFG 為 source of truth。其他專案應該透過 public header、
 import library、runtime DLL 來使用 GVFG，不要直接把 GVFG source 編進去。
 
+## Driver compatibility
+
+此開發版本僅支援新 driver `vfg100_0821c`。舊版 driver、舊 IOCTL、
+done-index 與舊 SDK frame-ring 流程不在相容範圍內。
+
 ## 內容
 
 - `sdk/gvfg`：GVFG customer C API、internal debug API、PCIES2MM backend。
@@ -85,7 +90,7 @@ gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
 ```c
 uint32_t events = GVFG_EVENT_MASK_SIGNAL_CONNECTED |
                   GVFG_EVENT_MASK_SIGNAL_DISCONNECTED |
-                  GVFG_EVENT_MASK_FRAME_LOSS;
+                  GVFG_EVENT_MASK_FORMAT_CHANGE_BEGIN;
 gvfg_set_channel_event_mask(handle, GVFG_CHANNEL_0, events);
 gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
 ```
@@ -101,7 +106,7 @@ SDK 會在 open 時 enable zero-copy，並在 close/destroy 時 disable。
 ### 同一裝置雙 channel
 
 同一個 `gvfg_handle` 可對同一個 device index 開啟 CH0、CH1。SDK 只建立一個
-Windows device handle；兩個 channel 各自保有 capture thread、event、frame ring
+Windows device handle；兩個 channel 各自保有 event、單一 frame buffer
 以及 held-frame/zero-copy ownership：
 
 ```c
@@ -121,7 +126,7 @@ gvfg_stop(handle); /* stop both channels */
 runtime API 都明確要求 `channel_index`；不再保留隱含 selected-channel 的舊 API。
 
 `gvfg_qt_preview.exe` 只使用 public API，主畫面只顯示 input 與 Preview
-狀態；IRQ、DMA、ring slot 等資訊只存在 internal diagnostic tool。
+狀態；IRQ、DMA 等資訊只存在 internal diagnostic tool。
 
 ## Consumer Layout
 

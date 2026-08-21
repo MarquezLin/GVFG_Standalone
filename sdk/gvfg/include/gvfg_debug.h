@@ -37,25 +37,28 @@ typedef struct
     int backend_state;
     uint64_t backend_frames_captured;
     uint64_t backend_frames_delivered;
-    uint64_t backend_frames_dropped;
     uint64_t backend_dma_errors;
     uint64_t backend_interrupt_count;
     uint64_t backend_wait_timeouts;
 
     int backend_running;
     int backend_capture_active;
-    uint32_t backend_pending_events;
     uint64_t backend_latest_sequence;
     uint64_t backend_delivered_sequence;
-    uint64_t backend_active_delivery_slot; /* UINT64_MAX when no frame is held by the caller. */
-    uint64_t backend_next_write_slot;
-    uint64_t backend_ring_size;
 
     int get_frame_zero_copy;
     uint64_t get_frame_timing_samples;
     double get_frame_timing_average_us;
     double get_frame_timing_max300_us;
     double get_frame_timing_max_us;
+    uint64_t event_wait_timing_samples;
+    double event_wait_timing_average_us;
+    double event_wait_timing_max300_us;
+    double event_wait_timing_max_us;
+    uint64_t sdk_processing_timing_samples;
+    double sdk_processing_timing_average_us;
+    double sdk_processing_timing_max300_us;
+    double sdk_processing_timing_max_us;
 } gvfg_debug_backend_stats_t;
 
 /*

@@ -6,8 +6,8 @@
 #include <windows.h>
 
 #include <atomic>
-#include <condition_variable>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -78,13 +78,10 @@ namespace gvfg::internal
         int get_frame(uint32_t channelIndex, uint32_t frameIndex, uint8_t *buffer, DWORD bufferSize) const;
 
         void capture_thread_proc();
-        void handle_dma_event(uint32_t channel);
         void handle_format_change_event(uint32_t channel);
         void handle_plugin_event(uint32_t channel);
         void handle_unplug_event(uint32_t channel);
-        bool resume_capture_from_signal(uint32_t channel);
-        bool refresh_stream_from_registers(bool resizeRing);
-        void publish_frame(size_t slotIndex, size_t bytes);
+        bool refresh_stream_from_registers(bool resizeBuffer);
         void emit_event(pcies2mm_event_type_t type) const;
 
         pcies2mm_status_t fail(pcies2mm_status_t status, const char *where, DWORD winerr = GetLastError()) const;
@@ -96,17 +93,9 @@ namespace gvfg::internal
         uint32_t video_base() const;
         uint32_t video_irq_mask_bit() const;
         size_t frame_size_bytes() const;
-
-        struct FrameSlot
-        {
-            std::vector<uint8_t> data;  // Frame byte storage for this ring slot.
-            const uint8_t *external_data = nullptr; // Driver-owned zero-copy frame.
-            bool zero_copy = false;
-            size_t bytes = 0;           // Number of valid bytes read into data.
-            uint64_t sequence = 0;      // Monotonic frame sequence assigned on publish.
-            bool ready = false;         // True after the data thread publishes a frame.
-            bool in_use = false;        // True while writing or while the caller holds the slot.
-        };
+        void record_get_frame_timing(double elapsedUs);
+        void record_event_wait_timing(double elapsedUs);
+        void record_sdk_processing_timing(double elapsedUs);
 
         std::wstring base_path_;
         std::wstring friendly_name_;
@@ -138,16 +127,11 @@ namespace gvfg::internal
         std::thread capture_thread_;
 
         mutable std::mutex mutex_;
+        std::condition_variable read_finished_cv_;
         mutable std::mutex event_callback_mutex_;
-        std::condition_variable frame_cv_;
-        std::condition_variable data_cv_;
         pcies2mm_event_callback_t event_callback_ = nullptr;
         void *event_callback_user_ = nullptr;
         uint32_t event_mask_filter_ = PCIES2MM_EVENT_MASK_DEFAULT;
-        uint32_t pending_events_ = 0;
-        std::vector<FrameSlot> frame_ring_;
-        size_t next_write_slot_ = 0;
-        size_t active_delivery_slot_ = static_cast<size_t>(-1);
         uint64_t latest_sequence_ = 0;
         uint64_t delivered_sequence_ = 0;
         uint64_t wait_timeout_count_ = 0;
@@ -157,8 +141,23 @@ namespace gvfg::internal
         double get_frame_timing_window_max_us_ = 0.0;
         double get_frame_timing_last_max300_us_ = 0.0;
         double get_frame_timing_lifetime_max_us_ = 0.0;
+        uint64_t event_wait_timing_samples_ = 0;
+        uint32_t event_wait_timing_window_samples_ = 0;
+        double event_wait_timing_total_us_ = 0.0;
+        double event_wait_timing_window_max_us_ = 0.0;
+        double event_wait_timing_last_max300_us_ = 0.0;
+        double event_wait_timing_lifetime_max_us_ = 0.0;
+        uint64_t sdk_processing_timing_samples_ = 0;
+        uint32_t sdk_processing_timing_window_samples_ = 0;
+        double sdk_processing_timing_total_us_ = 0.0;
+        double sdk_processing_timing_window_max_us_ = 0.0;
+        double sdk_processing_timing_last_max300_us_ = 0.0;
+        double sdk_processing_timing_lifetime_max_us_ = 0.0;
+        std::vector<uint8_t> copy_buffer_;
+        pcies2mm_frame_t held_frame_{};
+        bool frame_held_ = false;
+        bool read_in_progress_ = false;
         std::chrono::steady_clock::time_point active_delivery_started_{};
-        std::chrono::steady_clock::time_point last_delivery_started_{};
         bool stream_error_ = false;
         pcies2mm_stream_stats_t stats_{};
         mutable std::string last_error_;

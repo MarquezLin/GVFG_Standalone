@@ -36,7 +36,7 @@
         <mxCell id="workers" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="single capture thread&lt;br&gt;WaitForMultipleObjects: DMA / format / plug events" vertex="1">
           <mxGeometry height="52" width="280" x="510" y="173" as="geometry" />
         </mxCell>
-        <mxCell id="pcies2mmSession" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="sdk/gvfg/src/backend/pcies2mm/pcies2mm_capture_session.cpp&lt;br&gt;internal session / workers / frame ring" vertex="1">
+        <mxCell id="pcies2mmSession" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="sdk/gvfg/src/backend/pcies2mm/pcies2mm_capture_session.cpp&lt;br&gt;internal session / events / direct frame read" vertex="1">
           <mxGeometry height="58" width="340" x="420" y="65" as="geometry" />
         </mxCell>
         <mxCell id="e6" edge="1" parent="backendLayer" source="pcies2mmSession" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="backendTypes" value="uses">
@@ -56,7 +56,7 @@
         <mxCell id="facade" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#82b366;fontSize=14;" value="sdk/gvfg/src/gvfg_capture.cpp&lt;br&gt;session facade / lifecycle / pull API" vertex="1">
           <mxGeometry height="58" width="340" x="470" y="385" as="geometry" />
         </mxCell>
-        <mxCell id="ring" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="frame_ring_&lt;br&gt;ready / in_use / sequence" vertex="1">
+        <mxCell id="ring" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="single frame buffer&lt;br&gt;read / held / release" vertex="1">
           <mxGeometry height="58" width="270" x="880" y="610" as="geometry" />
         </mxCell>
         <mxCell id="eventFlow" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=13;" value="Public event flow&lt;br&gt;driver format IRQ -&gt; FORMAT_CHANGE_BEGIN&lt;br&gt;first new frame published -&gt; STREAM_READY" vertex="1">

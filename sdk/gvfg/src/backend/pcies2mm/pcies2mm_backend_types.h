@@ -63,7 +63,6 @@ typedef struct pcies2mm_stream_stats_t
     pcies2mm_stream_state_t state;
     uint64_t frames_captured;
     uint64_t frames_delivered;
-    uint64_t frames_dropped;
     uint64_t dma_errors;
     uint64_t interrupt_count;
 } pcies2mm_stream_stats_t;
@@ -72,17 +71,21 @@ typedef struct pcies2mm_debug_state_t
 {
     int running;
     int capture_active;
-    uint32_t pending_events;
     uint64_t latest_sequence;
     uint64_t delivered_sequence;
-    uint64_t active_delivery_slot;
-    uint64_t next_write_slot;
-    uint64_t ring_size;
     int get_frame_zero_copy;
     uint64_t get_frame_timing_samples;
     double get_frame_timing_average_us;
     double get_frame_timing_max300_us;
     double get_frame_timing_max_us;
+    uint64_t event_wait_timing_samples;
+    double event_wait_timing_average_us;
+    double event_wait_timing_max300_us;
+    double event_wait_timing_max_us;
+    uint64_t sdk_processing_timing_samples;
+    double sdk_processing_timing_average_us;
+    double sdk_processing_timing_max300_us;
+    double sdk_processing_timing_max_us;
 } pcies2mm_debug_state_t;
 
 typedef enum pcies2mm_event_type_t
@@ -90,8 +93,7 @@ typedef enum pcies2mm_event_type_t
     PCIES2MM_EVENT_PLUG_IN = 1,
     PCIES2MM_EVENT_PLUG_OUT = 2,
     PCIES2MM_EVENT_STREAM_READY = 3,
-    PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN = 4,
-    PCIES2MM_EVENT_FRAME_LOSS = 5
+    PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN = 4
 } pcies2mm_event_type_t;
 
 enum
@@ -100,12 +102,10 @@ enum
     PCIES2MM_EVENT_MASK_PLUG_OUT = 1u << 1,
     PCIES2MM_EVENT_MASK_STREAM_READY = 1u << 2,
     PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN = 1u << 3,
-    PCIES2MM_EVENT_MASK_FRAME_LOSS = 1u << 4,
     PCIES2MM_EVENT_MASK_DEFAULT = PCIES2MM_EVENT_MASK_PLUG_IN |
                                  PCIES2MM_EVENT_MASK_PLUG_OUT |
                                  PCIES2MM_EVENT_MASK_STREAM_READY |
-                                 PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN |
-                                 PCIES2MM_EVENT_MASK_FRAME_LOSS
+                                 PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN
 };
 
 typedef void (*pcies2mm_event_callback_t)(pcies2mm_event_type_t event, void *user);

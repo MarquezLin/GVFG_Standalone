@@ -128,8 +128,6 @@ extern "C"
     {
         double capture_fps;        /* Runtime FPS measured from frames returned by gvfg_read_channel_frame(). */
         uint64_t delivered_frames; /* Number of frames returned by gvfg_read_channel_frame(). */
-        /* Frames known by the SDK to have been lost before application delivery. */
-        uint64_t lost_frames;
     } gvfg_runtime_info_t;
 
     typedef struct
@@ -171,9 +169,7 @@ extern "C"
         /* First complete frame after stream start, plug-in, or format recovery is ready. */
         GVFG_EVENT_STREAM_READY = 3,
         /* Input format is changing; pause use of resources created for the old format. */
-        GVFG_EVENT_FORMAT_CHANGE_BEGIN = 4,
-        /* One or more frames were known to be lost before application delivery. */
-        GVFG_EVENT_FRAME_LOSS = 5
+        GVFG_EVENT_FORMAT_CHANGE_BEGIN = 4
     } gvfg_event_type_t;
 
     typedef enum
@@ -183,16 +179,14 @@ extern "C"
         GVFG_EVENT_MASK_SIGNAL_DISCONNECTED = 1u << 1,
         GVFG_EVENT_MASK_STREAM_READY = 1u << 2,
         GVFG_EVENT_MASK_FORMAT_CHANGE_BEGIN = 1u << 3,
-        GVFG_EVENT_MASK_FRAME_LOSS = 1u << 4,
-        GVFG_EVENT_MASK_ALL = (1u << 5) - 1u
+        GVFG_EVENT_MASK_ALL = (1u << 4) - 1u
     } gvfg_event_mask_t;
 
     typedef struct
     {
         /* Set to sizeof(gvfg_event_t) before calling gvfg_poll_channel_event(). */
         uint32_t struct_size;
-        int32_t type;   /* gvfg_event_type_t value. */
-        uint64_t count; /* Loss count for GVFG_EVENT_FRAME_LOSS; otherwise zero. */
+        int32_t type; /* gvfg_event_type_t value. */
         uint64_t reserved[4];
     } gvfg_event_t;
 
@@ -287,7 +281,7 @@ extern "C"
     /*
      * A handle may open both channels of the same device. The first call opens
      * the Windows device; the second channel shares that device connection and
-     * owns independent capture, event, frame-ring, and zero-copy state.
+     * owns independent capture, event, frame, and zero-copy state.
      */
 
     /*

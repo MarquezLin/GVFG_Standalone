@@ -183,8 +183,8 @@ Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，每次成
 - `gvfg_get_channel_signal_status(handle, channel, &status)`：查詢指定 channel 的連線、尺寸、
   原生格式與 bit depth。沒有輸入訊號是正常狀態：回傳 `GVFG_OK` 且
   `connected == 0`。
-- `gvfg_get_channel_runtime_info(handle, channel, &info)`：取得指定 channel 已交付 frame 數、SDK 能確定的
-  `lost_frames` 與依 read 間隔估算的 `capture_fps`。start 時統計值重設。
+- `gvfg_get_channel_runtime_info(handle, channel, &info)`：取得指定 channel 已交付 frame 數與
+  依 read 間隔估算的 `capture_fps`。start 時統計值重設。
 
 ### Event
 
@@ -197,7 +197,6 @@ Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，每次成
 | `GVFG_EVENT_SIGNAL_DISCONNECTED` | 停止使用目前影像內容                  |
 | `GVFG_EVENT_FORMAT_CHANGE_BEGIN` | 暫停使用依賴舊尺寸／格式的資源             |
 | `GVFG_EVENT_STREAM_READY`        | 第一個完整 frame 已就緒，可依新格式重建資源   |
-| `GVFG_EVENT_FRAME_LOSS`          | 記錄錄影內容可能不完整；`event.count` 是本次已知 loss 數量 |
 
 呼叫前應將 `gvfg_event_t` 清零並設定 `struct_size = sizeof(gvfg_event_t)`。
 事件是狀態通知，不取代 `gvfg_get_channel_signal_status()`；需要完整 metadata 時應重新查詢。

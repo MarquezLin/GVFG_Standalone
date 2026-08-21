@@ -31,7 +31,6 @@ namespace
     static_assert(GVFG_EVENT_MASK_SIGNAL_DISCONNECTED == PCIES2MM_EVENT_MASK_PLUG_OUT);
     static_assert(GVFG_EVENT_MASK_STREAM_READY == PCIES2MM_EVENT_MASK_STREAM_READY);
     static_assert(GVFG_EVENT_MASK_FORMAT_CHANGE_BEGIN == PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN);
-    static_assert(GVFG_EVENT_MASK_FRAME_LOSS == PCIES2MM_EVENT_MASK_FRAME_LOSS);
 
 #if INTPTR_MAX == INT64_MAX
     static_assert(std::is_standard_layout_v<gvfg_frame_t>);
@@ -137,8 +136,6 @@ namespace
             return GVFG_EVENT_STREAM_READY;
         case PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN:
             return GVFG_EVENT_FORMAT_CHANGE_BEGIN;
-        case PCIES2MM_EVENT_FRAME_LOSS:
-            return GVFG_EVENT_FRAME_LOSS;
         default:
             return GVFG_EVENT_UNKNOWN;
         }
@@ -354,7 +351,6 @@ struct gvfg_channel_session_t
         pcies2mm_debug_state_t debugState{};
         uint64_t waitTimeouts = 0;
         backend->get_debug_stats(stats, waitTimeouts, debugState);
-        out.lost_frames = stats.frames_dropped;
         return GVFG_OK;
     }
 
@@ -380,19 +376,11 @@ struct gvfg_channel_session_t
         const gvfg_event_type_t type = map_event_type(event);
         {
             std::lock_guard<std::mutex> lock(eventMutex);
-            if (type == GVFG_EVENT_FRAME_LOSS && !eventQueue.empty() &&
-                eventQueue.back().type == GVFG_EVENT_FRAME_LOSS)
-            {
-                ++eventQueue.back().count;
-                eventCv.notify_one();
-                return;
-            }
             if (eventQueue.size() >= 64)
                 eventQueue.pop_front();
             gvfg_event_t out{};
             out.struct_size = sizeof(out);
             out.type = type;
-            out.count = type == GVFG_EVENT_FRAME_LOSS ? 1 : 0;
             eventQueue.push_back(out);
         }
         eventCv.notify_one();
@@ -438,14 +426,14 @@ struct gvfg_channel_session_t
         }
 
         // configure_stream() is also used to enter event-monitoring mode. Keep
-        // its inactive placeholder ring minimal; the real signal descriptor
+        // its inactive placeholder buffer minimal; the real signal descriptor
         // replaces it before DMA is enabled after reconnect.
 
         pcies2mm_stream_desc_t desc{};
         desc.width = configureWidth;
         desc.height = configureHeight;
         desc.pixel_format = configureFormat;
-        desc.buffer_count = 3;
+        desc.buffer_count = 1;
 
         const pcies2mm_status_t st = backend->configure_stream(desc);
         if (st != PCIES2MM_OK)
@@ -671,23 +659,26 @@ struct gvfg_channel_session_t
             out.backend_state = static_cast<int>(stats.state);
             out.backend_frames_captured = stats.frames_captured;
             out.backend_frames_delivered = stats.frames_delivered;
-            out.backend_frames_dropped = stats.frames_dropped;
             out.backend_dma_errors = stats.dma_errors;
             out.backend_interrupt_count = stats.interrupt_count;
             out.backend_wait_timeouts = waitTimeouts;
             out.backend_running = debugState.running;
             out.backend_capture_active = debugState.capture_active;
-            out.backend_pending_events = debugState.pending_events;
             out.backend_latest_sequence = debugState.latest_sequence;
             out.backend_delivered_sequence = debugState.delivered_sequence;
-            out.backend_active_delivery_slot = debugState.active_delivery_slot;
-            out.backend_next_write_slot = debugState.next_write_slot;
-            out.backend_ring_size = debugState.ring_size;
             out.get_frame_zero_copy = debugState.get_frame_zero_copy;
             out.get_frame_timing_samples = debugState.get_frame_timing_samples;
             out.get_frame_timing_average_us = debugState.get_frame_timing_average_us;
             out.get_frame_timing_max300_us = debugState.get_frame_timing_max300_us;
             out.get_frame_timing_max_us = debugState.get_frame_timing_max_us;
+            out.event_wait_timing_samples = debugState.event_wait_timing_samples;
+            out.event_wait_timing_average_us = debugState.event_wait_timing_average_us;
+            out.event_wait_timing_max300_us = debugState.event_wait_timing_max300_us;
+            out.event_wait_timing_max_us = debugState.event_wait_timing_max_us;
+            out.sdk_processing_timing_samples = debugState.sdk_processing_timing_samples;
+            out.sdk_processing_timing_average_us = debugState.sdk_processing_timing_average_us;
+            out.sdk_processing_timing_max300_us = debugState.sdk_processing_timing_max300_us;
+            out.sdk_processing_timing_max_us = debugState.sdk_processing_timing_max_us;
         }
 
         return GVFG_OK;

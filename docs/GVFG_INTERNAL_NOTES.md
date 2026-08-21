@@ -3,7 +3,7 @@
 ## Driver IOCTL DLL 邊界
 
 `gvfg.dll` 保留裝置列舉、`CreateFile`/`CloseHandle`、channel session、event、
-thread 與 frame ring。Driver IOCTL code、request layout 及所有
+event thread 與單一 frame buffer。Driver IOCTL code、request layout 及所有
 `DeviceIoControl` 呼叫集中在內部 `giga_ioctl.dll`；GVFG 僅呼叫其具名 C API，
 失敗時沿用 `GetLastError()`。`giga_ioctl.h` 是內部相依，不屬於客戶公開 API。
 
@@ -70,7 +70,7 @@ Created/Closed -> Opened -> Running -> Opened -> Destroyed
 由 caller 序列化；若日後要宣告完整 thread-safe，必須先補足 open/start/stop/destroy
 彼此的同步與 handle lifetime 保護。
 
-## 4. DMA 與 frame ring
+## 4. DMA 與單一 frame buffer
 
 Copy mode 資料路徑：
 
@@ -78,28 +78,17 @@ Copy mode 資料路徑：
 source frame
 -> hardware/driver DMA buffer
 -> DMA complete event
--> capture worker 收到 DMA complete event
--> IOCTL_GET_FRAME(frameIndex=0xFFFFFFFF) 複製到 SDK ring free slot
--> slot ready + sequence 更新 + frame_cv notify
--> wait_frame 選取 ready frame
--> facade 回傳指向 slot.data 的 gvfg_frame_t
+-> 呼叫 gvfg_read_channel_frame() 的 thread 等待 DMA complete event
+-> IOCTL_GET_FRAME(frameIndex=0xFFFFFFFF) 直接複製到 SDK 的單一 buffer
+-> facade 回傳指向該 buffer 的 gvfg_frame_t
 -> customer/preview/conversion
 -> release_frame
--> slot 回到 free
+-> buffer 可供下一次 read 使用
 ```
 
-Backend stream descriptor 目前配置 3 個 SDK slots。Slot 邏輯狀態：
-
-```text
-Free      ready=false, in_use=false
-Writing   ready=false, in_use=true
-Ready     ready=true,  in_use=false
-Delivered ready=false, in_use=true
-```
-
-ring 滿時的行為是即時擷取的 drop/backpressure policy，不是 lossless queue；應透過
-internal stats 觀察 `frames_dropped`。不要將 slot 數、driver DMA buffer 數或 done-index
-演算法暴露為客戶契約。
+Backend 不做 frame queue、slot 切換或 done-index 查詢。每個 channel 同一時間只允許
+一個 read，且成功取得的 frame 必須 release 後才能讀下一張。SDK 不把 driver DMA
+buffer 數或 done-index 演算法暴露為客戶契約。
 
 Zero-copy mode 資料路徑：
 
@@ -116,10 +105,9 @@ gvfg_create
 -> close/destroy 時 IOCTL_GIGA_DISABLE_FRAME_ZEROCOPY(channel)
 ```
 
-Zero-copy 同時只允許一張 outstanding frame。若下一個 DMA event 到達時 caller 尚未
-release，backend 只會跳過該次 acquire，不會覆寫仍由 caller 使用的 driver pointer。
-這種情況不計入 `frames_dropped`，也不送出 `GVFG_EVENT_FRAME_LOSS`；driver 目前沒有
-提供可用來確認實際遺失 frame 的 sequence/drop counter。
+Zero-copy 同時只允許一張 outstanding frame。Caller 必須 release 目前的
+driver pointer，才能再次 read。SDK 不根據 read 間隔推算 frame loss；driver 目前也
+沒有提供可用來確認實際遺失 frame 的 sequence/drop counter。
 
 ## 5. Frame token 與 ABI
 
