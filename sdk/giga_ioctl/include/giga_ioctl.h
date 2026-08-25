@@ -13,6 +13,7 @@
 extern "C" {
 #endif
 
+/* Driver event values. Keep these synchronized with the driver ABI. */
 enum giga_ioctl_event_type
 {
     GIGA_IOCTL_EVENT_VIDEO_DMA = 0,
@@ -24,7 +25,8 @@ enum giga_ioctl_event_type
 
 GIGA_IOCTL_API BOOL giga_ioctl_read_register(HANDLE device, uint32_t offset, uint32_t *value);
 GIGA_IOCTL_API BOOL giga_ioctl_write_register(HANDLE device, uint32_t offset, uint32_t value);
-GIGA_IOCTL_API BOOL giga_ioctl_register_event(HANDLE device, uint32_t channel, uint32_t type, HANDLE event_handle);
+GIGA_IOCTL_API BOOL giga_ioctl_register_event(HANDLE device, uint32_t channel,
+                                               uint32_t type, HANDLE event_handle);
 GIGA_IOCTL_API BOOL giga_ioctl_unregister_event(HANDLE device, uint32_t channel, uint32_t type);
 GIGA_IOCTL_API BOOL giga_ioctl_get_frame(HANDLE device, uint32_t channel, uint32_t frame_index,
                                          void *buffer, uint32_t buffer_size, uint32_t *bytes_returned);

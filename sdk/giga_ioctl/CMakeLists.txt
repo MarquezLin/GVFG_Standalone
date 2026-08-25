@@ -1,4 +1,5 @@
 add_library(giga_ioctl SHARED
+    README.md
     include/giga_ioctl.h
     src/giga_ioctl.cpp
     src/giga_ioctl_private.h

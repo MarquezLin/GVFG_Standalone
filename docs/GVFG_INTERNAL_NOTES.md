@@ -4,8 +4,9 @@
 
 `gvfg.dll` 保留裝置列舉、`CreateFile`/`CloseHandle`、channel session、event、
 event thread 與單一 frame buffer。Driver IOCTL code、request layout 及所有
-`DeviceIoControl` 呼叫集中在內部 `giga_ioctl.dll`；GVFG 僅呼叫其具名 C API，
-失敗時沿用 `GetLastError()`。`giga_ioctl.h` 是內部相依，不屬於客戶公開 API。
+`DeviceIoControl` 呼叫集中在獨立維護的內部 `giga_ioctl.dll`；GVFG 僅呼叫其具名 C API，
+失敗時沿用 `GetLastError()`。此 DLL 只負責 driver IOCTL code、request layout 與薄封裝，
+不持有 capture state。`giga_ioctl.h` 是內部相依，不屬於客戶公開 API。
 
 本文件只供 GVFG SDK、driver、FPGA 與內部診斷工具維護者使用。客戶行為與公開
 契約請以 `GVFG_CUSTOMER_API.md`、`GVFG_CUSTOMER_API_REFERENCE.md` 和
@@ -44,7 +45,7 @@ customer/sample (optional)
 - `pcies2mm_capture_session.*`：stream lifecycle、driver event/DMA worker、frame
   ring 與 backend statistics。
 - `pcies2mm_device.*`：SetupAPI 裝置列舉與 interface path。
-- `pcies2mm_ioctl.h`：與 driver 共用的 private ABI。
+- `sdk/giga_ioctl`：獨立 DLL；集中管理與 driver 共用的 private ABI 與 `DeviceIoControl` 薄封裝。
 - `pcies2mm_reg.h`：FPGA register offsets/masks。
 - `pcies2mm_video_format.*`：format register 解碼與 YUY2/Y210 layout；相容舊 FPGA 回報的 YVYU register 值。
 - `src/gpu/*`：D3D11 同步轉換及 readback 到 caller buffer。
