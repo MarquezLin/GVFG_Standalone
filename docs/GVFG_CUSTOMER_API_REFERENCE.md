@@ -210,14 +210,14 @@ gvfg_status_t gvfg_get_channel_event_mask(gvfg_handle handle,
 ### 1.18 Zero-copy mode selection
 
 ```c
-gvfg_status_t gvfg_set_zero_copy_enabled(gvfg_handle handle, int enabled);
-gvfg_status_t gvfg_get_zero_copy_enabled(gvfg_handle handle, int *out_enabled);
+gvfg_status_t gvfg_set_channel_zero_copy_enabled(gvfg_handle handle, int channel, int enabled);
+gvfg_status_t gvfg_get_channel_zero_copy_enabled(gvfg_handle handle, int channel, int *out_enabled);
 ```
 
-- `set` 只能在 `gvfg_create()` 後、`gvfg_open_channel()` 前呼叫。
-- `enabled` 只接受 0（copy）或 1（zero-copy），預設為 0。
-- Device 已 open 時呼叫 `set` 會回傳 `GVFG_ESTATE`。
-- `get` 可查詢 session 選定模式；`out_enabled` 不可為 NULL。
+- `set` 只能在 `gvfg_create()` 後、指定 channel open 前呼叫。
+- `enabled` 只接受 0（copy）或 1（zero-copy）；每個 channel 預設為 0。
+- 指定 channel 已 open 時呼叫 `set` 會回傳 `GVFG_ESTATE`；不影響另一條 channel。
+- `get` 可查詢指定 channel 的模式；`out_enabled` 不可為 NULL。
 - Zero-copy mode 的 `frame.data` 為 driver-owned pointer；仍必須以相同 descriptor
   呼叫 `gvfg_release_channel_frame()`，且每個 channel 同時最多持有一張 frame。
 - SDK 在 open 時 enable driver zero-copy，在 destroy/close 前 disable。

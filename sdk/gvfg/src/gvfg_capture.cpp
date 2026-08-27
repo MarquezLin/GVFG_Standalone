@@ -222,14 +222,6 @@ struct gvfg_channel_session_t
         return GVFG_OK;
     }
 
-    gvfg_status_t setZeroCopyEnabled(bool enabled)
-    {
-        if (backend)
-            return reject(GVFG_ESTATE, "set zero copy rejected: channel is already open");
-        zeroCopyRequested = enabled;
-        return GVFG_OK;
-    }
-
     gvfg_status_t start()
     {
         if (!backend)
@@ -828,7 +820,7 @@ struct gvfg_handle_t
             return GVFG_OK;
 
         auto channel = std::make_unique<gvfg_channel_session_t>(channelErrors[slot]);
-        channel->zeroCopyRequested = zeroCopyRequested;
+        channel->zeroCopyRequested = zeroCopyRequested[slot];
         channel->eventMask = eventMasks[slot];
 
         const gvfg_status_t status = channel->open(index,
@@ -846,13 +838,18 @@ struct gvfg_handle_t
         return GVFG_OK;
     }
 
-    gvfg_status_t setZeroCopyEnabled(bool enabled)
+    gvfg_status_t setChannelZeroCopyEnabled(int channelIndex, bool enabled)
     {
-        if (deviceConnection)
-            return rejectAllChannels(
-                GVFG_ESTATE,
-                "gvfg_set_zero_copy_enabled rejected: a device is already open");
-        zeroCopyRequested = enabled;
+        if (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1)
+            return GVFG_EINVAL;
+        const size_t slot = static_cast<size_t>(channelIndex);
+        if (channels[slot])
+        {
+            channelErrors[slot].set(
+                "gvfg_set_channel_zero_copy_enabled rejected: channel is already open");
+            return GVFG_ESTATE;
+        }
+        zeroCopyRequested[slot] = enabled;
         return GVFG_OK;
     }
 
@@ -912,7 +909,7 @@ struct gvfg_handle_t
     std::array<std::unique_ptr<gvfg_channel_session_t>, 2> channels;
     std::array<uint32_t, 2> eventMasks{GVFG_EVENT_MASK_ALL, GVFG_EVENT_MASK_ALL};
     int currentIndex = -1;
-    bool zeroCopyRequested = false;
+    std::array<bool, 2> zeroCopyRequested{false, false};
 };
 
 extern "C"
@@ -987,22 +984,30 @@ extern "C"
         return GVFG_OK;
     }
 
-    gvfg_status_t gvfg_set_zero_copy_enabled(gvfg_handle handle, int enabled)
+    gvfg_status_t gvfg_set_channel_zero_copy_enabled(gvfg_handle handle,
+                                                      int channel_index,
+                                                      int enabled)
     {
-        if (!handle)
+        if (!handle ||
+            (channel_index != GVFG_CHANNEL_0 && channel_index != GVFG_CHANNEL_1))
             return GVFG_EINVAL;
         if (enabled != 0 && enabled != 1)
-            return handle->rejectAllChannels(
-                GVFG_EINVAL,
-                "gvfg_set_zero_copy_enabled rejected: enabled must be 0 or 1");
-        return handle->setZeroCopyEnabled(enabled != 0);
+        {
+            handle->channelErrors[static_cast<size_t>(channel_index)].set(
+                "gvfg_set_channel_zero_copy_enabled rejected: enabled must be 0 or 1");
+            return GVFG_EINVAL;
+        }
+        return handle->setChannelZeroCopyEnabled(channel_index, enabled != 0);
     }
 
-    gvfg_status_t gvfg_get_zero_copy_enabled(gvfg_handle handle, int *out_enabled)
+    gvfg_status_t gvfg_get_channel_zero_copy_enabled(gvfg_handle handle,
+                                                      int channel_index,
+                                                      int *out_enabled)
     {
-        if (!handle || !out_enabled)
+        if (!handle || !out_enabled ||
+            (channel_index != GVFG_CHANNEL_0 && channel_index != GVFG_CHANNEL_1))
             return GVFG_EINVAL;
-        *out_enabled = handle->zeroCopyRequested ? 1 : 0;
+        *out_enabled = handle->zeroCopyRequested[static_cast<size_t>(channel_index)] ? 1 : 0;
         return GVFG_OK;
     }
 

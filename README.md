@@ -83,7 +83,7 @@ SDK 不再呼叫 `IOCTL_PCIES2MM_GET_VIDEO_DONE_INDEX`，也不會在新 IOCTL
 ```c
 gvfg_handle handle = NULL;
 gvfg_create(&handle);
-gvfg_set_zero_copy_enabled(handle, 1); /* 0: copy, 1: zero-copy */
+gvfg_set_channel_zero_copy_enabled(handle, GVFG_CHANNEL_0, 1);
 gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
 ```
 
@@ -100,8 +100,8 @@ gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
 `VIDEO_DMA` 為 frame capture 必需，SDK 固定註冊。Plug-in、Unplug 與
 Format-change driver event 則依 mask 註冊；關閉它們也會停用對應的自動訊號恢復。
 
-預設為 copy mode。Device open 後不可切換模式；如需切換，必須 destroy
-並重建 session。Zero-copy mode 仍使用相同的 `gvfg_read_channel_frame()` /
+每個 channel 預設為 copy mode。指定 channel open 後不可切換該路模式；
+另一條尚未 open 的 channel 仍可獨立選擇。Zero-copy mode 仍使用相同的 `gvfg_read_channel_frame()` /
 `gvfg_release_channel_frame()` ownership contract，每次成功 read 都必須 release。
 SDK 會在 open 時 enable zero-copy，並在 close/destroy 時 disable。
 
@@ -128,7 +128,9 @@ gvfg_stop(handle); /* stop both channels */
 runtime API 都明確要求 `channel_index`；不再保留隱含 selected-channel 的舊 API。
 
 `gvfg_qt_preview.exe` 只使用 public API，主畫面只顯示 input 與 Preview
-狀態；IRQ、DMA 等資訊只存在 internal diagnostic tool。
+狀態；CH0、CH1 各自有 Start、Stop 與獨立 Preview 視窗，可單獨測試，
+也可同時啟動。第二個 channel open/start 失敗時不會停止已運作的 channel。
+IRQ、DMA 等資訊只存在 internal diagnostic tool。
 
 ## Consumer Layout
 

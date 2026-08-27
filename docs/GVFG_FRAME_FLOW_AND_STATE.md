@@ -42,7 +42,7 @@ flowchart LR
 | `channelErrors[2]` | 每條 channel 最近一次詳細錯誤 |
 | `eventMasks[2]` | open 前設定的 channel event mask |
 | `currentIndex` | 此 handle 已綁定的 device index；`-1` 表示尚未綁定 |
-| `zeroCopyRequested` | open 前選擇的共用 delivery mode |
+| `zeroCopyRequested[2]` | 各 channel open 前獨立選擇的 delivery mode |
 
 ### `gvfg_channel_session_t`：公開 API facade
 

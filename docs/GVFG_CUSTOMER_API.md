@@ -36,7 +36,7 @@ bin/gvfg_preview.dll
 ```text
 gvfg_enumerate_devices
 -> gvfg_create
--> gvfg_set_zero_copy_enabled (optional, before open)
+-> gvfg_set_channel_zero_copy_enabled (optional, before channel open)
 -> gvfg_open_channel
 -> gvfg_start_channel
 -> 重複：
@@ -155,9 +155,10 @@ int main(void)
 - `gvfg_enumerate_devices(out_devices, max_devices)`：列舉裝置。傳入
   `NULL, 0` 可只查數量；回傳值是寫入數量或可用裝置數，無裝置時為 `0`。
 - `gvfg_create(&handle)`：建立 closed session。
-- `gvfg_set_zero_copy_enabled(handle, enabled)`：選用 zero-copy；只能在
-  `gvfg_open_channel()` 前呼叫，預設為關閉。
-- `gvfg_get_zero_copy_enabled(handle, &enabled)`：查詢 session 選擇的模式。
+- `gvfg_set_channel_zero_copy_enabled(handle, channel, enabled)`：替指定 channel
+  選用 zero-copy；只能在該 channel open 前呼叫，預設為關閉。
+- `gvfg_get_channel_zero_copy_enabled(handle, channel, &enabled)`：查詢指定
+  channel 選擇的模式。
 - `gvfg_open_channel(handle, device_index, channel)`：開啟列舉所得裝置，channel
   必須為 `GVFG_CHANNEL_0` 或 `GVFG_CHANNEL_1`。
 - `gvfg_set_channel_event_mask(handle, channel, mask)`：在 open 前設定指定 channel

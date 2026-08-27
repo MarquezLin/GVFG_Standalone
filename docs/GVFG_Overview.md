@@ -126,7 +126,7 @@ struct gvfg_handle_t
     };
 
     int currentIndex = -1;
-    bool zeroCopyRequested = false;
+    std::array<bool, 2> zeroCopyRequested{false, false};
 };
 ```
 

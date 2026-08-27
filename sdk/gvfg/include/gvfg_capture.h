@@ -287,17 +287,20 @@ extern "C"
     /*
      * Select driver zero-copy frame delivery.
      *
-     * Call after gvfg_create() and before gvfg_open_channel(). The default is
-     * disabled. Once a device is open the mode cannot be changed. In zero-copy
+     * Call after gvfg_create() and before opening the selected channel. The
+     * default is disabled independently for each channel. Once that channel is
+     * open its mode cannot be changed. In zero-copy
      * mode, gvfg_read_channel_frame() returns driver-owned memory and every
      * successful read must be paired with gvfg_release_channel_frame().
      */
-    GVFG_API gvfg_status_t gvfg_set_zero_copy_enabled(
+    GVFG_API gvfg_status_t gvfg_set_channel_zero_copy_enabled(
         _In_ gvfg_handle handle,
+        _In_ int channel_index,
         _In_ int enabled);
 
-    GVFG_API gvfg_status_t gvfg_get_zero_copy_enabled(
+    GVFG_API gvfg_status_t gvfg_get_channel_zero_copy_enabled(
         _In_ gvfg_handle handle,
+        _In_ int channel_index,
         _Out_ int *out_enabled);
 
     /*

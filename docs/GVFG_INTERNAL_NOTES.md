@@ -99,7 +99,7 @@ Zero-copy mode 資料路徑：
 
 ```text
 gvfg_create
--> gvfg_set_zero_copy_enabled(1)
+-> gvfg_set_channel_zero_copy_enabled(channel, 1)
 -> open channel 時 IOCTL_GIGA_ENABLE_FRAME_ZEROCOPY(channel)
 -> DMA complete event
 -> IOCTL_GIGA_ACQUIRE_VIDEO_FRAME_ZEROCOPY(channel, 0xFFFFFFFF)

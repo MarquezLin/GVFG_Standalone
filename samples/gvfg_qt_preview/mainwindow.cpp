@@ -160,7 +160,10 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowTitle(QStringLiteral("GVFG Preview Sample - SDK v%1")
                        .arg(QString::fromLatin1(gvfg_get_version())));
 #endif
-    previewWindow_ = new PreviewWindow();
+    previewWindows_[GVFG_CHANNEL_0] = new PreviewWindow();
+    previewWindows_[GVFG_CHANNEL_1] = new PreviewWindow();
+    previewWindows_[GVFG_CHANNEL_0]->setWindowTitle(QStringLiteral("GVFG Preview - CH0"));
+    previewWindows_[GVFG_CHANNEL_1]->setWindowTitle(QStringLiteral("GVFG Preview - CH1"));
     ui_->logEdit->setMaximumBlockCount(300);
     new LogHighlighter(ui_->logEdit->document());
     ui_->statusLabel->setWordWrap(true);
@@ -176,22 +179,40 @@ MainWindow::MainWindow(QWidget *parent)
                     closeDevice();
                 else
                     openDevice(); });
-    connect(ui_->showPreviewButton, &QPushButton::clicked, this, [this]()
-            { showPreviewWindow(); });
-    connect(ui_->fullscreenPreviewButton, &QPushButton::clicked, this, [this]()
-            { showFullscreenPreviewWindow(); });
-    connect(ui_->startButton, &QPushButton::clicked, this, [this]()
-            { startCapture(); });
-    connect(ui_->outputFormatCombo, &QComboBox::currentIndexChanged, this, [this](int)
+    connect(ui_->ch0PreviewButton, &QPushButton::clicked, this, [this]()
+            { showPreviewWindow(GVFG_CHANNEL_0); });
+    connect(ui_->ch1PreviewButton, &QPushButton::clicked, this, [this]()
+            { showPreviewWindow(GVFG_CHANNEL_1); });
+    connect(ui_->ch0FullscreenButton, &QPushButton::clicked, this, [this]()
+            { showFullscreenPreviewWindow(GVFG_CHANNEL_0); });
+    connect(ui_->ch1FullscreenButton, &QPushButton::clicked, this, [this]()
+            { showFullscreenPreviewWindow(GVFG_CHANNEL_1); });
+    connect(ui_->ch0StartButton, &QPushButton::clicked, this, [this]()
+            { startCapture(GVFG_CHANNEL_0); });
+    connect(ui_->ch1StartButton, &QPushButton::clicked, this, [this]()
+            { startCapture(GVFG_CHANNEL_1); });
+    connect(ui_->ch0OutputFormatCombo, &QComboBox::currentIndexChanged, this, [this](int)
             {
-                if (handle_ && !captureRunning_.load(std::memory_order_acquire))
+                if (channels_[GVFG_CHANNEL_0].opened &&
+                    !channels_[GVFG_CHANNEL_0].running.load(std::memory_order_acquire))
                 {
-                    applyOutputFormat();
+                    applyOutputFormat(GVFG_CHANNEL_0);
                     updateSignalStatus();
                 }
             });
-    connect(ui_->stopButton, &QPushButton::clicked, this, [this]()
-            { stopCapture(); });
+    connect(ui_->ch1OutputFormatCombo, &QComboBox::currentIndexChanged, this, [this](int)
+            {
+                if (channels_[GVFG_CHANNEL_1].opened &&
+                    !channels_[GVFG_CHANNEL_1].running.load(std::memory_order_acquire))
+                {
+                    applyOutputFormat(GVFG_CHANNEL_1);
+                    updateSignalStatus();
+                }
+            });
+    connect(ui_->ch0StopButton, &QPushButton::clicked, this, [this]()
+            { stopCapture(GVFG_CHANNEL_0); });
+    connect(ui_->ch1StopButton, &QPushButton::clicked, this, [this]()
+            { stopCapture(GVFG_CHANNEL_1); });
     connect(runtimeStatusTimer_, &QTimer::timeout, this, [this]()
             {
                 processPendingEvents();
@@ -210,7 +231,8 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     closeDevice();
-    delete previewWindow_;
+    delete previewWindows_[GVFG_CHANNEL_0];
+    delete previewWindows_[GVFG_CHANNEL_1];
     delete ui_;
 }
 
@@ -222,8 +244,9 @@ QWidget *createMainWindow()
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     closeDevice();
-    if (previewWindow_)
-        previewWindow_->closePreview();
+    for (PreviewWindow *window : previewWindows_)
+        if (window)
+            window->closePreview();
 
     QWidget::closeEvent(event);
 }
@@ -243,11 +266,7 @@ void MainWindow::refreshDevices()
     {
         const QString name = QString::fromUtf8(devices_[i].name);
         const QString displayName = name.isEmpty() ? QStringLiteral("GVFG Capture") : name;
-        for (int channel = GVFG_CHANNEL_0; channel <= GVFG_CHANNEL_1; ++channel)
-        {
-            const int selection = i * 2 + channel;
-            ui_->deviceCombo->addItem(QStringLiteral("%1 - CH%2").arg(displayName).arg(channel), selection);
-        }
+        ui_->deviceCombo->addItem(displayName, i);
     }
 
     if (deviceCount_ <= 0)
@@ -261,30 +280,34 @@ void MainWindow::refreshDevices()
     }
 }
 
-void MainWindow::showPreviewWindow()
+void MainWindow::showPreviewWindow(int channel)
 {
-    if (!captureRunning_.load(std::memory_order_acquire) ||
-        !frameAvailable_.load(std::memory_order_acquire))
+    ChannelRuntime &runtime = channels_[channel];
+    if (!runtime.running.load(std::memory_order_acquire) ||
+        !runtime.frameAvailable.load(std::memory_order_acquire))
         return;
 
-    updatePreviewSourceSize();
-    previewWindow_->showPreview();
+    if (runtime.haveCachedSignalStatus)
+        updatePreviewSourceSize(channel, runtime.cachedSignalStatus);
+    previewWindows_[channel]->showPreview();
 
-    if (handle_ && !applyPreview())
-        appendLog(QStringLiteral("Show Preview failed: unable to update preview window"));
+    if (handle_ && !applyPreview(channel))
+        appendLog(QStringLiteral("CH%1 Show Preview failed: unable to update preview window").arg(channel));
 }
 
-void MainWindow::showFullscreenPreviewWindow()
+void MainWindow::showFullscreenPreviewWindow(int channel)
 {
-    if (!captureRunning_.load(std::memory_order_acquire) ||
-        !frameAvailable_.load(std::memory_order_acquire))
+    ChannelRuntime &runtime = channels_[channel];
+    if (!runtime.running.load(std::memory_order_acquire) ||
+        !runtime.frameAvailable.load(std::memory_order_acquire))
         return;
 
-    updatePreviewSourceSize();
-    previewWindow_->showFullscreenPreview();
+    if (runtime.haveCachedSignalStatus)
+        updatePreviewSourceSize(channel, runtime.cachedSignalStatus);
+    previewWindows_[channel]->showFullscreenPreview();
 
-    if (handle_ && !applyPreview())
-        appendLog(QStringLiteral("Fullscreen Preview failed: unable to update preview window"));
+    if (handle_ && !applyPreview(channel))
+        appendLog(QStringLiteral("CH%1 Fullscreen Preview failed: unable to update preview window").arg(channel));
 }
 
 bool MainWindow::openDevice()
@@ -307,41 +330,48 @@ bool MainWindow::openDevice()
         return false;
     }
 
-    const bool zeroCopyEnabled = ui_->zeroCopyCheckBox->isChecked();
-    st = gvfg_set_zero_copy_enabled(handle_, zeroCopyEnabled ? 1 : 0);
-    if (st != GVFG_OK)
-    {
-        showError(QStringLiteral("gvfg_set_zero_copy_enabled"), st);
-        closeDevice();
-        return false;
-    }
-
-    const int selection = ui_->deviceCombo->currentData().toInt();
-    const int deviceIndex = selection / 2;
-    const int channelIndex = selection % 2;
-    selectedChannel_ = channelIndex;
-    st = gvfg_open_channel(handle_, deviceIndex, channelIndex);
-    if (st != GVFG_OK)
-    {
-        showError(QStringLiteral("gvfg_open_channel"), st);
-        closeDevice();
-        return false;
-    }
-    if (!applyOutputFormat())
-    {
-        closeDevice();
-        return false;
-    }
+    selectedDeviceIndex_ = ui_->deviceCombo->currentData().toInt();
 
     lastSignalStatusText_.clear();
-    appendLog(QStringLiteral("Opened device index %1 CH%2 | mode=%3")
-                  .arg(deviceIndex)
-                  .arg(channelIndex)
-                  .arg(zeroCopyEnabled ? QStringLiteral("zero-copy") : QStringLiteral("copy")));
-    appendLog(QStringLiteral("Signal monitoring active"));
-    updateSignalStatus();
+    appendLog(QStringLiteral("Created device session for index %1").arg(selectedDeviceIndex_));
     runtimeStatusTimer_->start();
+    updateSignalStatus(false);
     updateUiState();
+    return true;
+}
+
+bool MainWindow::openChannel(int channel)
+{
+    ChannelRuntime &runtime = channels_[channel];
+    if (runtime.opened)
+        return applyOutputFormat(channel);
+    if (!handle_ && !openDevice())
+        return false;
+
+    const bool zeroCopyEnabled = channel == GVFG_CHANNEL_0
+                                     ? ui_->ch0ZeroCopyCheckBox->isChecked()
+                                     : ui_->ch1ZeroCopyCheckBox->isChecked();
+    gvfg_status_t status = gvfg_set_channel_zero_copy_enabled(
+        handle_, channel, zeroCopyEnabled ? 1 : 0);
+    if (status != GVFG_OK)
+    {
+        showError(QStringLiteral("gvfg_set_channel_zero_copy_enabled"), status, channel);
+        return false;
+    }
+    status = gvfg_open_channel(handle_, selectedDeviceIndex_, channel);
+    if (status != GVFG_OK)
+    {
+        showError(QStringLiteral("gvfg_open_channel"), status, channel);
+        return false;
+    }
+    runtime.opened = true;
+    if (!applyOutputFormat(channel))
+        return false;
+
+    appendLog(QStringLiteral("Opened device index %1 CH%2 | mode=%3")
+                  .arg(selectedDeviceIndex_).arg(channel)
+                  .arg(zeroCopyEnabled ? QStringLiteral("zero-copy") : QStringLiteral("copy")));
+    updateSignalStatus();
     return true;
 }
 
@@ -350,11 +380,14 @@ void MainWindow::closeDevice()
     if (runtimeStatusTimer_)
         runtimeStatusTimer_->stop();
 
-    stopCapture();
-    if (previewHandle_)
+    stopAllCaptures();
+    for (ChannelRuntime &channel : channels_)
     {
-        gvfg_preview_destroy(previewHandle_);
-        previewHandle_ = nullptr;
+        if (channel.previewHandle)
+        {
+            gvfg_preview_destroy(channel.previewHandle);
+            channel.previewHandle = nullptr;
+        }
     }
 
     if (handle_)
@@ -366,156 +399,169 @@ void MainWindow::closeDevice()
 
     ui_->statusLabel->setText(QStringLiteral("Idle"));
     lastSignalStatusText_.clear();
-    lastLoggedInputStatus_.clear();
-    cachedSignalStatus_ = {};
-    haveCachedSignalStatus_ = false;
+    selectedDeviceIndex_ = -1;
+    for (ChannelRuntime &channel : channels_)
+    {
+        channel.opened = false;
+        channel.cachedSignalStatus = {};
+        channel.haveCachedSignalStatus = false;
+        channel.lastLoggedInputStatus.clear();
+    }
     updateUiState();
 }
 
-bool MainWindow::applyOutputFormat()
+bool MainWindow::applyOutputFormat(int channel)
 {
-    if (!handle_ || captureRunning_.load(std::memory_order_acquire))
+    if (!handle_ || !channels_[channel].opened ||
+        channels_[channel].running.load(std::memory_order_acquire))
         return false;
 
-    const gvfg_pixel_format_t format = ui_->outputFormatCombo->currentIndex() == 1
+    const int formatIndex = channel == GVFG_CHANNEL_0
+                                ? ui_->ch0OutputFormatCombo->currentIndex()
+                                : ui_->ch1OutputFormatCombo->currentIndex();
+    const gvfg_pixel_format_t format = formatIndex == 1
                                            ? GVFG_PIXFMT_Y210
                                            : GVFG_PIXFMT_YUY2;
-    const gvfg_status_t status = gvfg_set_channel_video_format(handle_, selectedChannel_, format);
+    const gvfg_status_t status = gvfg_set_channel_video_format(handle_, channel, format);
     if (status != GVFG_OK)
     {
-        showError(QStringLiteral("set output format register"), status);
+        showError(QStringLiteral("set output format register"), status, channel);
         return false;
     }
-    appendLog(QStringLiteral("Output format | %1")
+    appendLog(QStringLiteral("CH%1 Output format | %2")
+                  .arg(channel)
                   .arg(format == GVFG_PIXFMT_Y210 ? QStringLiteral("Y210") : QStringLiteral("YUY2")));
     return true;
 }
 
-void MainWindow::startCapture()
+void MainWindow::startCapture(int channelIndex)
 {
-    if (captureRunning_)
+    ChannelRuntime &channel = channels_[channelIndex];
+    if (channel.running.load(std::memory_order_acquire))
         return;
 
-    if (!handle_ && !openDevice())
+    if (!openChannel(channelIndex))
         return;
 
     // Consume queued signal events first. gvfg_start_channel() performs the
     // single authoritative hardware revalidation; preview setup reuses the
     // most recent UI cache instead of issuing another register query here.
     processPendingEvents();
-    if (!haveCachedSignalStatus_ || !cachedSignalStatus_.connected)
+    if (!channel.haveCachedSignalStatus || !channel.cachedSignalStatus.connected)
     {
-        appendLog(QStringLiteral("Start skipped: no input signal"));
+        appendLog(QStringLiteral("CH%1 Start skipped: no input signal").arg(channelIndex));
         return;
     }
 
-    frameAvailable_.store(false, std::memory_order_release);
-    updatePreviewSourceSize(cachedSignalStatus_);
-    previewWindow_->showPreview();
-    if (!applyPreview())
-        return;
-
-    if (cachedSignalStatus_.connected &&
-        gvfg_preview_prepare(previewHandle_,
-                             cachedSignalStatus_.width,
-                             cachedSignalStatus_.height,
-                             cachedSignalStatus_.bit_depth) != GVFG_PREVIEW_OK)
+    channel.frameAvailable.store(false, std::memory_order_release);
+    updatePreviewSourceSize(channelIndex, channel.cachedSignalStatus);
+    previewWindows_[channelIndex]->showPreview();
+    if (!applyPreview(channelIndex))
     {
-        appendLog(QStringLiteral("Preview prewarm failed; first frame may initialize GPU resources"));
+        previewWindows_[channelIndex]->closePreview();
+        return;
+    }
+
+    if (gvfg_preview_prepare(channel.previewHandle,
+                             channel.cachedSignalStatus.width,
+                             channel.cachedSignalStatus.height,
+                             channel.cachedSignalStatus.bit_depth) != GVFG_PREVIEW_OK)
+    {
+        appendLog(QStringLiteral("CH%1 Preview prewarm failed; first frame may initialize GPU resources").arg(channelIndex));
     }
 
 #if GVFG_INTERNAL_DIAGNOSTICS
     appendLog(QStringLiteral("FPGA signal before stream start"));
 #endif
 
-    const gvfg_status_t st = gvfg_start_channel(handle_, selectedChannel_);
+    const gvfg_status_t st = gvfg_start_channel(handle_, channelIndex);
     if (st != GVFG_OK)
     {
-        showError(QStringLiteral("gvfg_start"), st);
+        showError(QStringLiteral("gvfg_start_channel"), st, channelIndex);
+        previewWindows_[channelIndex]->closePreview();
         updateSignalStatus();
         updateUiState();
         return;
     }
 
-    previewFailureCount_ = 0;
-    previewCallAverageMs_.store(0.0, std::memory_order_relaxed);
-    previewCallMaximumMs_.store(0.0, std::memory_order_relaxed);
-    previewCallWindowMaximumMs_.store(0.0, std::memory_order_relaxed);
-    previewCallSamples_.store(0, std::memory_order_relaxed);
-    getFrameAverageMs_.store(0.0, std::memory_order_relaxed);
-    getFrameMaximumMs_.store(0.0, std::memory_order_relaxed);
-    getFrameWindowMaximumMs_.store(0.0, std::memory_order_relaxed);
-    getFrameSamples_.store(0, std::memory_order_relaxed);
+    channel.previewFailureCount = 0;
+    channel.previewCallAverageMs.store(0.0, std::memory_order_relaxed);
+    channel.previewCallMaximumMs.store(0.0, std::memory_order_relaxed);
+    channel.previewCallWindowMaximumMs.store(0.0, std::memory_order_relaxed);
+    channel.previewCallSamples.store(0, std::memory_order_relaxed);
+    channel.getFrameAverageMs.store(0.0, std::memory_order_relaxed);
+    channel.getFrameMaximumMs.store(0.0, std::memory_order_relaxed);
+    channel.getFrameWindowMaximumMs.store(0.0, std::memory_order_relaxed);
+    channel.getFrameSamples.store(0, std::memory_order_relaxed);
 #if GVFG_INTERNAL_DIAGNOSTICS
-    haveDebugBaseline_ = false;
-    lastDebugDmaErrors_ = 0;
+    channel.haveDebugBaseline = false;
+    channel.lastDebugDmaErrors = 0;
 #endif
-    captureStop_.store(false, std::memory_order_release);
-    captureRunning_ = true;
-    captureThread_ = std::thread([this]()
-                                 { captureReadLoop(); });
+    channel.stopRequested.store(false, std::memory_order_release);
+    channel.running.store(true, std::memory_order_release);
+    channel.captureThread = std::thread([this, channelIndex]()
+                                        { captureReadLoop(channelIndex); });
     updateUiState();
-    appendLog(QStringLiteral("Started capture"));
+    appendLog(QStringLiteral("CH%1 Started capture").arg(channelIndex));
     updateSignalStatus(false);
 }
 
-void MainWindow::stopCapture()
+void MainWindow::stopCapture(int channelIndex)
 {
-    if (handle_ && captureRunning_)
+    ChannelRuntime &channel = channels_[channelIndex];
+    if (handle_ && channel.running.load(std::memory_order_acquire))
     {
-        captureStop_.store(true, std::memory_order_release);
-        joinCaptureThread();
-        gvfg_stop(handle_);
-        captureRunning_ = false;
-        frameAvailable_.store(false, std::memory_order_release);
-        if (previewWindow_)
-            previewWindow_->closePreview();
-        appendLog(QStringLiteral("Stopped capture"));
+        channel.stopRequested.store(true, std::memory_order_release);
+        joinCaptureThread(channelIndex);
+        gvfg_stop_channel(handle_, channelIndex);
+        channel.running.store(false, std::memory_order_release);
+        channel.frameAvailable.store(false, std::memory_order_release);
+        if (previewWindows_[channelIndex])
+            previewWindows_[channelIndex]->closePreview();
+        appendLog(QStringLiteral("CH%1 Stopped capture").arg(channelIndex));
         updateSignalStatus();
     }
 
-    frameAvailable_.store(false, std::memory_order_release);
+    channel.frameAvailable.store(false, std::memory_order_release);
     updateUiState();
 }
 
-bool MainWindow::applyPreview()
+void MainWindow::stopAllCaptures()
 {
-    if (!previewHandle_)
+    stopCapture(GVFG_CHANNEL_0);
+    stopCapture(GVFG_CHANNEL_1);
+}
+
+bool MainWindow::applyPreview(int channelIndex)
+{
+    ChannelRuntime &channel = channels_[channelIndex];
+    if (!channel.previewHandle)
     {
-        const gvfg_preview_status_t st = gvfg_preview_create(&previewHandle_);
-        if (st != GVFG_PREVIEW_OK || !previewHandle_)
+        const gvfg_preview_status_t st = gvfg_preview_create(&channel.previewHandle);
+        if (st != GVFG_PREVIEW_OK || !channel.previewHandle)
         {
-            appendLog(QStringLiteral("Preview setup failed: %1")
-                          .arg(QString::fromUtf8(gvfg_preview_strerror(st))));
-            previewHandle_ = nullptr;
+            appendLog(QStringLiteral("CH%1 Preview setup failed: %2")
+                          .arg(channelIndex).arg(QString::fromUtf8(gvfg_preview_strerror(st))));
+            channel.previewHandle = nullptr;
             return false;
         }
     }
 
-    const gvfg_preview_status_t st = gvfg_preview_attach_window(previewHandle_, previewWindow_->nativePreviewHandle());
+    const gvfg_preview_status_t st = gvfg_preview_attach_window(
+        channel.previewHandle, previewWindows_[channelIndex]->nativePreviewHandle());
     if (st != GVFG_PREVIEW_OK)
     {
-        appendLog(QStringLiteral("Preview setup failed: %1")
-                      .arg(QString::fromUtf8(gvfg_preview_strerror(st))));
+        appendLog(QStringLiteral("CH%1 Preview setup failed: %2")
+                      .arg(channelIndex).arg(QString::fromUtf8(gvfg_preview_strerror(st))));
         return false;
     }
     return true;
 }
 
-void MainWindow::updatePreviewSourceSize(const gvfg_signal_status_t &signal)
+void MainWindow::updatePreviewSourceSize(int channel, const gvfg_signal_status_t &signal)
 {
     if (signal.width > 0 && signal.height > 0)
-        previewWindow_->setSourceSize(signal.width, signal.height);
-}
-
-void MainWindow::updatePreviewSourceSize()
-{
-    if (!handle_)
-        return;
-
-    gvfg_signal_status_t signal{};
-    if (gvfg_get_channel_signal_status(handle_, selectedChannel_, &signal) == GVFG_OK)
-        updatePreviewSourceSize(signal);
+        previewWindows_[channel]->setSourceSize(signal.width, signal.height);
 }
 
 void MainWindow::processPendingEvents()
@@ -523,24 +569,29 @@ void MainWindow::processPendingEvents()
     if (!handle_)
         return;
 
-    gvfg_event_t event{};
-    event.struct_size = sizeof(event);
-    while (gvfg_poll_channel_event(handle_, selectedChannel_, &event, 0) == GVFG_OK)
+    for (int channel = GVFG_CHANNEL_0; channel <= GVFG_CHANNEL_1; ++channel)
     {
-        const auto eventType = static_cast<gvfg_event_type_t>(event.type);
-        appendLog(QStringLiteral("EVENT %1").arg(eventTypeText(eventType)));
-
-        if (eventType == GVFG_EVENT_SIGNAL_CONNECTED ||
-            eventType == GVFG_EVENT_SIGNAL_DISCONNECTED ||
-            eventType == GVFG_EVENT_FORMAT_CHANGE_BEGIN ||
-            eventType == GVFG_EVENT_STREAM_READY)
-            updateSignalStatus();
-
-        if (eventType == GVFG_EVENT_SIGNAL_DISCONNECTED && previewHandle_)
-            gvfg_preview_clear(previewHandle_);
-
-        event = {};
+        if (!channels_[channel].opened)
+            continue;
+        gvfg_event_t event{};
         event.struct_size = sizeof(event);
+        while (gvfg_poll_channel_event(handle_, channel, &event, 0) == GVFG_OK)
+        {
+            const auto eventType = static_cast<gvfg_event_type_t>(event.type);
+            appendLog(QStringLiteral("CH%1 EVENT %2").arg(channel).arg(eventTypeText(eventType)));
+
+            if (eventType == GVFG_EVENT_SIGNAL_CONNECTED ||
+                eventType == GVFG_EVENT_SIGNAL_DISCONNECTED ||
+                eventType == GVFG_EVENT_FORMAT_CHANGE_BEGIN ||
+                eventType == GVFG_EVENT_STREAM_READY)
+                updateSignalStatus();
+
+            if (eventType == GVFG_EVENT_SIGNAL_DISCONNECTED && channels_[channel].previewHandle)
+                gvfg_preview_clear(channels_[channel].previewHandle);
+
+            event = {};
+            event.struct_size = sizeof(event);
+        }
     }
 }
 
@@ -549,145 +600,117 @@ void MainWindow::updateSignalStatus(bool queryHardware)
     if (!handle_)
         return;
 
-    gvfg_signal_status_t signal{};
-    if (queryHardware)
-    {
-        if (gvfg_get_channel_signal_status(handle_, selectedChannel_, &signal) != GVFG_OK)
-            return;
-        cachedSignalStatus_ = signal;
-        haveCachedSignalStatus_ = true;
-    }
-    else
-    {
-        if (!haveCachedSignalStatus_)
-            return;
-        signal = cachedSignalStatus_;
-    }
-
-    const QString inputStatus = signal.connected
-                                    ? QStringLiteral("CH%1 Connected | %2")
-                                          .arg(signal.channel)
-                                          .arg(signalFrameText(signal))
-                                    : QStringLiteral("CH%1 No signal")
-                                          .arg(signal.channel);
-    if (inputStatus != lastLoggedInputStatus_)
-    {
-        appendLog(QStringLiteral("Input status | %1").arg(inputStatus));
-        lastLoggedInputStatus_ = inputStatus;
-    }
-
-    gvfg_debug_backend_stats_t backendStats{};
-    const bool haveBackendStats = gvfg_debug_get_channel_backend_stats(handle_, selectedChannel_, &backendStats) == GVFG_OK;
-    if (previewWindow_->isVisible())
-        updatePreviewSourceSize(signal);
-
-    gvfg_preview_info_t previewInfo{};
-    const bool previewInfoOk = previewHandle_ &&
-                               gvfg_preview_get_info(previewHandle_, &previewInfo) == GVFG_PREVIEW_OK &&
-                               previewInfo.active;
-    gvfg_preview_stats_t previewStats{};
-    const bool previewStatsOk = previewHandle_ &&
-                                gvfg_preview_get_stats(previewHandle_, &previewStats) == GVFG_PREVIEW_OK;
-    const QString previewFps = previewStatsOk && previewStats.present_fps > 0.0
-                                   ? QString::number(previewStats.present_fps, 'f', 2)
-                                   : QStringLiteral("--");
-    const QString previewFrame = previewInfoOk
-                                     ? frameText(true,
-                                                 previewInfo.width,
-                                                 previewInfo.height,
-                                                 previewInfo.pixel_format,
-                                                 previewInfo.bit_depth)
-                                     : QStringLiteral("--");
-    const QString previewState = !captureRunning_
-                                     ? QStringLiteral("Stopped")
-                                     : previewFps == QStringLiteral("--")
-                                         ? QStringLiteral("Measuring")
-                                          : QStringLiteral("%1 FPS").arg(previewFps);
-    const double previewCallAverageMs = previewCallAverageMs_.load(std::memory_order_relaxed);
-    const double previewCallMaximumMs = previewCallMaximumMs_.load(std::memory_order_relaxed);
-    const double previewCallWindowMaximumMs = previewCallWindowMaximumMs_.load(std::memory_order_relaxed);
-    const uint64_t previewCallSamples = previewCallSamples_.load(std::memory_order_relaxed);
-    const double getFrameAverageMs = getFrameAverageMs_.load(std::memory_order_relaxed);
-    const double getFrameMaximumMs = getFrameMaximumMs_.load(std::memory_order_relaxed);
-    const double getFrameWindowMaximumMs = getFrameWindowMaximumMs_.load(std::memory_order_relaxed);
-    const uint64_t getFrameSamples = getFrameSamples_.load(std::memory_order_relaxed);
     QStringList statusLines;
-    statusLines << (signal.connected
-                        ? QStringLiteral("Input   | CH%1 | Connected | %2")
-                              .arg(signal.channel)
-                              .arg(signalFrameText(signal))
-                        : QStringLiteral("Input   | CH%1 | No signal")
-                              .arg(signal.channel));
-    statusLines << QStringLiteral("Mode    | %1")
-                       .arg(ui_->zeroCopyCheckBox->isChecked()
-                                ? QStringLiteral("Zero-copy")
-                                : QStringLiteral("Copy"));
-    statusLines << (previewInfoOk
-                        ? previewCallSamples > 0
-                              ? QStringLiteral("Preview | %1 | %2 | Submit avg=%3 max300=%4 max=%5 ms/frame samples=%6")
-                                    .arg(previewState, previewFrame)
-                                    .arg(previewCallAverageMs, 0, 'f', 3)
-                                    .arg(previewCallWindowMaximumMs, 0, 'f', 3)
-                                    .arg(previewCallMaximumMs, 0, 'f', 3)
-                                    .arg(static_cast<qulonglong>(previewCallSamples))
-                              : QStringLiteral("Preview | %1 | %2 | Submit measuring")
-                                    .arg(previewState, previewFrame)
-                        : QStringLiteral("Preview | Inactive"));
-    statusLines << (haveBackendStats && backendStats.get_frame_timing_samples >= 300
-                        ? QStringLiteral("%1 | avg=%2 max300=%3 max=%4 us/frame samples=%5")
-                              .arg(backendStats.get_frame_zero_copy
-                                       ? QStringLiteral("ZeroCopy Acquire")
-                                       : QStringLiteral("Copy GetFrame"))
-                              .arg(backendStats.get_frame_timing_average_us, 0, 'f', 3)
-                              .arg(backendStats.get_frame_timing_max300_us, 0, 'f', 3)
-                              .arg(backendStats.get_frame_timing_max_us, 0, 'f', 3)
-                              .arg(static_cast<qulonglong>(backendStats.get_frame_timing_samples))
-                        : QStringLiteral("Driver GetFrame | measuring"));
-    statusLines << (getFrameSamples > 0
-                        ? QStringLiteral("Read Frame Call | avg=%1 max300=%2 max=%3 ms/frame samples=%4")
-                              .arg(getFrameAverageMs, 0, 'f', 3)
-                              .arg(getFrameWindowMaximumMs, 0, 'f', 3)
-                              .arg(getFrameMaximumMs, 0, 'f', 3)
-                              .arg(static_cast<qulonglong>(getFrameSamples))
-                        : QStringLiteral("Read Frame Call | measuring"));
 #if GVFG_INTERNAL_DIAGNOSTICS
-    statusLines << (haveBackendStats
-                        ? QStringLiteral("Capture| status=%1 dma_errors=%2 no_frame_waits=%3")
-                              .arg(captureStatusText(backendStats, signal.connected != 0))
-                              .arg(static_cast<qulonglong>(backendStats.backend_dma_errors))
-                              .arg(static_cast<qulonglong>(backendStats.backend_wait_timeouts))
-                        : QStringLiteral("Capture| unavailable"));
-    if (haveBackendStats)
-    {
-        statusLines << QStringLiteral("Flow    | irqs=%1 captured=%2 app_read=%3")
-                           .arg(static_cast<qulonglong>(backendStats.backend_interrupt_count))
-                           .arg(valueOrDash(backendStats.backend_frames_captured))
-                           .arg(valueOrDash(backendStats.backend_frames_delivered));
-        statusLines << QStringLiteral("Frame   | newest/read=%1/%2")
-                           .arg(valueOrDash(backendStats.backend_latest_sequence),
-                                valueOrDash(backendStats.backend_delivered_sequence));
-    }
-
     bool diagnosticProblemDetected = false;
-    if (haveBackendStats)
+#endif
+    for (int channelIndex = GVFG_CHANNEL_0; channelIndex <= GVFG_CHANNEL_1; ++channelIndex)
     {
-        if (haveDebugBaseline_)
+        ChannelRuntime &channel = channels_[channelIndex];
+        if (!channel.opened)
         {
-            if (backendStats.backend_dma_errors > lastDebugDmaErrors_)
+            const bool zeroCopy = channelIndex == GVFG_CHANNEL_0
+                                      ? ui_->ch0ZeroCopyCheckBox->isChecked()
+                                      : ui_->ch1ZeroCopyCheckBox->isChecked();
+            statusLines << QStringLiteral("CH%1 | Not opened | %2")
+                               .arg(channelIndex)
+                               .arg(zeroCopy ? QStringLiteral("Zero-copy") : QStringLiteral("Copy"));
+            continue;
+        }
+        if (queryHardware)
+        {
+            gvfg_signal_status_t signal{};
+            if (gvfg_get_channel_signal_status(handle_, channelIndex, &signal) == GVFG_OK)
             {
-                const uint64_t delta = backendStats.backend_dma_errors - lastDebugDmaErrors_;
-                appendLog(QStringLiteral("ERROR DMA failures +%1, total=%2")
-                              .arg(valueOrDash(delta),
+                channel.cachedSignalStatus = signal;
+                channel.haveCachedSignalStatus = true;
+            }
+        }
+        if (!channel.haveCachedSignalStatus)
+        {
+            statusLines << QStringLiteral("CH%1 | Signal unavailable").arg(channelIndex);
+            continue;
+        }
+
+        const gvfg_signal_status_t &signal = channel.cachedSignalStatus;
+        const QString inputStatus = signal.connected
+                                        ? QStringLiteral("CH%1 Connected | %2").arg(channelIndex).arg(signalFrameText(signal))
+                                        : QStringLiteral("CH%1 No signal").arg(channelIndex);
+        if (inputStatus != channel.lastLoggedInputStatus)
+        {
+            appendLog(QStringLiteral("Input status | %1").arg(inputStatus));
+            channel.lastLoggedInputStatus = inputStatus;
+        }
+        if (previewWindows_[channelIndex]->isVisible())
+            updatePreviewSourceSize(channelIndex, signal);
+
+        gvfg_preview_info_t previewInfo{};
+        const bool previewInfoOk = channel.previewHandle &&
+                                   gvfg_preview_get_info(channel.previewHandle, &previewInfo) == GVFG_PREVIEW_OK &&
+                                   previewInfo.active;
+        gvfg_preview_stats_t previewStats{};
+        const bool previewStatsOk = channel.previewHandle &&
+                                    gvfg_preview_get_stats(channel.previewHandle, &previewStats) == GVFG_PREVIEW_OK;
+        const QString previewFps = previewStatsOk && previewStats.present_fps > 0.0
+                                       ? QString::number(previewStats.present_fps, 'f', 2)
+                                       : QStringLiteral("--");
+        const QString previewFrame = previewInfoOk
+                                         ? frameText(true, previewInfo.width, previewInfo.height,
+                                                     previewInfo.pixel_format, previewInfo.bit_depth)
+                                         : QStringLiteral("--");
+        const bool zeroCopy = channelIndex == GVFG_CHANNEL_0
+                                  ? ui_->ch0ZeroCopyCheckBox->isChecked()
+                                  : ui_->ch1ZeroCopyCheckBox->isChecked();
+        statusLines << QStringLiteral("CH%1 | %2 | %3 | %4")
+                           .arg(channelIndex)
+                           .arg(channel.running.load(std::memory_order_acquire) ? QStringLiteral("Running") : QStringLiteral("Stopped"))
+                           .arg(signalFrameText(signal))
+                           .arg(zeroCopy ? QStringLiteral("Zero-copy") : QStringLiteral("Copy"));
+        statusLines << QStringLiteral("CH%1 Preview | %2 FPS | %3")
+                           .arg(channelIndex).arg(previewFps, previewFrame);
+        const uint64_t readSamples = channel.getFrameSamples.load(std::memory_order_relaxed);
+        statusLines << (readSamples > 0
+                            ? QStringLiteral("CH%1 Read | avg=%2 max300=%3 max=%4 ms samples=%5")
+                                  .arg(channelIndex)
+                                  .arg(channel.getFrameAverageMs.load(std::memory_order_relaxed), 0, 'f', 3)
+                                  .arg(channel.getFrameWindowMaximumMs.load(std::memory_order_relaxed), 0, 'f', 3)
+                                  .arg(channel.getFrameMaximumMs.load(std::memory_order_relaxed), 0, 'f', 3)
+                                  .arg(static_cast<qulonglong>(readSamples))
+                            : QStringLiteral("CH%1 Read | measuring").arg(channelIndex));
+
+#if GVFG_INTERNAL_DIAGNOSTICS
+        gvfg_debug_backend_stats_t backendStats{};
+        if (gvfg_debug_get_channel_backend_stats(handle_, channelIndex, &backendStats) == GVFG_OK)
+        {
+            statusLines << (backendStats.get_frame_timing_samples >= 300
+                                ? QStringLiteral("CH%1 %2 | avg=%3 max300=%4 max=%5 us samples=%6")
+                                      .arg(channelIndex)
+                                      .arg(backendStats.get_frame_zero_copy
+                                               ? QStringLiteral("ZeroCopy Acquire")
+                                               : QStringLiteral("Copy GetFrame"))
+                                      .arg(backendStats.get_frame_timing_average_us, 0, 'f', 3)
+                                      .arg(backendStats.get_frame_timing_max300_us, 0, 'f', 3)
+                                      .arg(backendStats.get_frame_timing_max_us, 0, 'f', 3)
+                                      .arg(static_cast<qulonglong>(backendStats.get_frame_timing_samples))
+                                : QStringLiteral("CH%1 Driver GetFrame | measuring").arg(channelIndex));
+            statusLines << QStringLiteral("CH%1 Capture | status=%2 dma_errors=%3 no_frame_waits=%4")
+                               .arg(channelIndex)
+                               .arg(captureStatusText(backendStats, signal.connected != 0))
+                               .arg(static_cast<qulonglong>(backendStats.backend_dma_errors))
+                               .arg(static_cast<qulonglong>(backendStats.backend_wait_timeouts));
+            if (channel.haveDebugBaseline && backendStats.backend_dma_errors > channel.lastDebugDmaErrors)
+            {
+                appendLog(QStringLiteral("CH%1 ERROR DMA failures +%2, total=%3")
+                              .arg(channelIndex)
+                              .arg(valueOrDash(backendStats.backend_dma_errors - channel.lastDebugDmaErrors),
                                    valueOrDash(backendStats.backend_dma_errors)));
                 diagnosticProblemDetected = true;
             }
+            channel.lastDebugDmaErrors = backendStats.backend_dma_errors;
+            channel.haveDebugBaseline = true;
         }
-
-        lastDebugDmaErrors_ = backendStats.backend_dma_errors;
-        haveDebugBaseline_ = true;
-    }
-
 #endif
+    }
 
     const QString statusText = statusLines.join(QLatin1Char('\n'));
     const bool changed = lastSignalStatusText_ != statusText;
@@ -707,29 +730,37 @@ void MainWindow::updateSignalStatus(bool queryHardware)
 void MainWindow::updateUiState()
 {
     const bool deviceOpen = handle_ != nullptr;
-    const bool viewAvailable = captureRunning_.load(std::memory_order_acquire) &&
-                               frameAvailable_.load(std::memory_order_acquire);
+    const bool ch0Running = channels_[0].running.load(std::memory_order_acquire);
+    const bool ch1Running = channels_[1].running.load(std::memory_order_acquire);
+    const bool anyRunning = ch0Running || ch1Running;
+    const bool deviceSelected = ui_->deviceCombo->currentData().toInt() >= 0;
     ui_->openButton->setText(deviceOpen ? QStringLiteral("Close Device") : QStringLiteral("Open Device"));
-    ui_->openButton->setEnabled(!captureRunning_);
-    const bool signalConnected = haveCachedSignalStatus_ && cachedSignalStatus_.connected != 0;
-    ui_->startButton->setEnabled(deviceOpen && signalConnected && !captureRunning_);
-    ui_->stopButton->setEnabled(captureRunning_);
-    ui_->showPreviewButton->setEnabled(viewAvailable);
-    ui_->fullscreenPreviewButton->setEnabled(viewAvailable);
-    ui_->refreshButton->setEnabled(!deviceOpen && !captureRunning_);
-    ui_->deviceCombo->setEnabled(!deviceOpen && !captureRunning_);
-    ui_->outputFormatCombo->setEnabled(!captureRunning_);
-    ui_->zeroCopyCheckBox->setEnabled(!deviceOpen && !captureRunning_);
+    ui_->openButton->setEnabled(!anyRunning);
+    ui_->ch0StartButton->setEnabled(deviceSelected && !ch0Running);
+    ui_->ch1StartButton->setEnabled(deviceSelected && !ch1Running);
+    ui_->ch0StopButton->setEnabled(ch0Running);
+    ui_->ch1StopButton->setEnabled(ch1Running);
+    ui_->ch0PreviewButton->setEnabled(ch0Running && channels_[0].frameAvailable.load(std::memory_order_acquire));
+    ui_->ch1PreviewButton->setEnabled(ch1Running && channels_[1].frameAvailable.load(std::memory_order_acquire));
+    ui_->ch0FullscreenButton->setEnabled(ui_->ch0PreviewButton->isEnabled());
+    ui_->ch1FullscreenButton->setEnabled(ui_->ch1PreviewButton->isEnabled());
+    ui_->refreshButton->setEnabled(!deviceOpen);
+    ui_->deviceCombo->setEnabled(!deviceOpen);
+    ui_->ch0OutputFormatCombo->setEnabled(!ch0Running);
+    ui_->ch1OutputFormatCombo->setEnabled(!ch1Running);
+    ui_->ch0ZeroCopyCheckBox->setEnabled(!channels_[0].opened);
+    ui_->ch1ZeroCopyCheckBox->setEnabled(!channels_[1].opened);
 }
 
-void MainWindow::showError(const QString &apiName, gvfg_status_t status)
+void MainWindow::showError(const QString &apiName, gvfg_status_t status, int channel)
 {
     QString message = QStringLiteral("%1 failed: %2")
                           .arg(apiName, QString::fromUtf8(gvfg_strerror(status)));
-    if (handle_ &&
-        (selectedChannel_ == GVFG_CHANNEL_0 || selectedChannel_ == GVFG_CHANNEL_1))
+    if (channel == GVFG_CHANNEL_0 || channel == GVFG_CHANNEL_1)
+        message.prepend(QStringLiteral("CH%1 ").arg(channel));
+    if (handle_ && (channel == GVFG_CHANNEL_0 || channel == GVFG_CHANNEL_1))
     {
-        const QString detail = channelLastError(handle_, selectedChannel_);
+        const QString detail = channelLastError(handle_, channel);
         if (!detail.isEmpty())
             message += QStringLiteral(" | %1").arg(detail);
     }
@@ -853,13 +884,14 @@ void MainWindow::appendLog(const QString &message)
     }
 }
 
-void MainWindow::captureReadLoop()
+void MainWindow::captureReadLoop(int channelIndex)
 {
     constexpr uint64_t kTimingWarmupFrames = 30;
     constexpr uint64_t kGetFrameTimingSampleFrames = 300;
     constexpr uint64_t kPreviewTimingSampleFrames = 300;
 
-    uint32_t consecutiveTimeouts = 0;
+    std::chrono::steady_clock::time_point noFrameSince{};
+    std::chrono::steady_clock::time_point nextNoFrameReport{};
     bool captureStalledLogged = false;
     uint64_t successfulFrameCount = 0;
     uint64_t previewTimingSampleCount = 0;
@@ -867,11 +899,12 @@ void MainWindow::captureReadLoop()
     double previewTimingMaximumMs = 0.0;
     uint64_t getFrameTimingSampleCount = 0;
     double getFrameTimingMaximumMs = 0.0;
-    while (!captureStop_.load(std::memory_order_acquire))
+    ChannelRuntime &channel = channels_[channelIndex];
+    while (!channel.stopRequested.load(std::memory_order_acquire))
     {
         gvfg_frame_t frame{};
         const auto getFrameStart = std::chrono::steady_clock::now();
-        const gvfg_status_t st = gvfg_read_channel_frame(handle_, selectedChannel_, &frame, 200);
+        const gvfg_status_t st = gvfg_read_channel_frame(handle_, channelIndex, &frame, 200);
         const double getFrameElapsedMs =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - getFrameStart).count();
@@ -882,28 +915,29 @@ void MainWindow::captureReadLoop()
             {
                 ++getFrameTimingSampleCount;
                 getFrameTimingMaximumMs = (std::max)(getFrameTimingMaximumMs, getFrameElapsedMs);
-                const uint64_t totalSamples = getFrameSamples_.fetch_add(1, std::memory_order_relaxed) + 1;
-                const double previousAverage = getFrameAverageMs_.load(std::memory_order_relaxed);
-                getFrameAverageMs_.store(
+                const uint64_t totalSamples = channel.getFrameSamples.fetch_add(1, std::memory_order_relaxed) + 1;
+                const double previousAverage = channel.getFrameAverageMs.load(std::memory_order_relaxed);
+                channel.getFrameAverageMs.store(
                     previousAverage + (getFrameElapsedMs - previousAverage) / static_cast<double>(totalSamples),
                     std::memory_order_relaxed);
-                double observedMaximum = getFrameMaximumMs_.load(std::memory_order_relaxed);
+                double observedMaximum = channel.getFrameMaximumMs.load(std::memory_order_relaxed);
                 while (getFrameElapsedMs > observedMaximum &&
-                       !getFrameMaximumMs_.compare_exchange_weak(
+                       !channel.getFrameMaximumMs.compare_exchange_weak(
                            observedMaximum, getFrameElapsedMs, std::memory_order_relaxed))
                 {
                 }
                 if (totalSamples <= kGetFrameTimingSampleFrames)
-                    getFrameWindowMaximumMs_.store(getFrameTimingMaximumMs, std::memory_order_relaxed);
+                    channel.getFrameWindowMaximumMs.store(getFrameTimingMaximumMs, std::memory_order_relaxed);
                 if (getFrameTimingSampleCount >= kGetFrameTimingSampleFrames)
                 {
-                    getFrameWindowMaximumMs_.store(getFrameTimingMaximumMs, std::memory_order_relaxed);
+                    channel.getFrameWindowMaximumMs.store(getFrameTimingMaximumMs, std::memory_order_relaxed);
                     getFrameTimingSampleCount = 0;
                     getFrameTimingMaximumMs = 0.0;
                 }
             }
-            consecutiveTimeouts = 0;
-            if (!frameAvailable_.exchange(true, std::memory_order_acq_rel))
+            noFrameSince = {};
+            nextNoFrameReport = {};
+            if (!channel.frameAvailable.exchange(true, std::memory_order_acq_rel))
             {
                 QMetaObject::invokeMethod(this, [this]()
                                           { updateUiState(); },
@@ -912,12 +946,12 @@ void MainWindow::captureReadLoop()
             if (captureStalledLogged)
             {
                 captureStalledLogged = false;
-                QMetaObject::invokeMethod(this, [this]()
-                                          { appendLog(QStringLiteral("RECOVERED capture resumed")); },
+                QMetaObject::invokeMethod(this, [this, channelIndex]()
+                                          { appendLog(QStringLiteral("CH%1 RECOVERED capture resumed").arg(channelIndex)); },
                                           Qt::QueuedConnection);
             }
 
-            if (previewHandle_)
+            if (channel.previewHandle)
             {
                 gvfg_preview_frame_t previewFrame{};
                 previewFrame.data = frame.data;
@@ -943,37 +977,37 @@ void MainWindow::captureReadLoop()
 
                 const auto previewStart = std::chrono::steady_clock::now();
                 const gvfg_preview_status_t previewStatus =
-                    gvfg_preview_render_frame(previewHandle_, &previewFrame);
+                    gvfg_preview_render_frame(channel.previewHandle, &previewFrame);
                 const auto previewEnd = std::chrono::steady_clock::now();
                 const double previewElapsedMs =
                     std::chrono::duration<double, std::milli>(previewEnd - previewStart).count();
                 if (previewStatus != GVFG_PREVIEW_OK)
                 {
-                    const uint64_t failures = ++previewFailureCount_;
+                    const uint64_t failures = ++channel.previewFailureCount;
                     if (failures == 1)
                     {
-                        QMetaObject::invokeMethod(this, [this, failures, previewStatus]()
-                                                  { appendLog(QStringLiteral("preview render failed #%1: %2")
-                                                                  .arg(static_cast<qulonglong>(failures))
+                        QMetaObject::invokeMethod(this, [this, channelIndex, failures, previewStatus]()
+                                                  { appendLog(QStringLiteral("CH%1 preview render failed #%2: %3")
+                                                                  .arg(channelIndex).arg(static_cast<qulonglong>(failures))
                                                                   .arg(QString::fromUtf8(gvfg_preview_strerror(previewStatus)))); }, Qt::QueuedConnection);
                     }
                 }
                 else
                 {
-                    if (previewFailureCount_ != 0)
+                    if (channel.previewFailureCount != 0)
                     {
-                        const uint64_t failures = previewFailureCount_;
-                        previewFailureCount_ = 0;
-                        QMetaObject::invokeMethod(this, [this, failures]()
-                                                  { appendLog(QStringLiteral("preview render recovered after %1 failure(s)")
-                                                                  .arg(static_cast<qulonglong>(failures))); }, Qt::QueuedConnection);
+                        const uint64_t failures = channel.previewFailureCount;
+                        channel.previewFailureCount = 0;
+                        QMetaObject::invokeMethod(this, [this, channelIndex, failures]()
+                                                  { appendLog(QStringLiteral("CH%1 preview render recovered after %2 failure(s)")
+                                                                  .arg(channelIndex).arg(static_cast<qulonglong>(failures))); }, Qt::QueuedConnection);
                     }
 
                     if (timingWarmupComplete)
                     {
-                        double observedMaximum = previewCallMaximumMs_.load(std::memory_order_relaxed);
+                        double observedMaximum = channel.previewCallMaximumMs.load(std::memory_order_relaxed);
                         while (previewElapsedMs > observedMaximum &&
-                               !previewCallMaximumMs_.compare_exchange_weak(
+                               !channel.previewCallMaximumMs.compare_exchange_weak(
                                    observedMaximum, previewElapsedMs, std::memory_order_relaxed))
                         {
                         }
@@ -985,9 +1019,9 @@ void MainWindow::captureReadLoop()
                         {
                             const double averageMs =
                                 previewTimingTotalMs / static_cast<double>(previewTimingSampleCount);
-                            previewCallAverageMs_.store(averageMs, std::memory_order_relaxed);
-                            previewCallWindowMaximumMs_.store(previewTimingMaximumMs, std::memory_order_relaxed);
-                            previewCallSamples_.store(kPreviewTimingSampleFrames, std::memory_order_relaxed);
+                            channel.previewCallAverageMs.store(averageMs, std::memory_order_relaxed);
+                            channel.previewCallWindowMaximumMs.store(previewTimingMaximumMs, std::memory_order_relaxed);
+                            channel.previewCallSamples.store(kPreviewTimingSampleFrames, std::memory_order_relaxed);
 
                             previewTimingSampleCount = 0;
                             previewTimingTotalMs = 0.0;
@@ -996,11 +1030,11 @@ void MainWindow::captureReadLoop()
                     }
                 }
             }
-            const gvfg_status_t releaseStatus = gvfg_release_channel_frame(handle_, selectedChannel_, &frame);
+            const gvfg_status_t releaseStatus = gvfg_release_channel_frame(handle_, channelIndex, &frame);
             if (releaseStatus != GVFG_OK)
             {
-                QMetaObject::invokeMethod(this, [this, releaseStatus]()
-                                          { showError(QStringLiteral("gvfg_release_frame"), releaseStatus); },
+                QMetaObject::invokeMethod(this, [this, channelIndex, releaseStatus]()
+                                          { showError(QStringLiteral("gvfg_release_channel_frame"), releaseStatus, channelIndex); },
                                           Qt::QueuedConnection);
                 break;
             }
@@ -1010,17 +1044,22 @@ void MainWindow::captureReadLoop()
 
         if (st == GVFG_ETIMEOUT)
         {
-            ++consecutiveTimeouts;
-            const bool firstReport = !captureStalledLogged && consecutiveTimeouts >= 10;
-            const bool periodicReport = captureStalledLogged && (consecutiveTimeouts % 50) == 0;
-            if (firstReport || periodicReport)
+            const auto now = std::chrono::steady_clock::now();
+            if (noFrameSince == std::chrono::steady_clock::time_point{})
+            {
+                noFrameSince = now;
+                nextNoFrameReport = now + std::chrono::seconds(2);
+            }
+            if (now >= nextNoFrameReport)
             {
                 captureStalledLogged = true;
-                const uint32_t elapsedMs = consecutiveTimeouts * 200u;
-                QMetaObject::invokeMethod(this, [this, elapsedMs]()
+                const uint64_t elapsedMs = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - noFrameSince).count());
+                nextNoFrameReport = now + std::chrono::seconds(10);
+                QMetaObject::invokeMethod(this, [this, channelIndex, elapsedMs]()
                                           {
-                                              appendLog(QStringLiteral("ERROR no capture frame for %1 ms")
-                                                            .arg(elapsedMs));
+                                              appendLog(QStringLiteral("CH%1 ERROR no capture frame for %2 ms")
+                                                            .arg(channelIndex).arg(elapsedMs));
 #if GVFG_INTERNAL_DIAGNOSTICS
                                               updateSignalStatus(false);
                                               writeDiagnosticSnapshot(lastSignalStatusText_);
@@ -1028,20 +1067,24 @@ void MainWindow::captureReadLoop()
                                           },
                                           Qt::QueuedConnection);
             }
+            // Some incomplete channel implementations return GVFG_ETIMEOUT
+            // immediately instead of waiting for timeout_ms. Avoid a hot loop
+            // that floods the GUI event queue and makes every window unresponsive.
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
             continue;
         }
-        if (captureStop_.load(std::memory_order_acquire))
+        if (channel.stopRequested.load(std::memory_order_acquire))
             break;
 
-        QMetaObject::invokeMethod(this, [this, st]()
-                                  { showError(QStringLiteral("gvfg_read_channel_frame"), st); },
+        QMetaObject::invokeMethod(this, [this, channelIndex, st]()
+                                  { showError(QStringLiteral("gvfg_read_channel_frame"), st, channelIndex); },
                                   Qt::QueuedConnection);
         break;
     }
 }
 
-void MainWindow::joinCaptureThread()
+void MainWindow::joinCaptureThread(int channel)
 {
-    if (captureThread_.joinable())
-        captureThread_.join();
+    if (channels_[channel].captureThread.joinable())
+        channels_[channel].captureThread.join();
 }

@@ -36,21 +36,48 @@ protected:
     void closeEvent(QCloseEvent *event) override;
 
 private:
+    struct ChannelRuntime
+    {
+        bool opened = false;
+        gvfg_preview_handle previewHandle = nullptr;
+        std::atomic<bool> running{false};
+        std::atomic<bool> stopRequested{false};
+        std::atomic<bool> frameAvailable{false};
+        std::thread captureThread;
+        std::atomic<double> getFrameAverageMs{0.0};
+        std::atomic<double> getFrameMaximumMs{0.0};
+        std::atomic<double> getFrameWindowMaximumMs{0.0};
+        std::atomic<uint64_t> getFrameSamples{0};
+        uint64_t previewFailureCount = 0;
+        std::atomic<double> previewCallAverageMs{0.0};
+        std::atomic<double> previewCallMaximumMs{0.0};
+        std::atomic<double> previewCallWindowMaximumMs{0.0};
+        std::atomic<uint64_t> previewCallSamples{0};
+        gvfg_signal_status_t cachedSignalStatus{};
+        bool haveCachedSignalStatus = false;
+        QString lastLoggedInputStatus;
+#if GVFG_INTERNAL_DIAGNOSTICS
+        uint64_t lastDebugDmaErrors = 0;
+        bool haveDebugBaseline = false;
+#endif
+    };
+
     void refreshDevices();
-    void showPreviewWindow();
-    void showFullscreenPreviewWindow();
+    void showPreviewWindow(int channel);
+    void showFullscreenPreviewWindow(int channel);
     bool openDevice();
-    bool applyOutputFormat();
+    bool openChannel(int channel);
+    bool applyOutputFormat(int channel);
     void closeDevice();
-    void startCapture();
-    void stopCapture();
-    bool applyPreview();
-    void updatePreviewSourceSize(const gvfg_signal_status_t &signal);
-    void updatePreviewSourceSize();
+    void startCapture(int channel);
+    void stopCapture(int channel);
+    void stopAllCaptures();
+    bool applyPreview(int channel);
+    void updatePreviewSourceSize(int channel, const gvfg_signal_status_t &signal);
     void processPendingEvents();
     void updateSignalStatus(bool queryHardware = true);
     void updateUiState();
-    void showError(const QString &apiName, gvfg_status_t status);
+    void showError(const QString &apiName, gvfg_status_t status, int channel = -1);
     void openLogFile();
     bool openLogFilePart();
     void rotateLogFileIfNeeded();
@@ -59,40 +86,20 @@ private:
     void writeDiagnosticSnapshot(const QString &statusText);
 #endif
     void appendLog(const QString &message);
-    void captureReadLoop();
-    void joinCaptureThread();
+    void captureReadLoop(int channel);
+    void joinCaptureThread(int channel);
 
     static constexpr qint64 kMaxLogFileBytes = 20ll * 1024ll * 1024ll;
 
     Ui::MainWindow *ui_ = nullptr;
-    PreviewWindow *previewWindow_ = nullptr;
+    std::array<PreviewWindow *, 2> previewWindows_{};
     std::array<gvfg_device_info_t, GVFG_MAX_DEVICES> devices_{};
     int deviceCount_ = 0;
     gvfg_handle handle_ = nullptr;
-    int selectedChannel_ = GVFG_CHANNEL_0;
-    gvfg_preview_handle previewHandle_ = nullptr;
-    std::atomic<bool> captureRunning_{false};
-    std::atomic<bool> captureStop_{false};
-    std::atomic<bool> frameAvailable_{false};
-    std::thread captureThread_;
-    std::atomic<double> getFrameAverageMs_{0.0};
-    std::atomic<double> getFrameMaximumMs_{0.0};
-    std::atomic<double> getFrameWindowMaximumMs_{0.0};
-    std::atomic<uint64_t> getFrameSamples_{0};
-    uint64_t previewFailureCount_ = 0;
-    std::atomic<double> previewCallAverageMs_{0.0};
-    std::atomic<double> previewCallMaximumMs_{0.0};
-    std::atomic<double> previewCallWindowMaximumMs_{0.0};
-    std::atomic<uint64_t> previewCallSamples_{0};
+    int selectedDeviceIndex_ = -1;
+    std::array<ChannelRuntime, 2> channels_{};
     QTimer *runtimeStatusTimer_ = nullptr;
-    gvfg_signal_status_t cachedSignalStatus_{};
-    bool haveCachedSignalStatus_ = false;
     QString lastSignalStatusText_;
-    QString lastLoggedInputStatus_;
-#if GVFG_INTERNAL_DIAGNOSTICS
-    uint64_t lastDebugDmaErrors_ = 0;
-    bool haveDebugBaseline_ = false;
-#endif
     QFile logFile_;
     std::mutex logFileMutex_;
     QString logDirPath_;
