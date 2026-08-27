@@ -51,14 +51,6 @@ typedef struct
     double get_frame_timing_average_us;
     double get_frame_timing_max300_us;
     double get_frame_timing_max_us;
-    uint64_t event_wait_timing_samples;
-    double event_wait_timing_average_us;
-    double event_wait_timing_max300_us;
-    double event_wait_timing_max_us;
-    uint64_t sdk_processing_timing_samples;
-    double sdk_processing_timing_average_us;
-    double sdk_processing_timing_max300_us;
-    double sdk_processing_timing_max_us;
 } gvfg_debug_backend_stats_t;
 
 /*
@@ -71,17 +63,6 @@ GVFG_API gvfg_status_t gvfg_debug_get_channel_backend_stats(
     _In_ gvfg_handle handle,
     _In_ int channel_index,
     _Out_ gvfg_debug_backend_stats_t *out_stats);
-
-/*
- * Copy the latest backend error detail into out_message.
- *
- * The message is UTF-8 and null-terminated when out_message_size is non-zero.
- */
-GVFG_API gvfg_status_t gvfg_debug_get_channel_last_error_detail(
-    _In_ gvfg_handle handle,
-    _In_ int channel_index,
-    _Out_writes_to_opt_(out_message_size, out_message_size) char *out_message,
-    _In_ uint32_t out_message_size);
 
 /*
  * Read or write one 32-bit BAR-relative hardware register.

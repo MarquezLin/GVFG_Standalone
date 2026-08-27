@@ -30,13 +30,13 @@
             <mxRectangle height="34" width="240" x="50" y="515" as="alternateBounds" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="backendTypes" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="pcies2mm_backend_types.h&lt;br&gt;internal frame/event/status types" vertex="1">
+        <mxCell id="backendTypes" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="PcieS2mmDeviceConnection&lt;br&gt;one shared Windows HANDLE&lt;br&gt;giga_ioctl.dll / DeviceIoControl" vertex="1">
           <mxGeometry height="58" width="285" x="30" y="95" as="geometry" />
         </mxCell>
-        <mxCell id="workers" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="single capture thread&lt;br&gt;WaitForMultipleObjects: DMA / format / plug events" vertex="1">
+        <mxCell id="workers" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="per-channel workers&lt;br&gt;caller read thread waits DMA&lt;br&gt;event thread waits format / plug events" vertex="1">
           <mxGeometry height="52" width="280" x="510" y="173" as="geometry" />
         </mxCell>
-        <mxCell id="pcies2mmSession" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="sdk/gvfg/src/backend/pcies2mm/pcies2mm_capture_session.cpp&lt;br&gt;internal session / events / direct frame read" vertex="1">
+        <mxCell id="pcies2mmSession" parent="backendLayer" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="CH0 + CH1 PcieS2mmCaptureSession&lt;br&gt;independent events / state / direct frame read" vertex="1">
           <mxGeometry height="58" width="340" x="420" y="65" as="geometry" />
         </mxCell>
         <mxCell id="e6" edge="1" parent="backendLayer" source="pcies2mmSession" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="backendTypes" value="uses">
@@ -53,16 +53,16 @@
         <mxCell id="customerApp" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=14;" value="Customer application" vertex="1">
           <mxGeometry height="52" width="230" x="715" y="85" as="geometry" />
         </mxCell>
-        <mxCell id="facade" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#82b366;fontSize=14;" value="sdk/gvfg/src/gvfg_capture.cpp&lt;br&gt;session facade / lifecycle / pull API" vertex="1">
+        <mxCell id="facade" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#82b366;fontSize=14;" value="gvfg_handle_t&lt;br&gt;shared device connection&lt;br&gt;channels[0] + channels[1] facade state" vertex="1">
           <mxGeometry height="58" width="340" x="470" y="385" as="geometry" />
         </mxCell>
-        <mxCell id="ring" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="single frame buffer&lt;br&gt;read / held / release" vertex="1">
+        <mxCell id="ring" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="one outstanding frame per channel&lt;br&gt;copy_buffer_ or driver pointer&lt;br&gt;read / held / release" vertex="1">
           <mxGeometry height="58" width="270" x="880" y="610" as="geometry" />
         </mxCell>
         <mxCell id="eventFlow" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=13;" value="Public event flow&lt;br&gt;driver format IRQ -&gt; FORMAT_CHANGE_BEGIN&lt;br&gt;first new frame published -&gt; STREAM_READY" vertex="1">
           <mxGeometry height="82" width="330" x="850" y="690" as="geometry" />
         </mxCell>
-        <mxCell id="externalBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;fontColor=#333333;fontSize=14;" value="External frame/event source" vertex="1">
+        <mxCell id="externalBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;fontColor=#333333;fontSize=14;" value="vfg100.sys / FPGA / DMA frame and events" vertex="1">
           <mxGeometry height="52" width="280" x="410" y="900" as="geometry" />
         </mxCell>
         <mxCell id="e1" edge="1" parent="1" source="qtSample" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeWidth=2;" target="publicHeader" value="include / link">

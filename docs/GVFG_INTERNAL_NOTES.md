@@ -2,8 +2,8 @@
 
 ## Driver IOCTL DLL 邊界
 
-`gvfg.dll` 保留裝置列舉、`CreateFile`/`CloseHandle`、channel session、event、
-event thread 與單一 frame buffer。Driver IOCTL code、request layout 及所有
+`gvfg.dll` 保留裝置列舉、`CreateFile`/`CloseHandle`、雙 channel session、event、
+event thread 與每 channel 的單一 frame buffer。Driver IOCTL code、request layout 及所有
 `DeviceIoControl` 呼叫集中在獨立維護的內部 `giga_ioctl.dll`；GVFG 僅呼叫其具名 C API，
 失敗時沿用 `GetLastError()`。此 DLL 只負責 driver IOCTL code、request layout 與薄封裝，
 不持有 capture state。`giga_ioctl.h` 是內部相依，不屬於客戶公開 API。
@@ -22,8 +22,9 @@ register、ring、counter 與執行緒模型都不是公開 ABI。
 | 文件 | `GVFG_CUSTOMER_API.md`、`GVFG_CUSTOMER_API_REFERENCE.md` | 本文件 |
 | 資訊 | lifecycle、frame、event、signal、runtime FPS | IOCTL、IRQ、register、DMA/ring、debug counters |
 
-CMake install 已只安裝 `gvfg_capture.h` 與客戶文件；不得把 `gvfg_debug.h` 或
-`sdk/gvfg/src` 加入 customer package。
+CMake install 會安裝公開的 `gvfg_capture.h`、選用的 `gvfg_preview.h`、客戶文件，
+以及 `gvfg.dll`、`giga_ioctl.dll`、`gvfg_preview.dll` 等 target 產物；不得把
+`gvfg_debug.h`、private `giga_ioctl.h` 或 `sdk/gvfg/src` 加入 customer package。
 
 ## 2. 元件責任
 
@@ -42,8 +43,8 @@ customer/sample (optional)
 
 - `gvfg_capture.cpp`：公開 handle 狀態、狀態碼轉換、frame token 驗證、event
   queue、runtime counter 與 debug API facade。
-- `pcies2mm_capture_session.*`：stream lifecycle、driver event/DMA worker、frame
-  ring 與 backend statistics。
+- `pcies2mm_capture_session.*`：每 channel 的 stream lifecycle、driver event、DMA
+  wait/read、單一 outstanding frame 與 backend statistics；不包含 SDK frame ring。
 - `pcies2mm_device.*`：SetupAPI 裝置列舉與 interface path。
 - `sdk/giga_ioctl`：獨立 DLL；集中管理與 driver 共用的 private ABI 與 `DeviceIoControl` 薄封裝。
 - `pcies2mm_reg.h`：FPGA register offsets/masks。
@@ -60,16 +61,19 @@ Created/Closed -> Opened -> Running -> Opened -> Destroyed
                     +----------+ stop
 ```
 
-- `open()` 會先 close 舊 backend、建立 session、設定 channel、同步 signal。
+- `open()` 會先 close 舊 backend、建立 session、設定 channel 並建立 event monitoring；
+  signal descriptor 在 start/configure 階段重新查詢。
 - `start()` 先 `configureStream()`，清空 facade event queue，再啟動 backend。
 - 無訊號時使用最小 placeholder descriptor 進入 event-monitoring mode；訊號恢復後
   backend 依真實 descriptor 啟用 DMA。
-- `stop()` 先清除 running、喚醒 event poll、釋放 held frame，再停止 backend。
+- `stop()` 先清除 running、釋放 facade held frame、停止 backend，最後清空 event queue
+  並喚醒 event poll。
 - `destroy()` 允許 NULL，並透過 destructor/close 保證 stop。
 
-每個 handle 只有一個 `readInProgress` 與一個 `frameHeld`。公開文件要求 lifecycle
-由 caller 序列化；若日後要宣告完整 thread-safe，必須先補足 open/start/stop/destroy
-彼此的同步與 handle lifetime 保護。
+每個 `gvfg_channel_session_t` 各有自己的 `readInProgress`、`frameHeld` 與
+`heldBackendFrame`；同一 handle 的 CH0、CH1 可由兩條 worker thread 分別 read。
+Open/start/stop/destroy 等 handle lifecycle 仍應由 caller 序列化；若日後要宣告完整
+thread-safe，必須先補足這些操作彼此的同步與 handle lifetime 保護。
 
 ## 4. DMA 與單一 frame buffer
 
@@ -83,7 +87,7 @@ source frame
 -> IOCTL_GET_FRAME(frameIndex=0xFFFFFFFF) 直接複製到 SDK 的單一 buffer
 -> facade 回傳指向該 buffer 的 gvfg_frame_t
 -> customer/preview/conversion
--> release_frame
+-> gvfg_release_channel_frame(channel)
 -> buffer 可供下一次 read 使用
 ```
 
@@ -101,7 +105,7 @@ gvfg_create
 -> IOCTL_GIGA_ACQUIRE_VIDEO_FRAME_ZEROCOPY(channel, 0xFFFFFFFF)
 -> facade 回傳 driver-owned pointer
 -> customer/preview/conversion
--> gvfg_release_frame
+-> gvfg_release_channel_frame(channel)
 -> IOCTL_GIGA_RELEASE_VIDEO_FRAME(channel)
 -> close/destroy 時 IOCTL_GIGA_DISABLE_FRAME_ZEROCOPY(channel)
 ```
@@ -171,17 +175,17 @@ non-blocking、有限 timeout 與 infinite wait；stop 透過 `eventCv` 喚醒 w
 
 `gvfg_debug.h` 僅供內部工具，包含：
 
-- `gvfg_debug_get_channel_backend_stats()`：指定 channel 的 facade/backend state、frame/drop/DMA/IRQ/timeout、
-  queue/ring/sequence counters。
-- `gvfg_debug_get_channel_last_error_detail()`：複製指定 channel 的 UTF-8 backend 詳細錯誤。
+- `gvfg_debug_get_channel_backend_stats()`：指定 channel 的 facade/backend state、
+  captured/delivered frame、DMA error、IRQ、timeout、sequence 與 GetFrame timing。
 - `gvfg_debug_read_register()`：讀取 4-byte aligned BAR-relative register。
 - `gvfg_debug_write_register()`：寫入 register。
 
 Register write 可能中斷 DMA、interrupt 或 capture。工具必須確認裝置、offset 與當前
 stream 狀態，且不得將 register API 包裝成客戶功能。
 
-客戶診斷只應使用 `gvfg_get_channel_signal_status()`、`gvfg_get_channel_runtime_info()`、event 與
-`gvfg_strerror()`。
+客戶診斷使用 `gvfg_get_channel_signal_status()`、`gvfg_get_channel_runtime_info()`、event、
+`gvfg_strerror()` 與 `gvfg_get_channel_last_error_detail()`。每個 channel 的 `ChannelErrorState`
+由 `gvfg_handle_t` 持有，facade 與 backend 共用同一份；因此 channel open 失敗後也能取得詳細錯誤。
 
 ## 8. GPU conversion
 

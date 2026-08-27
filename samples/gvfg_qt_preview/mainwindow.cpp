@@ -122,15 +122,13 @@ namespace
         return QStringLiteral("%1 %2 %3-bit").arg(resolution, format, bit);
     }
 
-#if GVFG_INTERNAL_DIAGNOSTICS
-    QString backendLastError(gvfg_handle handle, int channel)
+    QString channelLastError(gvfg_handle handle, int channel)
     {
         char message[512] = {};
-        if (gvfg_debug_get_channel_last_error_detail(handle, channel, message, sizeof(message)) != GVFG_OK || message[0] == '\0')
+        if (gvfg_get_channel_last_error_detail(handle, channel, message, sizeof(message)) != GVFG_OK || message[0] == '\0')
             return {};
         return QString::fromUtf8(message);
     }
-#endif
 
     QString eventTypeText(gvfg_event_type_t type)
     {
@@ -321,6 +319,7 @@ bool MainWindow::openDevice()
     const int selection = ui_->deviceCombo->currentData().toInt();
     const int deviceIndex = selection / 2;
     const int channelIndex = selection % 2;
+    selectedChannel_ = channelIndex;
     st = gvfg_open_channel(handle_, deviceIndex, channelIndex);
     if (st != GVFG_OK)
     {
@@ -328,8 +327,6 @@ bool MainWindow::openDevice()
         closeDevice();
         return false;
     }
-    selectedChannel_ = channelIndex;
-
     if (!applyOutputFormat())
     {
         closeDevice();
@@ -627,13 +624,13 @@ void MainWindow::updateSignalStatus(bool queryHardware)
                                 : QStringLiteral("Copy"));
     statusLines << (previewInfoOk
                         ? previewCallSamples > 0
-                              ? QStringLiteral("Preview | %1 | %2 | GPU call avg=%3 max300=%4 max=%5 ms/frame samples=%6")
+                              ? QStringLiteral("Preview | %1 | %2 | Submit avg=%3 max300=%4 max=%5 ms/frame samples=%6")
                                     .arg(previewState, previewFrame)
                                     .arg(previewCallAverageMs, 0, 'f', 3)
                                     .arg(previewCallWindowMaximumMs, 0, 'f', 3)
                                     .arg(previewCallMaximumMs, 0, 'f', 3)
                                     .arg(static_cast<qulonglong>(previewCallSamples))
-                              : QStringLiteral("Preview | %1 | %2 | GPU call measuring")
+                              : QStringLiteral("Preview | %1 | %2 | Submit measuring")
                                     .arg(previewState, previewFrame)
                         : QStringLiteral("Preview | Inactive"));
     statusLines << (haveBackendStats && backendStats.get_frame_timing_samples >= 300
@@ -647,26 +644,12 @@ void MainWindow::updateSignalStatus(bool queryHardware)
                               .arg(static_cast<qulonglong>(backendStats.get_frame_timing_samples))
                         : QStringLiteral("Driver GetFrame | measuring"));
     statusLines << (getFrameSamples > 0
-                        ? QStringLiteral("GetFrame total | avg=%1 max300=%2 max=%3 ms/frame samples=%4")
+                        ? QStringLiteral("Read Frame Call | avg=%1 max300=%2 max=%3 ms/frame samples=%4")
                               .arg(getFrameAverageMs, 0, 'f', 3)
                               .arg(getFrameWindowMaximumMs, 0, 'f', 3)
                               .arg(getFrameMaximumMs, 0, 'f', 3)
                               .arg(static_cast<qulonglong>(getFrameSamples))
-                        : QStringLiteral("GetFrame total | measuring"));
-    statusLines << (haveBackendStats && backendStats.event_wait_timing_samples >= 300
-                        ? QStringLiteral("Event Wait | avg=%1 max300=%2 max=%3 ms/frame samples=%4")
-                              .arg(backendStats.event_wait_timing_average_us / 1000.0, 0, 'f', 3)
-                              .arg(backendStats.event_wait_timing_max300_us / 1000.0, 0, 'f', 3)
-                              .arg(backendStats.event_wait_timing_max_us / 1000.0, 0, 'f', 3)
-                              .arg(static_cast<qulonglong>(backendStats.event_wait_timing_samples))
-                        : QStringLiteral("Event Wait | measuring"));
-    statusLines << (haveBackendStats && backendStats.sdk_processing_timing_samples >= 300
-                        ? QStringLiteral("SDK Processing | avg=%1 max300=%2 max=%3 us/frame samples=%4")
-                              .arg(backendStats.sdk_processing_timing_average_us, 0, 'f', 3)
-                              .arg(backendStats.sdk_processing_timing_max300_us, 0, 'f', 3)
-                              .arg(backendStats.sdk_processing_timing_max_us, 0, 'f', 3)
-                              .arg(static_cast<qulonglong>(backendStats.sdk_processing_timing_samples))
-                        : QStringLiteral("SDK Processing | measuring"));
+                        : QStringLiteral("Read Frame Call | measuring"));
 #if GVFG_INTERNAL_DIAGNOSTICS
     statusLines << (haveBackendStats
                         ? QStringLiteral("Capture| status=%1 dma_errors=%2 no_frame_waits=%3")
@@ -704,20 +687,6 @@ void MainWindow::updateSignalStatus(bool queryHardware)
         haveDebugBaseline_ = true;
     }
 
-    const QString lastError = backendLastError(handle_, selectedChannel_);
-    if (!lastError.isEmpty())
-        statusLines << QStringLiteral("Error   | %1").arg(lastError);
-
-    if (!lastError.isEmpty() && lastError != lastLoggedBackendError_)
-    {
-        lastLoggedBackendError_ = lastError;
-        appendLog(QStringLiteral("Backend error | %1").arg(lastError));
-        diagnosticProblemDetected = true;
-    }
-    else if (lastError.isEmpty())
-    {
-        lastLoggedBackendError_.clear();
-    }
 #endif
 
     const QString statusText = statusLines.join(QLatin1Char('\n'));
@@ -755,7 +724,16 @@ void MainWindow::updateUiState()
 
 void MainWindow::showError(const QString &apiName, gvfg_status_t status)
 {
-    appendLog(QStringLiteral("%1 failed: %2").arg(apiName, QString::fromUtf8(gvfg_strerror(status))));
+    QString message = QStringLiteral("%1 failed: %2")
+                          .arg(apiName, QString::fromUtf8(gvfg_strerror(status)));
+    if (handle_ &&
+        (selectedChannel_ == GVFG_CHANNEL_0 || selectedChannel_ == GVFG_CHANNEL_1))
+    {
+        const QString detail = channelLastError(handle_, selectedChannel_);
+        if (!detail.isEmpty())
+            message += QStringLiteral(" | %1").arg(detail);
+    }
+    appendLog(message);
 }
 
 void MainWindow::openLogFile()
@@ -877,13 +855,13 @@ void MainWindow::appendLog(const QString &message)
 
 void MainWindow::captureReadLoop()
 {
+    constexpr uint64_t kTimingWarmupFrames = 30;
     constexpr uint64_t kGetFrameTimingSampleFrames = 300;
-    constexpr uint64_t kPreviewTimingWarmupFrames = 30;
     constexpr uint64_t kPreviewTimingSampleFrames = 300;
 
     uint32_t consecutiveTimeouts = 0;
     bool captureStalledLogged = false;
-    uint64_t previewTimingWarmupCount = 0;
+    uint64_t successfulFrameCount = 0;
     uint64_t previewTimingSampleCount = 0;
     double previewTimingTotalMs = 0.0;
     double previewTimingMaximumMs = 0.0;
@@ -899,26 +877,30 @@ void MainWindow::captureReadLoop()
                 std::chrono::steady_clock::now() - getFrameStart).count();
         if (st == GVFG_OK)
         {
-            ++getFrameTimingSampleCount;
-            getFrameTimingMaximumMs = (std::max)(getFrameTimingMaximumMs, getFrameElapsedMs);
-            const uint64_t totalSamples = getFrameSamples_.fetch_add(1, std::memory_order_relaxed) + 1;
-            const double previousAverage = getFrameAverageMs_.load(std::memory_order_relaxed);
-            getFrameAverageMs_.store(
-                previousAverage + (getFrameElapsedMs - previousAverage) / static_cast<double>(totalSamples),
-                std::memory_order_relaxed);
-            double observedMaximum = getFrameMaximumMs_.load(std::memory_order_relaxed);
-            while (getFrameElapsedMs > observedMaximum &&
-                   !getFrameMaximumMs_.compare_exchange_weak(
-                       observedMaximum, getFrameElapsedMs, std::memory_order_relaxed))
+            const bool timingWarmupComplete = ++successfulFrameCount > kTimingWarmupFrames;
+            if (timingWarmupComplete)
             {
-            }
-            if (totalSamples <= kGetFrameTimingSampleFrames)
-                getFrameWindowMaximumMs_.store(getFrameTimingMaximumMs, std::memory_order_relaxed);
-            if (getFrameTimingSampleCount >= kGetFrameTimingSampleFrames)
-            {
-                getFrameWindowMaximumMs_.store(getFrameTimingMaximumMs, std::memory_order_relaxed);
-                getFrameTimingSampleCount = 0;
-                getFrameTimingMaximumMs = 0.0;
+                ++getFrameTimingSampleCount;
+                getFrameTimingMaximumMs = (std::max)(getFrameTimingMaximumMs, getFrameElapsedMs);
+                const uint64_t totalSamples = getFrameSamples_.fetch_add(1, std::memory_order_relaxed) + 1;
+                const double previousAverage = getFrameAverageMs_.load(std::memory_order_relaxed);
+                getFrameAverageMs_.store(
+                    previousAverage + (getFrameElapsedMs - previousAverage) / static_cast<double>(totalSamples),
+                    std::memory_order_relaxed);
+                double observedMaximum = getFrameMaximumMs_.load(std::memory_order_relaxed);
+                while (getFrameElapsedMs > observedMaximum &&
+                       !getFrameMaximumMs_.compare_exchange_weak(
+                           observedMaximum, getFrameElapsedMs, std::memory_order_relaxed))
+                {
+                }
+                if (totalSamples <= kGetFrameTimingSampleFrames)
+                    getFrameWindowMaximumMs_.store(getFrameTimingMaximumMs, std::memory_order_relaxed);
+                if (getFrameTimingSampleCount >= kGetFrameTimingSampleFrames)
+                {
+                    getFrameWindowMaximumMs_.store(getFrameTimingMaximumMs, std::memory_order_relaxed);
+                    getFrameTimingSampleCount = 0;
+                    getFrameTimingMaximumMs = 0.0;
+                }
             }
             consecutiveTimeouts = 0;
             if (!frameAvailable_.exchange(true, std::memory_order_acq_rel))
@@ -965,16 +947,6 @@ void MainWindow::captureReadLoop()
                 const auto previewEnd = std::chrono::steady_clock::now();
                 const double previewElapsedMs =
                     std::chrono::duration<double, std::milli>(previewEnd - previewStart).count();
-#if GVFG_INTERNAL_DIAGNOSTICS
-                if (previewElapsedMs >= 10.0)
-                {
-                    QMetaObject::invokeMethod(this, [this, frameId = frame.frame_id, previewElapsedMs]()
-                                              { appendLog(QStringLiteral("SLOW PREVIEW frame=%1 elapsed=%2 ms")
-                                                              .arg(static_cast<qulonglong>(frameId))
-                                                              .arg(previewElapsedMs, 0, 'f', 3)); },
-                                              Qt::QueuedConnection);
-                }
-#endif
                 if (previewStatus != GVFG_PREVIEW_OK)
                 {
                     const uint64_t failures = ++previewFailureCount_;
@@ -997,11 +969,7 @@ void MainWindow::captureReadLoop()
                                                                   .arg(static_cast<qulonglong>(failures))); }, Qt::QueuedConnection);
                     }
 
-                    if (previewTimingWarmupCount < kPreviewTimingWarmupFrames)
-                    {
-                        ++previewTimingWarmupCount;
-                    }
-                    else
+                    if (timingWarmupComplete)
                     {
                         double observedMaximum = previewCallMaximumMs_.load(std::memory_order_relaxed);
                         while (previewElapsedMs > observedMaximum &&
@@ -1062,12 +1030,12 @@ void MainWindow::captureReadLoop()
             }
             continue;
         }
-        if (captureStop_.load(std::memory_order_acquire) || st == GVFG_ESTATE)
+        if (captureStop_.load(std::memory_order_acquire))
             break;
 
         QMetaObject::invokeMethod(this, [this, st]()
-                                  { appendLog(QStringLiteral("gvfg_read_frame failed: %1")
-                                                  .arg(QString::fromUtf8(gvfg_strerror(st)))); }, Qt::QueuedConnection);
+                                  { showError(QStringLiteral("gvfg_read_channel_frame"), st); },
+                                  Qt::QueuedConnection);
         break;
     }
 }

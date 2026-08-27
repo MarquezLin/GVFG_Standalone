@@ -2,6 +2,7 @@
 
 #include "pcies2mm_backend_types.h"
 #include "pcies2mm_device.h"
+#include "gvfg_error_state.h"
 
 #include <windows.h>
 
@@ -12,23 +13,29 @@
 #include <cstdint>
 #include <mutex>
 #include <memory>
-#include <string>
 #include <thread>
 #include <vector>
 
 namespace gvfg::internal
 {
+    struct PcieS2mmDeviceConnection
+    {
+        HANDLE handle = INVALID_HANDLE_VALUE;
+        ~PcieS2mmDeviceConnection();
+    };
+
     class PcieS2mmCaptureSession
     {
     public:
-        PcieS2mmCaptureSession();
+        explicit PcieS2mmCaptureSession(ChannelErrorState &errorState);
         PcieS2mmCaptureSession(const PcieS2mmCaptureSession &) = delete;
         PcieS2mmCaptureSession &operator=(const PcieS2mmCaptureSession &) = delete;
         ~PcieS2mmCaptureSession();
 
         pcies2mm_status_t open_device_index(size_t deviceIndex);
-        pcies2mm_status_t open_shared_device(const PcieS2mmCaptureSession &source,
-                                             uint32_t channel);
+        pcies2mm_status_t open_device_connection(
+            const std::shared_ptr<PcieS2mmDeviceConnection> &connection);
+        std::shared_ptr<PcieS2mmDeviceConnection> device_connection() const { return device_connection_; }
         pcies2mm_status_t close();
 
         pcies2mm_status_t set_channel(uint32_t channel);
@@ -44,7 +51,6 @@ namespace gvfg::internal
         pcies2mm_status_t wait_frame(uint32_t timeoutMs, pcies2mm_frame_t &out);
         pcies2mm_status_t release_frame(const pcies2mm_frame_t &frame);
 
-        const char *last_error() const;
         void get_debug_stats(pcies2mm_stream_stats_t &outStats,
                              uint64_t &outWaitTimeouts,
                              pcies2mm_debug_state_t &outDebugState) const;
@@ -52,14 +58,9 @@ namespace gvfg::internal
         pcies2mm_status_t debug_write_register(uint32_t offset, uint32_t value) const;
 
     private:
-        struct SharedDevice
-        {
-            HANDLE handle = INVALID_HANDLE_VALUE;
-            ~SharedDevice();
-        };
-
         pcies2mm_status_t open_device(const PcieS2mmDevice &device);
         void close_handles();
+        HANDLE device_handle() const;
 
         bool read_reg(uint32_t offset, uint32_t &out) const;
         bool write_reg(uint32_t offset, uint32_t value) const;
@@ -85,8 +86,7 @@ namespace gvfg::internal
         void emit_event(pcies2mm_event_type_t type) const;
 
         pcies2mm_status_t fail(pcies2mm_status_t status, const char *where, DWORD winerr = GetLastError()) const;
-        void set_last_error(const std::string &message) const;
-        void clear_last_error() const;
+        pcies2mm_status_t reject(pcies2mm_status_t status, const char *message) const;
 
         uint32_t active_channel() const;
         uint32_t video_event_mask() const;
@@ -94,14 +94,9 @@ namespace gvfg::internal
         uint32_t video_irq_mask_bit() const;
         size_t frame_size_bytes() const;
         void record_get_frame_timing(double elapsedUs);
-        void record_event_wait_timing(double elapsedUs);
-        void record_sdk_processing_timing(double elapsedUs);
 
-        std::wstring base_path_;
-        std::wstring friendly_name_;
-
-        HANDLE device_ = INVALID_HANDLE_VALUE;
-        std::shared_ptr<SharedDevice> shared_device_;
+        ChannelErrorState &error_state_;
+        std::shared_ptr<PcieS2mmDeviceConnection> device_connection_;
         HANDLE dma_event_ = nullptr;
         HANDLE format_change_event_ = nullptr;
         HANDLE plug_in_event_ = nullptr;
@@ -110,7 +105,6 @@ namespace gvfg::internal
         pcies2mm_stream_desc_t stream_desc_{};
         uint32_t stream_bit_depth_ = 8;
         uint32_t channel_ = 0;
-        bool opened_ = false;
         bool configured_ = false;
         bool zero_copy_enabled_ = false;
 
@@ -141,18 +135,6 @@ namespace gvfg::internal
         double get_frame_timing_window_max_us_ = 0.0;
         double get_frame_timing_last_max300_us_ = 0.0;
         double get_frame_timing_lifetime_max_us_ = 0.0;
-        uint64_t event_wait_timing_samples_ = 0;
-        uint32_t event_wait_timing_window_samples_ = 0;
-        double event_wait_timing_total_us_ = 0.0;
-        double event_wait_timing_window_max_us_ = 0.0;
-        double event_wait_timing_last_max300_us_ = 0.0;
-        double event_wait_timing_lifetime_max_us_ = 0.0;
-        uint64_t sdk_processing_timing_samples_ = 0;
-        uint32_t sdk_processing_timing_window_samples_ = 0;
-        double sdk_processing_timing_total_us_ = 0.0;
-        double sdk_processing_timing_window_max_us_ = 0.0;
-        double sdk_processing_timing_last_max300_us_ = 0.0;
-        double sdk_processing_timing_lifetime_max_us_ = 0.0;
         std::vector<uint8_t> copy_buffer_;
         pcies2mm_frame_t held_frame_{};
         bool frame_held_ = false;
@@ -160,6 +142,5 @@ namespace gvfg::internal
         std::chrono::steady_clock::time_point active_delivery_started_{};
         bool stream_error_ = false;
         pcies2mm_stream_stats_t stats_{};
-        mutable std::string last_error_;
     };
 }

@@ -58,10 +58,7 @@ public:
 
     bool render(const gvfg_preview_frame_t &frame)
     {
-        using Clock = std::chrono::steady_clock;
-        const auto submitStart = Clock::now();
         std::unique_lock<std::mutex> lock(mutex_);
-        const auto lockEnd = Clock::now();
         if (!configured_ || !hwnd_ || !frame.data || frame.width <= 0 || frame.height <= 0)
             return false;
 
@@ -94,14 +91,12 @@ public:
         ID3D11DeviceContext *deferred = slot.deferred.Get();
         ID3D11Texture2D *texture = slot.texture.Get();
         lock.unlock();
-        const auto setupEnd = Clock::now();
 
         D3D11_MAPPED_SUBRESOURCE mapped{};
         if (FAILED(deferred->Map(texture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
         {
             lock.lock(); slot.state = SlotState::Free; return false;
         }
-        const auto mapEnd = Clock::now();
         const size_t rowBytes = frame.pixel_format == GVFG_PREVIEW_PIXFMT_Y210
                                     ? static_cast<size_t>(frame.width) * 4u
                                     : static_cast<size_t>((frame.width + 1) / 2) * 4u;
@@ -117,16 +112,13 @@ public:
                             rowBytes);
         }
         deferred->Unmap(texture, 0);
-        const auto copyEnd = Clock::now();
         ComPtr<ID3D11CommandList> commands;
         if (FAILED(deferred->FinishCommandList(FALSE, &commands)))
         {
             lock.lock(); slot.state = SlotState::Free; return false;
         }
-        const auto finishEnd = Clock::now();
 
         lock.lock();
-        const auto publishLockEnd = Clock::now();
         for (UploadSlot &other : slots_)
             if (&other != &slot && other.state == SlotState::Pending)
                 other.state = SlotState::Free;
@@ -139,28 +131,6 @@ public:
         slot.generation = clearGeneration_.load(std::memory_order_acquire);
         slot.state = SlotState::Pending;
         workerCv_.notify_one();
-#if GVFG_INTERNAL_DIAGNOSTICS
-        const auto submitEnd = Clock::now();
-        const auto milliseconds = [](Clock::duration duration) {
-            return std::chrono::duration<double, std::milli>(duration).count();
-        };
-        const double totalMs = milliseconds(submitEnd - submitStart);
-        if (totalMs >= 10.0)
-        {
-            char line[420] = {};
-            std::snprintf(line, sizeof(line),
-                          "[GVFG][PREVIEW] SLOW SUBMIT frame=%llu slot=%zu total=%.3f lock=%.3f setup=%.3f map=%.3f copy=%.3f finish=%.3f publish_lock=%.3f src_pitch=%d dst_pitch=%u ms\n",
-                          static_cast<unsigned long long>(frame.frame_id), slotIndex, totalMs,
-                          milliseconds(lockEnd - submitStart),
-                          milliseconds(setupEnd - lockEnd),
-                          milliseconds(mapEnd - setupEnd),
-                          milliseconds(copyEnd - mapEnd),
-                          milliseconds(finishEnd - copyEnd),
-                          milliseconds(publishLockEnd - finishEnd),
-                          frame.row_bytes, mapped.RowPitch);
-            OutputDebugStringA(line);
-        }
-#endif
         return true;
     }
 
@@ -533,15 +503,12 @@ private:
                 work = slots_[selected];
             }
 
-            using Clock = std::chrono::steady_clock;
-            const auto start = Clock::now();
             bool ready = false;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 ready = configured_ && !workerStopping_ &&
                         ensurePipeline(work.width, work.height, work.bitDepth);
             }
-            const auto ensureEnd = Clock::now();
             bool rendered = false;
             bool copied = false;
             bool blitted = false;
@@ -566,8 +533,6 @@ private:
                         presentResult = pipeline_->present_preview(work.width, work.height);
                 }
             }
-            const auto end = Clock::now();
-
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (ready && rendered && copied && blitted &&
@@ -585,18 +550,6 @@ private:
                 slots_[selected].commands.Reset();
                 slots_[selected].state = SlotState::Free;
             }
-#if GVFG_INTERNAL_DIAGNOSTICS
-            const double totalMs = std::chrono::duration<double, std::milli>(end - start).count();
-            if (totalMs >= 10.0)
-            {
-                char line[320] = {};
-                std::snprintf(line, sizeof(line),
-                              "[GVFG][PREVIEW] SLOW ASYNC frame=%llu total=%.3f ensure=%.3f ms\n",
-                              static_cast<unsigned long long>(work.frameId), totalMs,
-                              std::chrono::duration<double, std::milli>(ensureEnd - start).count());
-                OutputDebugStringA(line);
-            }
-#endif
         }
     }
 

@@ -15,7 +15,11 @@ register、IRQ 或 DMA ring 實作細節。
 include/gvfg_capture.h
 lib/gvfg.lib
 bin/gvfg.dll
+bin/giga_ioctl.dll
 ```
+
+Application 只 link `gvfg.lib`；`giga_ioctl.dll` 是 `gvfg.dll` 的 runtime
+相依，必須隨 `gvfg.dll` 一起部署，不需要把 private `giga_ioctl.h` 交給客戶。
 
 選用預覽：
 
@@ -34,11 +38,11 @@ gvfg_enumerate_devices
 -> gvfg_create
 -> gvfg_set_zero_copy_enabled (optional, before open)
 -> gvfg_open_channel
--> gvfg_start
+-> gvfg_start_channel
 -> 重複：
-   gvfg_read_frame
+   gvfg_read_channel_frame
    使用／複製／轉換 frame
-   gvfg_release_frame
+   gvfg_release_channel_frame
 -> gvfg_stop
 -> gvfg_destroy
 ```
@@ -231,10 +235,10 @@ plane；使用 BT.709 limited range。
 `gvfg.dll`。典型流程：
 
 ```text
-gvfg_read_frame
+gvfg_read_channel_frame
 -> 將 gvfg_frame_t 欄位對應到 gvfg_preview_frame_t
 -> gvfg_preview_render_frame
--> gvfg_release_frame
+-> gvfg_release_channel_frame
 ```
 
 建立後用 `gvfg_preview_attach_window()` 傳入 Windows `HWND`。render 返回前

@@ -90,7 +90,6 @@ private:
     QString lastSignalStatusText_;
     QString lastLoggedInputStatus_;
 #if GVFG_INTERNAL_DIAGNOSTICS
-    QString lastLoggedBackendError_;
     uint64_t lastDebugDmaErrors_ = 0;
     bool haveDebugBaseline_ = false;
 #endif

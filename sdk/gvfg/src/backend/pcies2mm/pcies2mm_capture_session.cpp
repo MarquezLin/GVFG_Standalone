@@ -141,13 +141,14 @@ namespace
 
 namespace gvfg::internal
 {
-    PcieS2mmCaptureSession::SharedDevice::~SharedDevice()
+    PcieS2mmDeviceConnection::~PcieS2mmDeviceConnection()
     {
         if (handle != INVALID_HANDLE_VALUE)
             CloseHandle(handle);
     }
 
-    PcieS2mmCaptureSession::PcieS2mmCaptureSession()
+    PcieS2mmCaptureSession::PcieS2mmCaptureSession(ChannelErrorState &errorState)
+        : error_state_(errorState)
     {
         stream_desc_.width = kDefaultWidth;
         stream_desc_.height = kDefaultHeight;
@@ -173,59 +174,47 @@ namespace gvfg::internal
     pcies2mm_status_t PcieS2mmCaptureSession::open_device(const PcieS2mmDevice &device)
     {
         close();
-        base_path_ = device.interface_path;
-        friendly_name_ = device.friendly_name.empty() ? L"PcieS2mm Capture Device" : device.friendly_name;
 
-        auto sharedDevice = std::make_shared<SharedDevice>();
-        sharedDevice->handle = CreateFileW(base_path_.c_str(),
+        auto connection = std::make_shared<PcieS2mmDeviceConnection>();
+        connection->handle = CreateFileW(device.interface_path.c_str(),
                                            GENERIC_READ | GENERIC_WRITE,
                                            FILE_SHARE_READ | FILE_SHARE_WRITE,
                                            nullptr,
                                            OPEN_EXISTING,
                                            FILE_ATTRIBUTE_NORMAL,
                                            nullptr);
-        if (sharedDevice->handle == INVALID_HANDLE_VALUE)
+        if (connection->handle == INVALID_HANDLE_VALUE)
         {
             const DWORD err = GetLastError();
             close_handles();
             return fail(PCIES2MM_EIO, "CreateFile(PcieS2mm)", err);
         }
-        shared_device_ = std::move(sharedDevice);
-        device_ = shared_device_->handle;
+        device_connection_ = std::move(connection);
 
-        opened_ = true;
         configured_ = false;
         signal_presence_known_.store(false, std::memory_order_release);
         signal_present_.store(false, std::memory_order_release);
         signal_probe_active_.store(false, std::memory_order_release);
         signal_metadata_valid_ = false;
-        clear_last_error();
-        PCIES2MM_LOG("open_device: %s", wide_to_utf8(base_path_).c_str());
+        error_state_.clear();
+        PCIES2MM_LOG("open_device: %s", wide_to_utf8(device.interface_path).c_str());
         return PCIES2MM_OK;
     }
 
-    pcies2mm_status_t PcieS2mmCaptureSession::open_shared_device(
-        const PcieS2mmCaptureSession &source,
-        uint32_t channel)
+    pcies2mm_status_t PcieS2mmCaptureSession::open_device_connection(
+        const std::shared_ptr<PcieS2mmDeviceConnection> &connection)
     {
-        if (channel >= kMaxChannels)
-            return PCIES2MM_EINVAL;
-        if (!source.opened_ || !source.shared_device_ ||
-            source.shared_device_->handle == INVALID_HANDLE_VALUE)
-            return PCIES2MM_ESTATE;
+        if (!connection || connection->handle == INVALID_HANDLE_VALUE)
+            return reject(PCIES2MM_ESTATE, "open device connection rejected: connection is invalid");
 
         close();
-        shared_device_ = source.shared_device_;
-        device_ = shared_device_->handle;
-        base_path_ = source.base_path_;
-        friendly_name_ = source.friendly_name_;
-        opened_ = true;
+        device_connection_ = connection;
         configured_ = false;
         signal_presence_known_.store(false, std::memory_order_release);
         signal_present_.store(false, std::memory_order_release);
         signal_probe_active_.store(false, std::memory_order_release);
         signal_metadata_valid_ = false;
-        clear_last_error();
+        error_state_.clear();
         return PCIES2MM_OK;
     }
 
@@ -233,22 +222,19 @@ namespace gvfg::internal
     {
         pcies2mm_status_t result = stop_stream();
         stop_event_monitoring();
-        if (zero_copy_enabled_ && device_ != INVALID_HANDLE_VALUE)
+        if (zero_copy_enabled_ && device_handle() != INVALID_HANDLE_VALUE)
         {
             const pcies2mm_status_t disableStatus = set_zero_copy_enabled(false);
             if (result == PCIES2MM_OK)
                 result = disableStatus;
         }
         close_handles();
-        opened_ = false;
         configured_ = false;
         zero_copy_enabled_ = false;
         signal_presence_known_.store(false, std::memory_order_release);
         signal_present_.store(false, std::memory_order_release);
         signal_probe_active_.store(false, std::memory_order_release);
         signal_metadata_valid_ = false;
-        base_path_.clear();
-        friendly_name_.clear();
         reset_stats(stats_, PCIES2MM_STREAM_STOPPED);
         return result;
     }
@@ -256,18 +242,22 @@ namespace gvfg::internal
     void PcieS2mmCaptureSession::close_handles()
     {
         close_event_handles();
-        device_ = INVALID_HANDLE_VALUE;
-        shared_device_.reset();
+        device_connection_.reset();
+    }
+
+    HANDLE PcieS2mmCaptureSession::device_handle() const
+    {
+        return device_connection_ ? device_connection_->handle : INVALID_HANDLE_VALUE;
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::set_channel(uint32_t channel)
     {
-        if (!opened_)
-            return PCIES2MM_ESTATE;
+        if (device_handle() == INVALID_HANDLE_VALUE)
+            return reject(PCIES2MM_ESTATE, "set channel rejected: device is not open");
         if (running_)
-            return PCIES2MM_ESTATE;
+            return reject(PCIES2MM_ESTATE, "set channel rejected: stream is running");
         if (channel >= kMaxChannels)
-            return PCIES2MM_EINVAL;
+            return reject(PCIES2MM_EINVAL, "set channel rejected: channel index is invalid");
         channel_ = channel;
         signal_metadata_valid_ = false;
         if (!start_event_monitoring())
@@ -277,10 +267,10 @@ namespace gvfg::internal
 
     pcies2mm_status_t PcieS2mmCaptureSession::set_zero_copy_enabled(bool enabled)
     {
-        if (!opened_ || device_ == INVALID_HANDLE_VALUE)
-            return PCIES2MM_ESTATE;
+        if (device_handle() == INVALID_HANDLE_VALUE)
+            return reject(PCIES2MM_ESTATE, "set zero copy rejected: device is not open");
         if (running_)
-            return PCIES2MM_ESTATE;
+            return reject(PCIES2MM_ESTATE, "set zero copy rejected: stream is running");
         if (zero_copy_enabled_ == enabled)
             return PCIES2MM_OK;
 
@@ -296,7 +286,7 @@ namespace gvfg::internal
             stop_event_monitoring();
         }
 
-        if (!giga_ioctl_set_frame_zerocopy(device_, active_channel(), enabled ? TRUE : FALSE))
+        if (!giga_ioctl_set_frame_zerocopy(device_handle(), active_channel(), enabled ? TRUE : FALSE))
             return fail(PCIES2MM_EIO, enabled ? "enable zero copy" : "disable zero copy");
         zero_copy_enabled_ = enabled;
         return PCIES2MM_OK;
@@ -304,14 +294,14 @@ namespace gvfg::internal
 
     pcies2mm_status_t PcieS2mmCaptureSession::set_video_format(pcies2mm_pixel_format_t format)
     {
-        if (!opened_)
-            return PCIES2MM_ESTATE;
+        if (device_handle() == INVALID_HANDLE_VALUE)
+            return reject(PCIES2MM_ESTATE, "set video format rejected: device is not open");
 
         uint32_t value = 0;
         if (format == PCIES2MM_PIXFMT_Y210)
             value = 1;
         else if (format != PCIES2MM_PIXFMT_YUY2)
-            return PCIES2MM_EINVAL;
+            return reject(PCIES2MM_EINVAL, "set video format rejected: pixel format is invalid");
 
         if (!write_reg(VIDEO_OUTPUT_FORMAT_REGISTER, value))
             return fail(PCIES2MM_EIO, "set_video_format");
@@ -323,8 +313,8 @@ namespace gvfg::internal
 
     pcies2mm_status_t PcieS2mmCaptureSession::get_signal_status(pcies2mm_signal_status_t &out) const
     {
-        if (!opened_)
-            return PCIES2MM_ESTATE;
+        if (device_handle() == INVALID_HANDLE_VALUE)
+            return reject(PCIES2MM_ESTATE, "get signal status rejected: device is not open");
 
         std::memset(&out, 0, sizeof(out));
         out.channel = channel_;
@@ -392,12 +382,12 @@ namespace gvfg::internal
 
     pcies2mm_status_t PcieS2mmCaptureSession::configure_stream(const pcies2mm_stream_desc_t &desc)
     {
-        if (!opened_)
-            return PCIES2MM_ESTATE;
+        if (device_handle() == INVALID_HANDLE_VALUE)
+            return reject(PCIES2MM_ESTATE, "configure stream rejected: device is not open");
         if (running_)
-            return PCIES2MM_ESTATE;
+            return reject(PCIES2MM_ESTATE, "configure stream rejected: stream is running");
         if (desc.width == 0 || desc.height == 0)
-            return PCIES2MM_EINVAL;
+            return reject(PCIES2MM_EINVAL, "configure stream rejected: frame dimensions are invalid");
 
         pcies2mm_pixel_format_t fmt = desc.pixel_format == PCIES2MM_PIXFMT_UNKNOWN ? PCIES2MM_PIXFMT_YUY2 : desc.pixel_format;
         switch (fmt)
@@ -415,14 +405,13 @@ namespace gvfg::internal
         stream_bit_depth_ = bit_depth_for_pixfmt(fmt);
         configured_ = true;
         reset_stats(stats_, PCIES2MM_STREAM_CONFIGURED);
-        clear_last_error();
         return PCIES2MM_OK;
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::start_stream()
     {
-        if (!opened_ || !configured_)
-            return PCIES2MM_ESTATE;
+        if (device_handle() == INVALID_HANDLE_VALUE || !configured_)
+            return reject(PCIES2MM_ESTATE, "start stream rejected: device is not configured");
         if (running_)
             return PCIES2MM_OK;
 
@@ -454,18 +443,6 @@ namespace gvfg::internal
             get_frame_timing_window_max_us_ = 0.0;
             get_frame_timing_last_max300_us_ = 0.0;
             get_frame_timing_lifetime_max_us_ = 0.0;
-            event_wait_timing_samples_ = 0;
-            event_wait_timing_window_samples_ = 0;
-            event_wait_timing_total_us_ = 0.0;
-            event_wait_timing_window_max_us_ = 0.0;
-            event_wait_timing_last_max300_us_ = 0.0;
-            event_wait_timing_lifetime_max_us_ = 0.0;
-            sdk_processing_timing_samples_ = 0;
-            sdk_processing_timing_window_samples_ = 0;
-            sdk_processing_timing_total_us_ = 0.0;
-            sdk_processing_timing_window_max_us_ = 0.0;
-            sdk_processing_timing_last_max300_us_ = 0.0;
-            sdk_processing_timing_lifetime_max_us_ = 0.0;
             stream_error_ = false;
             reset_stats(stats_, PCIES2MM_STREAM_CONFIGURED);
         }
@@ -512,7 +489,7 @@ namespace gvfg::internal
         signal_probe_active_ = false;
         stream_ready_pending_ = false;
 
-        if (device_ != INVALID_HANDLE_VALUE)
+        if (device_handle() != INVALID_HANDLE_VALUE)
             stop_video(active_channel());
 
         if (dma_event_)
@@ -536,12 +513,13 @@ namespace gvfg::internal
 
     pcies2mm_status_t PcieS2mmCaptureSession::wait_frame(uint32_t timeoutMs, pcies2mm_frame_t &out)
     {
+        constexpr uint64_t kTimingWarmupFrames = 30;
         reader_ready_.store(true, std::memory_order_release);
         std::memset(&out, 0, sizeof(out));
         {
             std::unique_lock<std::mutex> lock(mutex_);
             if (!running_ || frame_held_ || read_in_progress_)
-                return PCIES2MM_ESTATE;
+                return reject(PCIES2MM_ESTATE, "wait frame rejected: stream state does not allow another read");
             if (!capture_active_.load(std::memory_order_acquire))
             {
                 if (!signal_presence_known_.load(std::memory_order_acquire) ||
@@ -574,13 +552,11 @@ namespace gvfg::internal
         };
 
         const bool infiniteWait = timeoutMs == UINT32_MAX;
-        const auto attemptStarted = std::chrono::steady_clock::now();
         const auto deadline = infiniteWait
                                   ? (std::chrono::steady_clock::time_point::max)()
-                                  : attemptStarted + std::chrono::milliseconds(timeoutMs);
+                                  : std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
         const DWORD bytes = static_cast<DWORD>(frame_size_bytes());
         const uint8_t *data = nullptr;
-        double eventWaitUs = 0.0;
         double getFrameUs = 0.0;
         for (;;)
         {
@@ -597,11 +573,7 @@ namespace gvfg::internal
                 }
             }
 
-            const auto eventWaitStarted = std::chrono::steady_clock::now();
             const DWORD waitResult = WaitForSingleObject(dma_event_, waitMs);
-            const auto eventWaitFinished = std::chrono::steady_clock::now();
-            eventWaitUs += std::chrono::duration<double, std::micro>(
-                               eventWaitFinished - eventWaitStarted).count();
             if (waitResult == WAIT_TIMEOUT)
             {
                 {
@@ -679,8 +651,10 @@ namespace gvfg::internal
                     release_zero_copy_frame(active_channel());
                 return PCIES2MM_ESTATE;
             }
-            record_get_frame_timing(getFrameUs);
             ++latest_sequence_;
+            const bool timingWarmupComplete = latest_sequence_ > kTimingWarmupFrames;
+            if (timingWarmupComplete)
+                record_get_frame_timing(getFrameUs);
             delivered_sequence_ = latest_sequence_;
             ++stats_.interrupt_count;
             ++stats_.frames_captured;
@@ -698,10 +672,6 @@ namespace gvfg::internal
             out.bit_depth = stream_bit_depth_;
             held_frame_ = out;
             frame_held_ = true;
-            const double backendTotalUs = std::chrono::duration<double, std::micro>(
-                                              std::chrono::steady_clock::now() - attemptStarted).count();
-            record_event_wait_timing(eventWaitUs);
-            record_sdk_processing_timing((std::max)(0.0, backendTotalUs - eventWaitUs - getFrameUs));
         }
         if (stream_ready_pending_.exchange(false, std::memory_order_acq_rel))
             emit_event(PCIES2MM_EVENT_STREAM_READY);
@@ -712,7 +682,7 @@ namespace gvfg::internal
     {
         std::unique_lock<std::mutex> lock(mutex_);
         if (!frame_held_)
-            return PCIES2MM_ESTATE;
+            return reject(PCIES2MM_ESTATE, "release frame rejected: no frame is currently held");
         if (frame.data != held_frame_.data ||
             frame.data_size_bytes != held_frame_.data_size_bytes ||
             frame.frame_id != held_frame_.frame_id ||
@@ -720,7 +690,7 @@ namespace gvfg::internal
             frame.height != held_frame_.height ||
             frame.pixel_format != held_frame_.pixel_format ||
             frame.bit_depth != held_frame_.bit_depth)
-            return PCIES2MM_EINVAL;
+            return reject(PCIES2MM_EINVAL, "release frame rejected: frame token does not match the held frame");
 
         if (zero_copy_enabled_ && !release_zero_copy_frame(active_channel()))
         {
@@ -740,12 +710,6 @@ namespace gvfg::internal
         frame_held_ = false;
         read_finished_cv_.notify_all();
         return PCIES2MM_OK;
-    }
-
-    const char *PcieS2mmCaptureSession::last_error() const
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return last_error_.c_str();
     }
 
     void PcieS2mmCaptureSession::get_debug_stats(pcies2mm_stream_stats_t &outStats,
@@ -768,59 +732,45 @@ namespace gvfg::internal
                 : 0.0;
         outDebugState.get_frame_timing_max300_us = get_frame_timing_last_max300_us_;
         outDebugState.get_frame_timing_max_us = get_frame_timing_lifetime_max_us_;
-        outDebugState.event_wait_timing_samples = event_wait_timing_samples_;
-        outDebugState.event_wait_timing_average_us =
-            event_wait_timing_samples_ > 0
-                ? event_wait_timing_total_us_ / static_cast<double>(event_wait_timing_samples_)
-                : 0.0;
-        outDebugState.event_wait_timing_max300_us = event_wait_timing_last_max300_us_;
-        outDebugState.event_wait_timing_max_us = event_wait_timing_lifetime_max_us_;
-        outDebugState.sdk_processing_timing_samples = sdk_processing_timing_samples_;
-        outDebugState.sdk_processing_timing_average_us =
-            sdk_processing_timing_samples_ > 0
-                ? sdk_processing_timing_total_us_ / static_cast<double>(sdk_processing_timing_samples_)
-                : 0.0;
-        outDebugState.sdk_processing_timing_max300_us = sdk_processing_timing_last_max300_us_;
-        outDebugState.sdk_processing_timing_max_us = sdk_processing_timing_lifetime_max_us_;
     }
 
     bool PcieS2mmCaptureSession::read_reg(uint32_t offset, uint32_t &out) const
     {
         if (is_write_only_register(offset))
             return false;
-        return giga_ioctl_read_register(device_, offset, &out) != FALSE;
+        return giga_ioctl_read_register(device_handle(), offset, &out) != FALSE;
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::debug_read_register(uint32_t offset,
                                                                   uint32_t &outValue) const
     {
-        if (!opened_ || device_ == INVALID_HANDLE_VALUE)
-            return PCIES2MM_ESTATE;
+        if (device_handle() == INVALID_HANDLE_VALUE)
+            return reject(PCIES2MM_ESTATE, "debug register read rejected: device is not open");
         if ((offset & 0x3u) != 0 || is_write_only_register(offset))
-            return PCIES2MM_EINVAL;
+            return reject(PCIES2MM_EINVAL, "debug register read rejected: offset is invalid or write-only");
         return read_reg(offset, outValue) ? PCIES2MM_OK : fail(PCIES2MM_EIO, "debug_read_register");
     }
 
     bool PcieS2mmCaptureSession::write_reg(uint32_t offset, uint32_t value) const
     {
-        return giga_ioctl_write_register(device_, offset, value) != FALSE;
+        return giga_ioctl_write_register(device_handle(), offset, value) != FALSE;
     }
 
     bool PcieS2mmCaptureSession::start_video(uint32_t channelIndex) const
     {
-        return giga_ioctl_video_start(device_, channelIndex) != FALSE;
+        return giga_ioctl_video_start(device_handle(), channelIndex) != FALSE;
     }
 
     bool PcieS2mmCaptureSession::stop_video(uint32_t channelIndex) const
     {
-        return giga_ioctl_video_stop(device_, channelIndex) != FALSE;
+        return giga_ioctl_video_stop(device_handle(), channelIndex) != FALSE;
     }
 
     bool PcieS2mmCaptureSession::acquire_zero_copy_frame(uint32_t channelIndex,
                                                          const uint8_t *&outData) const
     {
         const void *buffer = nullptr;
-        if (!giga_ioctl_acquire_video_frame_zerocopy(device_, channelIndex, &buffer))
+        if (!giga_ioctl_acquire_video_frame_zerocopy(device_handle(), channelIndex, &buffer))
             return false;
         outData = static_cast<const uint8_t *>(buffer);
         return true;
@@ -828,7 +778,7 @@ namespace gvfg::internal
 
     bool PcieS2mmCaptureSession::release_zero_copy_frame(uint32_t channelIndex) const
     {
-        return giga_ioctl_release_video_frame(device_, channelIndex) != FALSE;
+        return giga_ioctl_release_video_frame(device_handle(), channelIndex) != FALSE;
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::release_all_zero_copy_frames(bool includeInUse)
@@ -851,21 +801,21 @@ namespace gvfg::internal
     pcies2mm_status_t PcieS2mmCaptureSession::debug_write_register(uint32_t offset,
                                                                    uint32_t value) const
     {
-        if (!opened_ || device_ == INVALID_HANDLE_VALUE)
-            return PCIES2MM_ESTATE;
+        if (device_handle() == INVALID_HANDLE_VALUE)
+            return reject(PCIES2MM_ESTATE, "debug register write rejected: device is not open");
         if ((offset & 0x3u) != 0)
-            return PCIES2MM_EINVAL;
+            return reject(PCIES2MM_EINVAL, "debug register write rejected: offset is not aligned");
         return write_reg(offset, value) ? PCIES2MM_OK : fail(PCIES2MM_EIO, "debug_write_register");
     }
 
     bool PcieS2mmCaptureSession::register_event(uint32_t channelIndex, uint32_t eventType, HANDLE eventHandle)
     {
-        return giga_ioctl_register_event(device_, channelIndex, eventType, eventHandle) != FALSE;
+        return giga_ioctl_register_event(device_handle(), channelIndex, eventType, eventHandle) != FALSE;
     }
 
     void PcieS2mmCaptureSession::unregister_event(uint32_t channelIndex, uint32_t eventType)
     {
-        giga_ioctl_unregister_event(device_, channelIndex, eventType);
+        giga_ioctl_unregister_event(device_handle(), channelIndex, eventType);
     }
 
     bool PcieS2mmCaptureSession::create_and_register_events(uint32_t channelIndex)
@@ -965,7 +915,7 @@ namespace gvfg::internal
         if (capture_thread_.joinable())
             capture_thread_.join();
 
-        if (device_ != INVALID_HANDLE_VALUE)
+        if (device_handle() != INVALID_HANDLE_VALUE)
             unregister_events(active_channel());
         close_event_handles();
     }
@@ -973,7 +923,7 @@ namespace gvfg::internal
     int PcieS2mmCaptureSession::get_frame(uint32_t channelIndex, uint32_t frameIndex, uint8_t *buffer, DWORD bufferSize) const
     {
         uint32_t bytesReturned = 0;
-        const BOOL ok = giga_ioctl_get_frame(device_, channelIndex, frameIndex,
+        const BOOL ok = giga_ioctl_get_frame(device_handle(), channelIndex, frameIndex,
                                               buffer, bufferSize, &bytesReturned);
         if (!ok)
             return -1;
@@ -1198,21 +1148,16 @@ namespace gvfg::internal
         oss << (where ? where : "PcieS2mm") << " failed";
         if (winerr != NO_ERROR)
             oss << ": " << win32_error(winerr) << " (" << winerr << ")";
-        set_last_error(oss.str());
+        error_state_.set(oss.str());
         PCIES2MM_ERROR_LOG("%s", oss.str().c_str());
         return status;
     }
 
-    void PcieS2mmCaptureSession::set_last_error(const std::string &message) const
+    pcies2mm_status_t PcieS2mmCaptureSession::reject(pcies2mm_status_t status,
+                                                      const char *message) const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        last_error_ = message;
-    }
-
-    void PcieS2mmCaptureSession::clear_last_error() const
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        last_error_.clear();
+        error_state_.set(message ? message : "PCIES2MM operation rejected");
+        return status;
     }
 
     uint32_t PcieS2mmCaptureSession::active_channel() const
@@ -1255,33 +1200,4 @@ namespace gvfg::internal
         }
     }
 
-    void PcieS2mmCaptureSession::record_event_wait_timing(double elapsedUs)
-    {
-        ++event_wait_timing_samples_;
-        ++event_wait_timing_window_samples_;
-        event_wait_timing_total_us_ += elapsedUs;
-        event_wait_timing_window_max_us_ = (std::max)(event_wait_timing_window_max_us_, elapsedUs);
-        event_wait_timing_lifetime_max_us_ = (std::max)(event_wait_timing_lifetime_max_us_, elapsedUs);
-        if (event_wait_timing_window_samples_ >= 300)
-        {
-            event_wait_timing_last_max300_us_ = event_wait_timing_window_max_us_;
-            event_wait_timing_window_samples_ = 0;
-            event_wait_timing_window_max_us_ = 0.0;
-        }
-    }
-
-    void PcieS2mmCaptureSession::record_sdk_processing_timing(double elapsedUs)
-    {
-        ++sdk_processing_timing_samples_;
-        ++sdk_processing_timing_window_samples_;
-        sdk_processing_timing_total_us_ += elapsedUs;
-        sdk_processing_timing_window_max_us_ = (std::max)(sdk_processing_timing_window_max_us_, elapsedUs);
-        sdk_processing_timing_lifetime_max_us_ = (std::max)(sdk_processing_timing_lifetime_max_us_, elapsedUs);
-        if (sdk_processing_timing_window_samples_ >= 300)
-        {
-            sdk_processing_timing_last_max300_us_ = sdk_processing_timing_window_max_us_;
-            sdk_processing_timing_window_samples_ = 0;
-            sdk_processing_timing_window_max_us_ = 0.0;
-        }
-    }
 }

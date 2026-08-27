@@ -51,8 +51,10 @@ Build 產物：
 
 ```text
 build/.../bin/gvfg.dll
+build/.../bin/giga_ioctl.dll
 build/.../bin/gvfg_preview.dll
 build/.../lib/gvfg.lib
+build/.../lib/giga_ioctl.lib
 build/.../lib/gvfg_preview.lib
 build/.../bin/gvfg_qt_preview.exe
 ```
@@ -136,7 +138,11 @@ runtime API 都明確要求 `channel_index`；不再保留隱含 selected-channe
 include/gvfg_capture.h
 lib/gvfg.lib
 bin/gvfg.dll
+bin/giga_ioctl.dll
 ```
+
+Application 不直接 link `giga_ioctl.lib`，但 `gvfg.dll` 會在 runtime 載入
+`giga_ioctl.dll`，因此部署時兩個 DLL 必須一起提供。
 
 需要 optional display helper 時，再加：
 

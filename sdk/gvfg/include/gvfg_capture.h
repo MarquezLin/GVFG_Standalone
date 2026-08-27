@@ -116,7 +116,7 @@ extern "C"
 
     typedef struct
     {
-        int connected;    /* Non-zero while the selected channel has a valid input signal. */
+        int connected;    /* Non-zero while this channel has a valid input signal. */
         int channel;      /* gvfg_channel_t selected when the device was opened. */
         int width;        /* Signal width in pixels when connected. */
         int height;       /* Signal height in pixels when connected. */
@@ -533,7 +533,12 @@ extern "C"
     GVFG_API const char *gvfg_strerror(
         _In_ gvfg_status_t status);
 
-    /* Copy the most recent detailed error for this handle. */
+    /*
+     * Copy the most recent detailed fault or rejected API call for one
+     * channel. Event-poll timeouts are not stored; frame-read timeouts currently
+     * retain the backend timeout detail. A successful gvfg_start_channel()
+     * begins a new diagnostic lifetime.
+     */
     GVFG_API gvfg_status_t gvfg_get_channel_last_error_detail(
         _In_ gvfg_handle handle,
         _In_ int channel_index,

@@ -17,6 +17,7 @@ add_library(gvfg SHARED
     src/gpu/d3d_conversion_pipeline.cpp
     src/gpu/d3d_conversion_pipeline.h
     src/gpu/gvfg_gpu_convert.cpp
+    src/gvfg_error_state.h
     src/gvfg_capture.cpp
 )
 
@@ -30,6 +31,7 @@ target_include_directories(gvfg
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/pcies2mm
         ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu
 )

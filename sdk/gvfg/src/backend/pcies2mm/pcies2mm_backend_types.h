@@ -78,14 +78,6 @@ typedef struct pcies2mm_debug_state_t
     double get_frame_timing_average_us;
     double get_frame_timing_max300_us;
     double get_frame_timing_max_us;
-    uint64_t event_wait_timing_samples;
-    double event_wait_timing_average_us;
-    double event_wait_timing_max300_us;
-    double event_wait_timing_max_us;
-    uint64_t sdk_processing_timing_samples;
-    double sdk_processing_timing_average_us;
-    double sdk_processing_timing_max300_us;
-    double sdk_processing_timing_max_us;
 } pcies2mm_debug_state_t;
 
 typedef enum pcies2mm_event_type_t

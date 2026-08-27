@@ -82,37 +82,6 @@ namespace
         }
     }
 
-    const char *pcies2mm_status_text(pcies2mm_status_t st)
-    {
-        switch (st)
-        {
-        case PCIES2MM_OK:
-            return "ok";
-        case PCIES2MM_EINVAL:
-            return "invalid argument";
-        case PCIES2MM_ENODEV:
-            return "device not found";
-        case PCIES2MM_ESTATE:
-            return "invalid state";
-        case PCIES2MM_ENOTSUP:
-            return "not supported";
-        case PCIES2MM_ETIMEOUT:
-            return "timeout";
-        case PCIES2MM_EIO:
-            return "i/o error";
-        default:
-            return "unknown";
-        }
-    }
-
-    const char *pcies2mm_error_text(pcies2mm_status_t st, const gvfg::internal::PcieS2mmCaptureSession *session)
-    {
-        const char *detail = session ? session->last_error() : nullptr;
-        if (detail && detail[0])
-            return detail;
-        return pcies2mm_status_text(st);
-    }
-
     void copy_wide_to_utf8(const std::wstring &src, char *dst, size_t dstSize)
     {
         if (!dst || dstSize == 0)
@@ -200,6 +169,11 @@ namespace
 
 struct gvfg_channel_session_t
 {
+    explicit gvfg_channel_session_t(ChannelErrorState &errorState)
+        : errorState(errorState)
+    {
+    }
+
     ~gvfg_channel_session_t()
     {
         close();
@@ -207,20 +181,18 @@ struct gvfg_channel_session_t
 
     gvfg_status_t open(int index,
                        int channelIndex = GVFG_CHANNEL_0,
-                       gvfg::internal::PcieS2mmCaptureSession *sharedDeviceSource = nullptr)
+                       const std::shared_ptr<gvfg::internal::PcieS2mmDeviceConnection> &deviceConnection = nullptr)
     {
         if (index < 0 || (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1))
-            return GVFG_EINVAL;
+            return reject(GVFG_EINVAL, "gvfg_open_channel rejected: device or channel index is invalid");
         close();
 
-        backend = std::make_unique<gvfg::internal::PcieS2mmCaptureSession>();
-        const pcies2mm_status_t stOpen = sharedDeviceSource
-                                             ? backend->open_shared_device(*sharedDeviceSource,
-                                                                           static_cast<uint32_t>(channelIndex))
+        backend = std::make_unique<gvfg::internal::PcieS2mmCaptureSession>(errorState);
+        const pcies2mm_status_t stOpen = deviceConnection
+                                             ? backend->open_device_connection(deviceConnection)
                                              : backend->open_device_index(static_cast<size_t>(index));
         if (stOpen != PCIES2MM_OK)
         {
-            recordError(pcies2mm_error_text(stOpen, backend.get()));
             backend.reset();
             return map_status(stOpen);
         }
@@ -232,7 +204,6 @@ struct gvfg_channel_session_t
         const pcies2mm_status_t stChannel = backend->set_channel(selectedChannel);
         if (stChannel != PCIES2MM_OK)
         {
-            recordError(pcies2mm_error_text(stChannel, backend.get()));
             close();
             return map_status(stChannel);
         }
@@ -242,7 +213,6 @@ struct gvfg_channel_session_t
             const pcies2mm_status_t stZeroCopy = backend->set_zero_copy_enabled(true);
             if (stZeroCopy != PCIES2MM_OK)
             {
-                recordError(pcies2mm_error_text(stZeroCopy, backend.get()));
                 close();
                 return map_status(stZeroCopy);
             }
@@ -255,7 +225,7 @@ struct gvfg_channel_session_t
     gvfg_status_t setZeroCopyEnabled(bool enabled)
     {
         if (backend)
-            return GVFG_ESTATE;
+            return reject(GVFG_ESTATE, "set zero copy rejected: channel is already open");
         zeroCopyRequested = enabled;
         return GVFG_OK;
     }
@@ -263,7 +233,11 @@ struct gvfg_channel_session_t
     gvfg_status_t start()
     {
         if (!backend)
-            return GVFG_ESTATE;
+            return reject(GVFG_ESTATE, "gvfg_start_channel rejected: channel is not open");
+
+        // A new start request starts a new diagnostic lifetime. Any failure
+        // below will replace this with the detail for the failed operation.
+        errorState.clear();
         if (running)
             return GVFG_OK;
 
@@ -279,10 +253,7 @@ struct gvfg_channel_session_t
 
         const pcies2mm_status_t st = backend->start_stream();
         if (st != PCIES2MM_OK)
-        {
-            recordError(pcies2mm_error_text(st, backend.get()));
             return map_status(st);
-        }
 
         running = true;
         return GVFG_OK;
@@ -299,8 +270,6 @@ struct gvfg_channel_session_t
             // stop_stream() joins the backend event thread, so no new event can
             // be queued after it returns.
             st = backend->stop_stream();
-            if (st != PCIES2MM_OK)
-                recordError(pcies2mm_error_text(st, backend.get()));
         }
 
         {
@@ -325,6 +294,8 @@ struct gvfg_channel_session_t
 
     gvfg_status_t getSignalStatus(gvfg_signal_status_t &out)
     {
+        if (!backend)
+            return reject(GVFG_ESTATE, "gvfg_get_channel_signal_status rejected: channel is not open");
         std::memset(&out, 0, sizeof(out));
         const pcies2mm_status_t status = querySignal();
         {
@@ -342,7 +313,7 @@ struct gvfg_channel_session_t
     gvfg_status_t getRuntimeInfo(gvfg_runtime_info_t &out)
     {
         if (!backend)
-            return GVFG_ESTATE;
+            return reject(GVFG_ESTATE, "gvfg_get_channel_runtime_info rejected: channel is not open");
 
         std::memset(&out, 0, sizeof(out));
         out.capture_fps = runtimeFps.load(std::memory_order_relaxed);
@@ -406,7 +377,7 @@ struct gvfg_channel_session_t
     gvfg_status_t configureStream()
     {
         if (!backend)
-            return GVFG_ESTATE;
+            return reject(GVFG_ESTATE, "configure stream rejected: channel is not open");
 
         const pcies2mm_status_t signalStatus = querySignal();
         if (signalStatus != PCIES2MM_OK)
@@ -437,26 +408,30 @@ struct gvfg_channel_session_t
 
         const pcies2mm_status_t st = backend->configure_stream(desc);
         if (st != PCIES2MM_OK)
-        {
-            recordError(pcies2mm_error_text(st, backend.get()));
             return map_status(st);
-        }
-        if (waitingForSignal)
-            recordError(nullptr);
         return GVFG_OK;
     }
 
     gvfg_status_t readFrame(gvfg_frame_t &out, uint32_t timeoutMs)
     {
         std::memset(&out, 0, sizeof(out));
-        if (!backend || !running)
-            return GVFG_ESTATE;
+        if (!backend)
+            return reject(GVFG_ESTATE, "gvfg_read_channel_frame rejected: channel is not open");
+        if (!running)
+            return reject(GVFG_ESTATE, "gvfg_read_channel_frame rejected: channel is not running");
+
+        const char *stateError = nullptr;
         {
             std::lock_guard<std::mutex> lock(frameMutex);
-            if (readInProgress || frameHeld)
-                return GVFG_ESTATE;
-            readInProgress = true;
+            if (frameHeld)
+                stateError = "gvfg_read_channel_frame rejected: previous frame has not been released";
+            else if (readInProgress)
+                stateError = "gvfg_read_channel_frame rejected: another read is already in progress";
+            else
+                readInProgress = true;
         }
+        if (stateError)
+            return reject(GVFG_ESTATE, stateError);
 
         pcies2mm_frame_t frame{};
         const pcies2mm_status_t st = backend->wait_frame(timeoutMs, frame);
@@ -466,8 +441,6 @@ struct gvfg_channel_session_t
                 std::lock_guard<std::mutex> lock(frameMutex);
                 readInProgress = false;
             }
-            if (st != PCIES2MM_ETIMEOUT && st != PCIES2MM_ESTATE)
-                recordError(pcies2mm_error_text(st, backend.get()));
             return map_status(st);
         }
 
@@ -476,7 +449,7 @@ struct gvfg_channel_session_t
             backend->release_frame(frame);
             std::lock_guard<std::mutex> lock(frameMutex);
             readInProgress = false;
-            return GVFG_EIO;
+            return reject(GVFG_EIO, "gvfg_read_channel_frame received an invalid frame descriptor");
         }
 
         bool stoppedWhileWaiting = false;
@@ -514,7 +487,7 @@ struct gvfg_channel_session_t
             std::lock_guard<std::mutex> lock(frameMutex);
             heldBackendFrame = {};
             frameHeld = false;
-            return strideStatus;
+            return reject(strideStatus, "gvfg_read_channel_frame received an invalid row stride");
         }
         out.pixel_format = to_gvfg_pixel_format(frame.pixel_format);
         out.bit_depth = static_cast<int>(frame.bit_depth);
@@ -527,18 +500,18 @@ struct gvfg_channel_session_t
     gvfg_status_t releaseFrame(const gvfg_frame_t &frameToken)
     {
         if (!backend)
-            return GVFG_ESTATE;
+            return reject(GVFG_ESTATE, "gvfg_release_channel_frame rejected: channel is not open");
 
         {
             std::lock_guard<std::mutex> lock(frameMutex);
             if (!frameHeld)
-                return GVFG_ESTATE;
+                return reject(GVFG_ESTATE, "gvfg_release_channel_frame rejected: no frame is currently held");
 
             int expectedStride = 0;
             if (native_row_stride_bytes(heldBackendFrame.width,
                                         heldBackendFrame.pixel_format,
                                         expectedStride) != GVFG_OK)
-                return GVFG_ESTATE;
+                return reject(GVFG_ESTATE, "gvfg_release_channel_frame rejected: held frame has an invalid row stride");
 
             if (frameToken.data != heldBackendFrame.data ||
                 frameToken.data_size != static_cast<uint64_t>(heldBackendFrame.data_size_bytes) ||
@@ -548,7 +521,7 @@ struct gvfg_channel_session_t
                 frameToken.pixel_format != to_gvfg_pixel_format(heldBackendFrame.pixel_format) ||
                 frameToken.bit_depth != static_cast<int>(heldBackendFrame.bit_depth) ||
                 frameToken.frame_id != heldBackendFrame.frame_id)
-                return GVFG_EINVAL;
+                return reject(GVFG_EINVAL, "gvfg_release_channel_frame rejected: frame token does not match the held frame");
 
             const pcies2mm_status_t st = backend->release_frame(heldBackendFrame);
             if (st != PCIES2MM_OK)
@@ -586,7 +559,7 @@ struct gvfg_channel_session_t
     gvfg_status_t pollEvent(gvfg_event_t &out, uint32_t timeoutMs)
     {
         if (!backend)
-            return GVFG_ESTATE;
+            return reject(GVFG_ESTATE, "gvfg_poll_channel_event rejected: channel is not open");
 
         std::unique_lock<std::mutex> lock(eventMutex);
         const auto eventAvailableOrStopped = [this]()
@@ -618,8 +591,9 @@ struct gvfg_channel_session_t
             return GVFG_ETIMEOUT;
 
         if (eventQueue.empty())
-            return running.load(std::memory_order_acquire) ? GVFG_ETIMEOUT
-                                                           : GVFG_ESTATE;
+            return running.load(std::memory_order_acquire)
+                       ? GVFG_ETIMEOUT
+                       : GVFG_ESTATE;
 
         out = eventQueue.front();
         eventQueue.pop_front();
@@ -671,14 +645,6 @@ struct gvfg_channel_session_t
             out.get_frame_timing_average_us = debugState.get_frame_timing_average_us;
             out.get_frame_timing_max300_us = debugState.get_frame_timing_max300_us;
             out.get_frame_timing_max_us = debugState.get_frame_timing_max_us;
-            out.event_wait_timing_samples = debugState.event_wait_timing_samples;
-            out.event_wait_timing_average_us = debugState.event_wait_timing_average_us;
-            out.event_wait_timing_max300_us = debugState.event_wait_timing_max300_us;
-            out.event_wait_timing_max_us = debugState.event_wait_timing_max_us;
-            out.sdk_processing_timing_samples = debugState.sdk_processing_timing_samples;
-            out.sdk_processing_timing_average_us = debugState.sdk_processing_timing_average_us;
-            out.sdk_processing_timing_max300_us = debugState.sdk_processing_timing_max300_us;
-            out.sdk_processing_timing_max_us = debugState.sdk_processing_timing_max_us;
         }
 
         return GVFG_OK;
@@ -687,14 +653,14 @@ struct gvfg_channel_session_t
     gvfg_status_t debugReadRegister(uint32_t offset, uint32_t &outValue)
     {
         if (!backend)
-            return GVFG_ESTATE;
+            return reject(GVFG_ESTATE, "debug register read rejected: channel is not open");
         return map_status(backend->debug_read_register(offset, outValue));
     }
 
     gvfg_status_t setVideoFormat(gvfg_pixel_format_t format)
     {
         if (!backend)
-            return GVFG_ESTATE;
+            return reject(GVFG_ESTATE, "gvfg_set_channel_video_format rejected: channel is not open");
 
         pcies2mm_pixel_format_t backendFormat = PCIES2MM_PIXFMT_UNKNOWN;
         if (format == GVFG_PIXFMT_YUY2)
@@ -702,36 +668,23 @@ struct gvfg_channel_session_t
         else if (format == GVFG_PIXFMT_Y210)
             backendFormat = PCIES2MM_PIXFMT_Y210;
         else
-            return GVFG_EINVAL;
+            return reject(GVFG_EINVAL, "gvfg_set_channel_video_format rejected: pixel format is invalid");
 
         const pcies2mm_status_t status = backend->set_video_format(backendFormat);
-        if (status != PCIES2MM_OK)
-            recordError(pcies2mm_error_text(status, backend.get()));
         return map_status(status);
     }
 
     gvfg_status_t debugWriteRegister(uint32_t offset, uint32_t value)
     {
         if (!backend)
-            return GVFG_ESTATE;
+            return reject(GVFG_ESTATE, "debug register write rejected: channel is not open");
         return map_status(backend->debug_write_register(offset, value));
     }
 
-    gvfg_status_t getLastErrorDetail(char *outMessage, uint32_t outMessageSize)
+    gvfg_status_t reject(gvfg_status_t status, const char *message)
     {
-        if (!outMessage || outMessageSize == 0)
-            return GVFG_EINVAL;
-        outMessage[0] = '\0';
-        if (!lastError.empty())
-            copy_cstr(outMessage, outMessageSize, lastError.c_str());
-        else
-            copy_cstr(outMessage, outMessageSize, backend ? backend->last_error() : "");
-        return GVFG_OK;
-    }
-
-    void recordError(const char *msg)
-    {
-        lastError = msg ? msg : "";
+        errorState.set(message ? message : "GVFG operation rejected");
+        return status;
     }
 
     void updateRuntimeFps(uint64_t ptsNs)
@@ -778,6 +731,7 @@ struct gvfg_channel_session_t
         deliveredFrames.fetch_add(1, std::memory_order_relaxed);
     }
 
+    ChannelErrorState &errorState;
     std::unique_ptr<gvfg::internal::PcieS2mmCaptureSession> backend;
     int currentIndex = -1;
     uint32_t selectedChannel = GVFG_CHANNEL_0;
@@ -799,8 +753,6 @@ struct gvfg_channel_session_t
     std::atomic<int> deliveredPixelFormat{GVFG_PIXFMT_UNKNOWN};
     std::atomic<double> runtimeFps{0.0};
 
-    std::string lastError;
-
     std::atomic<bool> running{false};
     std::mutex frameMutex;
     bool readInProgress = false;
@@ -813,6 +765,35 @@ struct gvfg_channel_session_t
 
 struct gvfg_handle_t
 {
+    gvfg_status_t rejectChannel(int channelIndex,
+                                gvfg_status_t status,
+                                const char *message)
+    {
+        if (channelIndex == GVFG_CHANNEL_0 || channelIndex == GVFG_CHANNEL_1)
+            channelErrors[static_cast<size_t>(channelIndex)].set(message ? message : "GVFG operation rejected");
+        return status;
+    }
+
+    gvfg_status_t rejectAllChannels(gvfg_status_t status, const char *message)
+    {
+        for (ChannelErrorState &error : channelErrors)
+            error.set(message ? message : "GVFG operation rejected");
+        return status;
+    }
+
+    gvfg_status_t copyChannelError(int channelIndex,
+                                   char *outMessage,
+                                   uint32_t outMessageSize) const
+    {
+        if ((channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1) ||
+            !outMessage || outMessageSize == 0)
+            return GVFG_EINVAL;
+
+        const std::string detail = channelErrors[static_cast<size_t>(channelIndex)].message();
+        copy_cstr(outMessage, outMessageSize, detail.c_str());
+        return GVFG_OK;
+    }
+
     gvfg_channel_session_t *findChannel(int channelIndex)
     {
         if (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1)
@@ -820,7 +801,7 @@ struct gvfg_handle_t
         return channels[static_cast<size_t>(channelIndex)].get();
     }
 
-    gvfg_channel_session_t *firstOpenChannel()
+    gvfg_channel_session_t *findOpenChannel()
     {
         if (channels[GVFG_CHANNEL_0])
             return channels[GVFG_CHANNEL_0].get();
@@ -829,27 +810,37 @@ struct gvfg_handle_t
 
     gvfg_status_t openChannel(int index, int channelIndex)
     {
-        if (index < 0 || (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1))
+        if (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1)
             return GVFG_EINVAL;
-        if (currentIndex >= 0 && currentIndex != index)
-            return GVFG_ESTATE;
-
         const size_t slot = static_cast<size_t>(channelIndex);
+        if (index < 0)
+        {
+            channelErrors[slot].set("gvfg_open_channel rejected: device index is invalid");
+            return GVFG_EINVAL;
+        }
+        if (currentIndex >= 0 && currentIndex != index)
+        {
+            channelErrors[slot].set("gvfg_open_channel rejected: handle is already bound to another device");
+            return GVFG_ESTATE;
+        }
+
         if (channels[slot])
             return GVFG_OK;
 
-        auto channel = std::make_unique<gvfg_channel_session_t>();
+        auto channel = std::make_unique<gvfg_channel_session_t>(channelErrors[slot]);
         channel->zeroCopyRequested = zeroCopyRequested;
         channel->eventMask = eventMasks[slot];
 
-        gvfg::internal::PcieS2mmCaptureSession *sharedSource = nullptr;
-        if (gvfg_channel_session_t *existing = firstOpenChannel())
-            sharedSource = existing->backend.get();
-
-        const gvfg_status_t status = channel->open(index, channelIndex, sharedSource);
+        const gvfg_status_t status = channel->open(index,
+                                                   channelIndex,
+                                                   deviceConnection);
         if (status != GVFG_OK)
             return status;
 
+        if (!deviceConnection)
+        {
+            deviceConnection = channel->backend->device_connection();
+        }
         channels[slot] = std::move(channel);
         currentIndex = index;
         return GVFG_OK;
@@ -857,8 +848,10 @@ struct gvfg_handle_t
 
     gvfg_status_t setZeroCopyEnabled(bool enabled)
     {
-        if (firstOpenChannel())
-            return GVFG_ESTATE;
+        if (deviceConnection)
+            return rejectAllChannels(
+                GVFG_ESTATE,
+                "gvfg_set_zero_copy_enabled rejected: a device is already open");
         zeroCopyRequested = enabled;
         return GVFG_OK;
     }
@@ -868,10 +861,18 @@ struct gvfg_handle_t
         if (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1)
             return GVFG_EINVAL;
         if ((eventMask & ~static_cast<uint32_t>(GVFG_EVENT_MASK_ALL)) != 0)
+        {
+            channelErrors[static_cast<size_t>(channelIndex)].set(
+                "gvfg_set_channel_event_mask rejected: event mask contains unsupported bits");
             return GVFG_EINVAL;
+        }
         const size_t slot = static_cast<size_t>(channelIndex);
         if (channels[slot])
+        {
+            channelErrors[slot].set(
+                "gvfg_set_channel_event_mask rejected: channel is already open");
             return GVFG_ESTATE;
+        }
         eventMasks[slot] = eventMask;
         return GVFG_OK;
     }
@@ -892,16 +893,22 @@ struct gvfg_handle_t
 
     gvfg_status_t debugReadRegister(uint32_t offset, uint32_t &outValue)
     {
-        gvfg_channel_session_t *channel = firstOpenChannel();
-        return channel ? channel->debugReadRegister(offset, outValue) : GVFG_ESTATE;
+        gvfg_channel_session_t *channel = findOpenChannel();
+        return channel ? channel->debugReadRegister(offset, outValue)
+                       : rejectAllChannels(GVFG_ESTATE,
+                                           "debug register read rejected: no channel is open");
     }
 
     gvfg_status_t debugWriteRegister(uint32_t offset, uint32_t value)
     {
-        gvfg_channel_session_t *channel = firstOpenChannel();
-        return channel ? channel->debugWriteRegister(offset, value) : GVFG_ESTATE;
+        gvfg_channel_session_t *channel = findOpenChannel();
+        return channel ? channel->debugWriteRegister(offset, value)
+                       : rejectAllChannels(GVFG_ESTATE,
+                                           "debug register write rejected: no channel is open");
     }
 
+    std::array<ChannelErrorState, 2> channelErrors;
+    std::shared_ptr<gvfg::internal::PcieS2mmDeviceConnection> deviceConnection;
     std::array<std::unique_ptr<gvfg_channel_session_t>, 2> channels;
     std::array<uint32_t, 2> eventMasks{GVFG_EVENT_MASK_ALL, GVFG_EVENT_MASK_ALL};
     int currentIndex = -1;
@@ -982,8 +989,12 @@ extern "C"
 
     gvfg_status_t gvfg_set_zero_copy_enabled(gvfg_handle handle, int enabled)
     {
-        if (!handle || (enabled != 0 && enabled != 1))
+        if (!handle)
             return GVFG_EINVAL;
+        if (enabled != 0 && enabled != 1)
+            return handle->rejectAllChannels(
+                GVFG_EINVAL,
+                "gvfg_set_zero_copy_enabled rejected: enabled must be 0 or 1");
         return handle->setZeroCopyEnabled(enabled != 0);
     }
 
@@ -1000,7 +1011,10 @@ extern "C"
         if (!handle)
             return GVFG_EINVAL;
         gvfg_channel_session_t *channel = handle->findChannel(channel_index);
-        return channel ? channel->start() : GVFG_ESTATE;
+        return channel ? channel->start()
+                       : handle->rejectChannel(channel_index,
+                                               GVFG_ESTATE,
+                                               "gvfg_start_channel rejected: channel is not open");
     }
 
     gvfg_status_t gvfg_set_channel_video_format(gvfg_handle handle,
@@ -1010,7 +1024,10 @@ extern "C"
         if (!handle)
             return GVFG_EINVAL;
         gvfg_channel_session_t *channel = handle->findChannel(channel_index);
-        return channel ? channel->setVideoFormat(format) : GVFG_ESTATE;
+        return channel ? channel->setVideoFormat(format)
+                       : handle->rejectChannel(channel_index,
+                                               GVFG_ESTATE,
+                                               "gvfg_set_channel_video_format rejected: channel is not open");
     }
 
     gvfg_status_t gvfg_read_channel_frame(gvfg_handle handle,
@@ -1018,20 +1035,34 @@ extern "C"
                                            gvfg_frame_t *out_frame,
                                            uint32_t timeout_ms)
     {
-        if (!handle || !out_frame)
+        if (!handle)
             return GVFG_EINVAL;
+        if (!out_frame)
+            return handle->rejectChannel(channel_index,
+                                         GVFG_EINVAL,
+                                         "gvfg_read_channel_frame rejected: out_frame is null");
         gvfg_channel_session_t *channel = handle->findChannel(channel_index);
-        return channel ? channel->readFrame(*out_frame, timeout_ms) : GVFG_ESTATE;
+        return channel ? channel->readFrame(*out_frame, timeout_ms)
+                       : handle->rejectChannel(channel_index,
+                                               GVFG_ESTATE,
+                                               "gvfg_read_channel_frame rejected: channel is not open");
     }
 
     gvfg_status_t gvfg_release_channel_frame(gvfg_handle handle,
                                               int channel_index,
                                               const gvfg_frame_t *frame)
     {
-        if (!handle || !frame)
+        if (!handle)
             return GVFG_EINVAL;
+        if (!frame)
+            return handle->rejectChannel(channel_index,
+                                         GVFG_EINVAL,
+                                         "gvfg_release_channel_frame rejected: frame is null");
         gvfg_channel_session_t *channel = handle->findChannel(channel_index);
-        return channel ? channel->releaseFrame(*frame) : GVFG_ESTATE;
+        return channel ? channel->releaseFrame(*frame)
+                       : handle->rejectChannel(channel_index,
+                                               GVFG_ESTATE,
+                                               "gvfg_release_channel_frame rejected: channel is not open");
     }
 
     gvfg_status_t gvfg_poll_channel_event(gvfg_handle handle,
@@ -1039,11 +1070,17 @@ extern "C"
                                            gvfg_event_t *out_event,
                                            uint32_t timeout_ms)
     {
-        if (!handle || !out_event || out_event->struct_size < sizeof(gvfg_event_t))
+        if (!handle)
             return GVFG_EINVAL;
+        if (!out_event || out_event->struct_size < sizeof(gvfg_event_t))
+            return handle->rejectChannel(channel_index,
+                                         GVFG_EINVAL,
+                                         "gvfg_poll_channel_event rejected: output event is invalid");
         gvfg_channel_session_t *channel = handle->findChannel(channel_index);
         if (!channel)
-            return GVFG_ESTATE;
+            return handle->rejectChannel(channel_index,
+                                         GVFG_ESTATE,
+                                         "gvfg_poll_channel_event rejected: channel is not open");
         gvfg_event_t event{};
         event.struct_size = sizeof(event);
         const gvfg_status_t status = channel->pollEvent(event, timeout_ms);
@@ -1064,18 +1101,27 @@ extern "C"
         if (!handle)
             return GVFG_EINVAL;
         gvfg_channel_session_t *channel = handle->findChannel(channel_index);
-        return channel ? channel->stop() : GVFG_ESTATE;
+        return channel ? channel->stop()
+                       : handle->rejectChannel(channel_index,
+                                               GVFG_ESTATE,
+                                               "gvfg_stop_channel rejected: channel is not open");
     }
 
     gvfg_status_t gvfg_get_channel_signal_status(gvfg_handle handle,
                                                   int channel_index,
                                                   gvfg_signal_status_t *out_status)
     {
-        if (!handle || !out_status)
+        if (!handle)
             return GVFG_EINVAL;
+        if (!out_status)
+            return handle->rejectChannel(channel_index,
+                                         GVFG_EINVAL,
+                                         "gvfg_get_channel_signal_status rejected: out_status is null");
         gvfg_channel_session_t *channel = handle->findChannel(channel_index);
         if (!channel)
-            return GVFG_ESTATE;
+            return handle->rejectChannel(channel_index,
+                                         GVFG_ESTATE,
+                                         "gvfg_get_channel_signal_status rejected: channel is not open");
         return channel->getSignalStatus(*out_status);
     }
 
@@ -1083,10 +1129,17 @@ extern "C"
                                                  int channel_index,
                                                  gvfg_runtime_info_t *out_info)
     {
-        if (!handle || !out_info)
+        if (!handle)
             return GVFG_EINVAL;
+        if (!out_info)
+            return handle->rejectChannel(channel_index,
+                                         GVFG_EINVAL,
+                                         "gvfg_get_channel_runtime_info rejected: out_info is null");
         gvfg_channel_session_t *channel = handle->findChannel(channel_index);
-        return channel ? channel->getRuntimeInfo(*out_info) : GVFG_ESTATE;
+        return channel ? channel->getRuntimeInfo(*out_info)
+                       : handle->rejectChannel(channel_index,
+                                               GVFG_ESTATE,
+                                               "gvfg_get_channel_runtime_info rejected: channel is not open");
     }
 
     const char *gvfg_get_version(void)
@@ -1129,8 +1182,7 @@ extern "C"
     {
         if (!handle)
             return GVFG_EINVAL;
-        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
-        return channel ? channel->getLastErrorDetail(out_message, out_message_size) : GVFG_ESTATE;
+        return handle->copyChannelError(channel_index, out_message, out_message_size);
     }
 
     gvfg_status_t gvfg_debug_get_channel_backend_stats(gvfg_handle handle,
@@ -1150,17 +1202,6 @@ extern "C"
 
         *out_stats = stats;
         return GVFG_OK;
-    }
-
-    gvfg_status_t gvfg_debug_get_channel_last_error_detail(gvfg_handle handle,
-                                                           int channel_index,
-                                                           char *out_message,
-                                                           uint32_t out_message_size)
-    {
-        if (!handle)
-            return GVFG_EINVAL;
-        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
-        return channel ? channel->getLastErrorDetail(out_message, out_message_size) : GVFG_ESTATE;
     }
 
     gvfg_status_t gvfg_debug_read_register(gvfg_handle handle,

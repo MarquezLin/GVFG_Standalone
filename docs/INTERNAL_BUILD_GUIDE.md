@@ -95,9 +95,9 @@ Debug 版本會增加：
 
 - backend/DMA/IRQ 統計資訊。
 - preview submit、render、Present 慢幀診斷。
-- frame loss 與 held-frame 診斷。
+- held-frame 與 slow-release 診斷。
 - 詳細 backend error。
-- `gvfg_qt_preview` 的 diagnostic status 與 snapshot log。
+- `gvfg_qt_preview` 的 diagnostic status log。
 
 Debug 診斷會增加 log 與檢查成本，不應拿來判斷正式版本效能。
 
@@ -107,9 +107,11 @@ Debug 診斷會增加 log 與檢查成本，不應拿來判斷正式版本效能
 
 ```text
 <build>/bin/gvfg.dll
+<build>/bin/giga_ioctl.dll
 <build>/bin/gvfg_preview.dll
 <build>/bin/gvfg_qt_preview.exe
 <build>/lib/gvfg.lib
+<build>/lib/giga_ioctl.lib
 <build>/lib/gvfg_preview.lib
 ```
 
@@ -122,9 +124,10 @@ Debug 診斷會增加 log 與檢查成本，不應拿來判斷正式版本效能
 - 列舉裝置、開啟 channel、開始與停止擷取。
 - 取得原生 YUY2 8-bit 或 Y210 10-bit frame。
 - 使用 `gvfg_get_version()` 查詢實際載入的 runtime DLL 版本。
-- signal status、runtime FPS、frame loss event。
+- signal status、runtime FPS 與 channel event。
 - GPU conversion：BGRA8、RGB10A2、NV12。
-- 內部 debug API：backend stats、last error、register read/write。
+- 公開詳細錯誤 API：`gvfg_get_channel_last_error_detail()`。
+- 內部 debug API：backend stats、register read/write。
 
 目前 FPGA 的 8-bit format register 仍可能回報舊 `YVYU` 值；SDK 只把它當作 legacy register identifier，對外格式與實際 DMA layout一律是 YUY2（`Y0 U0 Y1 V0`）。
 
@@ -139,7 +142,7 @@ Debug 診斷會增加 log 與檢查成本，不應拿來判斷正式版本效能
 - 最小化的 GVFG 整合範例。
 - 視窗標題與啟動 log 顯示 `gvfg_get_version()` 回傳的實際 DLL 版本。
 - 裝置／channel 選擇、start/stop、preview window。
-- 顯示輸入格式、bit depth、capture FPS、preview FPS 與 loss。
+- 顯示輸入格式、bit depth、capture FPS、preview FPS 與目前診斷狀態。
 - Debug build 顯示額外 backend diagnostics。
 
 ## 8. 提供給 srcroot 使用
