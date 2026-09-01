@@ -492,11 +492,10 @@ void MainWindow::startCapture(int channelIndex)
     }
 
     const bool audioEnabled = channelIndex == GVFG_CHANNEL_0 && ui_->ch0AudioCheckBox->isChecked();
-    gvfg_status_t st = gvfg_set_channel_streams(
-        handle_, channelIndex, GVFG_STREAM_VIDEO | (audioEnabled ? GVFG_STREAM_AUDIO : 0));
+    gvfg_status_t st = gvfg_set_channel_audio_enabled(handle_, channelIndex, audioEnabled ? 1 : 0);
     if (st != GVFG_OK)
     {
-        showError(QStringLiteral("gvfg_set_channel_streams"), st, channelIndex);
+        showError(QStringLiteral("gvfg_set_channel_audio_enabled"), st, channelIndex);
         return;
     }
     channel.audioFormat = {};
@@ -508,18 +507,16 @@ void MainWindow::startCapture(int channelIndex)
             showError(QStringLiteral("gvfg_get_channel_audio_format"), st, channelIndex);
             return;
         }
-        if (channel.audioFormat.frame_bytes == 0 || channel.audioFormat.block_align == 0 ||
-            channel.audioFormat.channels == 0 || channel.audioFormat.sample_rate == 0 ||
+        if (channel.audioFormat.channels == 0 || channel.audioFormat.sample_rate == 0 ||
             (channel.audioFormat.bits_per_sample != 8 &&
              channel.audioFormat.bits_per_sample != 16 &&
              channel.audioFormat.bits_per_sample != 32))
         {
-            appendLog(QStringLiteral("CH%1 Audio format unsupported by Qt playback | %2 Hz %3 ch %4-bit frame_bytes=%5")
+            appendLog(QStringLiteral("CH%1 Audio format unsupported by Qt playback | %2 Hz %3 ch %4-bit")
                           .arg(channelIndex)
                           .arg(channel.audioFormat.sample_rate)
                           .arg(channel.audioFormat.channels)
-                          .arg(channel.audioFormat.bits_per_sample)
-                          .arg(channel.audioFormat.frame_bytes));
+                          .arg(channel.audioFormat.bits_per_sample));
             return;
         }
     }
@@ -1233,7 +1230,6 @@ void MainWindow::audioReadLoop(int channelIndex)
     }
 
     QAudioSink audioSink(outputDevice, outputFormat);
-    audioSink.setBufferSize(static_cast<int>(format.frame_bytes * 4u));
     QIODevice *audioOutput = audioSink.start();
     if (!audioOutput)
     {
@@ -1244,13 +1240,11 @@ void MainWindow::audioReadLoop(int channelIndex)
         return;
     }
 
-    std::vector<uint8_t> audioBuffer(format.frame_bytes);
     while (!channel.stopRequested.load(std::memory_order_acquire))
     {
-        uint32_t bytesRead = 0;
-        const gvfg_status_t status = gvfg_read_channel_audio(
-            handle_, channelIndex, audioBuffer.data(),
-            static_cast<uint32_t>(audioBuffer.size()), &bytesRead, 200);
+        gvfg_audio_frame_t frame{};
+        const gvfg_status_t status = gvfg_read_channel_audio_frame(
+            handle_, channelIndex, &frame, 200);
         if (status == GVFG_ETIMEOUT)
             continue;
         if (status != GVFG_OK)
@@ -1258,24 +1252,25 @@ void MainWindow::audioReadLoop(int channelIndex)
             if (!channel.stopRequested.load(std::memory_order_acquire))
             {
                 QMetaObject::invokeMethod(this, [this, channelIndex, status]()
-                                          { showError(QStringLiteral("gvfg_read_channel_audio"), status, channelIndex); }, Qt::QueuedConnection);
+                                          { showError(QStringLiteral("gvfg_read_channel_audio_frame"), status, channelIndex); }, Qt::QueuedConnection);
             }
             break;
         }
 
         qint64 written = 0;
-        while (written < static_cast<qint64>(bytesRead) &&
+        while (written < static_cast<qint64>(frame.data_size) &&
                !channel.stopRequested.load(std::memory_order_acquire))
         {
             const qint64 result = audioOutput->write(
-                reinterpret_cast<const char *>(audioBuffer.data()) + written,
-                static_cast<qint64>(bytesRead) - written);
+                static_cast<const char *>(frame.data) + written,
+                static_cast<qint64>(frame.data_size) - written);
             if (result < 0)
             {
                 QMetaObject::invokeMethod(this, [this, channelIndex]()
                                           {
                                               appendLog(QStringLiteral("CH%1 Audio output write failed").arg(channelIndex));
                                               stopCapture(channelIndex); }, Qt::QueuedConnection);
+                gvfg_release_channel_audio_frame(handle_, channelIndex, &frame);
                 audioSink.stop();
                 return;
             }
@@ -1286,10 +1281,18 @@ void MainWindow::audioReadLoop(int channelIndex)
             }
             written += result;
         }
-        if (written == static_cast<qint64>(bytesRead))
+        if (written == static_cast<qint64>(frame.data_size))
         {
             channel.audioFrames.fetch_add(1, std::memory_order_relaxed);
-            channel.audioBytes.fetch_add(bytesRead, std::memory_order_relaxed);
+            channel.audioBytes.fetch_add(frame.data_size, std::memory_order_relaxed);
+        }
+        const gvfg_status_t releaseStatus =
+            gvfg_release_channel_audio_frame(handle_, channelIndex, &frame);
+        if (releaseStatus != GVFG_OK && !channel.stopRequested.load(std::memory_order_acquire))
+        {
+            QMetaObject::invokeMethod(this, [this, channelIndex, releaseStatus]()
+                                      { showError(QStringLiteral("gvfg_release_channel_audio_frame"), releaseStatus, channelIndex); }, Qt::QueuedConnection);
+            break;
         }
     }
     audioSink.stop();

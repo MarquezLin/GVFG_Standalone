@@ -100,6 +100,37 @@ register 與 DMA 實作不屬於本文件。
 
 Caller 不得修改任何欄位再 release。SDK 會將完整 token 與目前 held frame 比對。
 
+### 1.8a `gvfg_audio_format_t`
+
+由 `gvfg_get_channel_audio_format()` 填入，只包含 Application 建立播放或錄音
+格式所需的 PCM metadata。
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `sample_rate` | `uint32_t` | 每秒 sample 數 |
+| `channels` | `uint32_t` | interleaved PCM channel 數 |
+| `bits_per_sample` | `uint32_t` | 每個 PCM sample 的 bit 數 |
+
+Driver 一次傳回多少 bytes、buffer capacity 與 block alignment 均由 SDK/backend
+管理，不是公開格式的一部分。
+
+### 1.8b `gvfg_audio_frame_t`
+
+由 `gvfg_read_channel_audio_frame()` 填入，也是稍後傳給
+`gvfg_release_channel_audio_frame()` 的完整 token。
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `data` | `const void *` | SDK-owned interleaved PCM；release 或 stop 後失效 |
+| `data_size` | `uint64_t` | 此 frame 的有效 PCM byte 數 |
+| `sample_rate` | `uint32_t` | 每秒 sample 數 |
+| `channels` | `uint32_t` | interleaved PCM channel 數 |
+| `bits_per_sample` | `uint32_t` | 每個 PCM sample 的 bit 數 |
+| `frame_id` | `uint64_t` | 此次 start/stop run 中單調遞增的 audio frame ID |
+
+與 video 相同，每個 channel 同時只能持有一個 audio frame，且 caller 不得修改
+descriptor 後再 release。
+
 ### 1.9 `gvfg_gpu_output_format_t`
 
 | 成員                        | 值   | 說明                                                         |
@@ -242,28 +273,36 @@ gvfg_status_t gvfg_set_channel_video_format(gvfg_handle handle,
 - 同一裝置的 CH0、CH1 不可同時設定 Y210；第二個 Y210 request 回傳
   `GVFG_ENOTSUP`。
 
-### 1.19a Audio capture selection and copy-out
+### 1.19a Audio capture selection and frame ownership
 
 ```c
-gvfg_status_t gvfg_set_channel_streams(gvfg_handle handle,
-                                       int channel_index,
-                                       uint32_t streams);
+gvfg_status_t gvfg_set_channel_audio_enabled(gvfg_handle handle,
+                                             int channel_index,
+                                             int enabled);
 gvfg_status_t gvfg_get_channel_audio_format(gvfg_handle handle,
                                             int channel_index,
                                             gvfg_audio_format_t *out_format);
-gvfg_status_t gvfg_read_channel_audio(gvfg_handle handle,
-                                      int channel_index,
-                                      void *destination,
-                                      uint32_t destination_capacity,
-                                      uint32_t *out_bytes,
-                                      uint32_t timeout_ms);
+gvfg_status_t gvfg_read_channel_audio_frame(gvfg_handle handle,
+                                            int channel_index,
+                                            gvfg_audio_frame_t *out_frame,
+                                            uint32_t timeout_ms);
+gvfg_status_t gvfg_release_channel_audio_frame(gvfg_handle handle,
+                                               int channel_index,
+                                               const gvfg_audio_frame_t *frame);
 ```
 
-- 預設為 `GVFG_STREAM_VIDEO`。CH0 可在 start 前設定為
-  `GVFG_STREAM_VIDEO | GVFG_STREAM_AUDIO`；audio-only 與 CH1 audio 尚未支援。
-- `gvfg_start_channel()` 依 streams 選擇 video-only 或 video + audio driver start。
-- `gvfg_read_channel_audio()` 以 `MAXULONG` 取得下一個 PCM frame，並複製到
-  caller-owned destination。`out_bytes` 是 driver 回報的有效 byte 數。
+- 預設只擷取 video。CH0 可在 start 前用 `gvfg_set_channel_audio_enabled()`
+  啟用 audio；audio-only 與 CH1 audio 尚未支援。
+- `gvfg_start_channel()` 依 audio enabled 狀態選擇 video-only 或 video + audio driver start。
+- `gvfg_read_channel_audio_frame()` 取得下一個 PCM frame 並交付 SDK-owned
+  descriptor。使用完成後必須呼叫 `gvfg_release_channel_audio_frame()`。
+- 未 release 前再次 read 會回傳 `GVFG_ESTATE`。
+- `out_frame` 為 NULL 或 release token 被修改時回傳 `GVFG_EINVAL`。
+- `timeout_ms` 遵循其他 read API：`0` 不等待，`GVFG_TIMEOUT_INFINITE` 無限等待，
+  超時回傳 `GVFG_ETIMEOUT`。
+- Video 與 audio 應由不同 worker thread read；同一 channel 不可同時執行兩個
+  audio read。
+- Stop/close 後 descriptor 立即失效；要跨越 release/stop 保存 PCM 必須先複製。
 - SDK 不建立 audio ring，也不提供尚未完成的 audio zero-copy。
 
 ### 1.20 `gvfg_start_channel`

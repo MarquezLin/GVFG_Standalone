@@ -17,7 +17,8 @@ The header is an internal dependency of `gvfg`; it is not a customer SDK API.
 
 ## Current audio ABI
 
-The implemented audio path is copy-out, not zero-copy:
+At this private driver boundary the implemented audio path is copy-out, not
+zero-copy:
 
 - Register `GIGA_IOCTL_EVENT_AUDIO_DMA` and
   `GIGA_IOCTL_EVENT_EXTRA_AUDIO_FRAME` as wake-up notifications.
@@ -32,3 +33,10 @@ The extra-frame events mean that more frames are ready and the consumer should
 drain promptly. They do not transfer ownership of a frame. Audio zero-copy is a
 future driver capability and is intentionally not exposed here until its
 acquire/release ABI is complete.
+
+This does not define the customer-facing ownership contract. `gvfg` copies the
+driver result into its SDK-owned delivery buffer and exposes it as
+`gvfg_audio_frame_t`; applications acquire it with
+`gvfg_read_channel_audio_frame()` and return the unchanged token with
+`gvfg_release_channel_audio_frame()`. Driver frame size, destination capacity,
+and valid-byte output parameters remain private below that public API.

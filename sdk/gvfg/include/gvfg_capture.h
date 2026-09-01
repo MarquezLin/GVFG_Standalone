@@ -39,6 +39,8 @@
  * - The frame data pointer remains valid until gvfg_release_channel_frame() is called.
  *   Copy the data if it must outlive that call.
  * - At most one frame may be held by each channel at a time.
+ * - Audio uses the same read/release ownership model. Applications should use
+ *   a separate worker thread when reading video and audio concurrently.
  */
 
 #ifdef _WIN32
@@ -109,20 +111,11 @@ extern "C"
         GVFG_CHANNEL_1 = 1
     } gvfg_channel_t;
 
-    typedef enum
-    {
-        GVFG_STREAM_VIDEO = 1u << 0,
-        GVFG_STREAM_AUDIO = 1u << 1
-    } gvfg_stream_flag_t;
-
     typedef struct
     {
         uint32_t sample_rate;
         uint32_t channels;
         uint32_t bits_per_sample;
-        uint32_t frames_per_second;
-        uint32_t frame_bytes;
-        uint32_t block_align;
     } gvfg_audio_format_t;
 
     typedef struct
@@ -163,6 +156,17 @@ extern "C"
         int bit_depth;        /* Bits per color channel of the native frame. */
         uint64_t frame_id;    /* Monotonic identifier within the current channel start/stop run. */
     } gvfg_frame_t;
+
+    typedef struct
+    {
+        const void *data;          /* PCM data. Valid until gvfg_release_channel_audio_frame(). */
+        uint64_t data_size;        /* Valid PCM bytes available from data. */
+        uint32_t sample_rate;      /* Samples per second. */
+        uint32_t channels;         /* Interleaved PCM channel count. */
+        uint32_t bits_per_sample;  /* Bits in each native PCM sample. */
+        uint32_t reserved;
+        uint64_t frame_id;         /* Monotonic identifier within the current start/stop run. */
+    } gvfg_audio_frame_t;
 
     /* Formats produced by gvfg_gpu_convert_to_buffer(). */
     typedef enum
@@ -339,14 +343,13 @@ extern "C"
         _In_ gvfg_pixel_format_t format);
 
     /*
-     * Select video-only or combined video+audio capture before starting the
-     * channel. The default is GVFG_STREAM_VIDEO. Audio-only capture is not
-     * supported by the current driver ABI.
+     * Enable or disable audio for the next channel start. Video remains
+     * enabled; applications do not need to construct stream flag masks.
      */
-    GVFG_API gvfg_status_t gvfg_set_channel_streams(
+    GVFG_API gvfg_status_t gvfg_set_channel_audio_enabled(
         _In_ gvfg_handle handle,
         _In_ int channel_index,
-        _In_ uint32_t streams);
+        _In_ int enabled);
 
     GVFG_API gvfg_status_t gvfg_get_channel_audio_format(
         _In_ gvfg_handle handle,
@@ -422,17 +425,21 @@ extern "C"
         _In_ const gvfg_frame_t *frame);
 
     /*
-     * Copy one PCM frame from the driver into caller-owned memory. The channel
-     * must have been started with GVFG_STREAM_VIDEO | GVFG_STREAM_AUDIO.
-     * out_bytes receives the valid byte count reported by the driver.
+     * Acquire one PCM frame. The channel must have audio enabled before start.
+     * The returned SDK-owned data remains valid until the matching release.
+     * Each channel may hold only one audio frame at a time.
      */
-    GVFG_API gvfg_status_t gvfg_read_channel_audio(
+    GVFG_API gvfg_status_t gvfg_read_channel_audio_frame(
         _In_ gvfg_handle handle,
         _In_ int channel_index,
-        _Out_writes_bytes_(destination_capacity) void *destination,
-        _In_ uint32_t destination_capacity,
-        _Out_ uint32_t *out_bytes,
+        _Out_ gvfg_audio_frame_t *out_frame,
         _In_ uint32_t timeout_ms);
+
+    /* Release the unchanged token returned by gvfg_read_channel_audio_frame(). */
+    GVFG_API gvfg_status_t gvfg_release_channel_audio_frame(
+        _In_ gvfg_handle handle,
+        _In_ int channel_index,
+        _In_ const gvfg_audio_frame_t *frame);
 
     /*
      * Convert a captured YUY2 or Y210 frame with the GPU and copy the result

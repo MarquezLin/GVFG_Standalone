@@ -38,11 +38,16 @@ gvfg_enumerate_devices
 -> gvfg_create
 -> gvfg_set_channel_zero_copy_enabled (optional, before channel open)
 -> gvfg_open_channel
+-> gvfg_set_channel_audio_enabled (optional, before start)
 -> gvfg_start_channel
 -> 重複：
    gvfg_read_channel_frame
    使用／複製／轉換 frame
    gvfg_release_channel_frame
+   若已啟用 audio，另一個 worker thread 重複：
+      gvfg_read_channel_audio_frame
+      使用／複製 PCM
+      gvfg_release_channel_audio_frame
 -> gvfg_stop
 -> gvfg_destroy
 ```
@@ -105,6 +110,18 @@ int main(void)
 - 同一個 handle 的 lifecycle 操作應由應用程式自行序列化；不要同時 open、
   start、stop 或 destroy。
 
+Audio 採用相同的 pull 與 ownership 模型：
+
+- 建議使用獨立 audio worker thread，避免阻塞 video read 或 UI thread。
+- `gvfg_audio_frame_t.data` 是 SDK-owned PCM，只在對應的
+  `gvfg_release_channel_audio_frame()` 前有效。
+- 同一 channel 同時只能持有一個 audio frame；未 release 再 read 會回傳
+  `GVFG_ESTATE`。
+- release 必須傳回未修改的完整 `gvfg_audio_frame_t` token。
+- 若播放或錄音需要在 release 後繼續使用 PCM，Application 必須先複製。
+- SDK 只保有單一交付 buffer，不建立 audio ring；播放排程與 buffering 屬於
+  Application／Qt／WASAPI。
+
 `timeout_ms` 的共同規則：`0` 表示不等待；`GVFG_TIMEOUT_INFINITE` 表示無限等待；
 其他值的單位為毫秒。
 
@@ -148,6 +165,21 @@ int main(void)
 - `pixel_format`、`bit_depth`：原生 payload 格式。
 - `frame_id`：同一次 start/stop session 中單調遞增的識別值。
 
+### PCM audio
+
+`gvfg_audio_format_t` 只提供上層實際需要的播放格式：`sample_rate`、
+`channels`、`bits_per_sample`。Driver frame 大小與 block alignment 是 backend
+細節，不要求 Application 配置相同大小的 buffer。
+
+`gvfg_audio_frame_t` 包含：
+
+- `data`、`data_size`：SDK-owned PCM 與本次有效 byte 數。
+- `sample_rate`、`channels`、`bits_per_sample`：此 frame 的 PCM 格式。
+- `frame_id`：同一次 start/stop session 中單調遞增的 audio frame ID。
+
+目前 audio 僅支援 CH0，且必須與 video 一起啟動；不支援 audio-only。公開
+audio API 不是 zero-copy，但上層仍使用和 video 相同的 read/release contract。
+
 ## 6. 公開 API
 
 ### 裝置與生命週期
@@ -179,6 +211,17 @@ Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，每次成
 - `gvfg_read_channel_frame(handle, channel, &frame, timeout_ms)`：取得一個 frame；ownership 依 copy/
   zero-copy mode 而定，但 release contract 相同。
 - `gvfg_release_channel_frame(handle, channel, &frame)`：釋放原 frame token。
+
+### Audio frame
+
+- `gvfg_set_channel_audio_enabled(handle, channel, enabled)`：在 start 前啟用或停用
+  audio；video 永遠保留，不需要組合 stream flags。
+- `gvfg_get_channel_audio_format(handle, channel, &format)`：取得 PCM 播放格式。
+- `gvfg_read_channel_audio_frame(handle, channel, &frame, timeout_ms)`：取得一個
+  SDK-owned PCM frame。
+- `gvfg_release_channel_audio_frame(handle, channel, &frame)`：釋放原 audio token。
+
+成功 read 後，不論 PCM 是送往播放、錄音或被丟棄，都必須正好 release 一次。
 
 `gvfg_set_channel_video_format()` 只能在指定 stream 尚未開始或已 stop 時呼叫；streaming 中
 切換會回傳 `GVFG_ESTATE`。應用程式應在 UI 上同步鎖定格式選項。

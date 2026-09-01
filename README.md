@@ -117,22 +117,23 @@ Channel 預設只啟動 video。CH0 可在 start 前改成 video + audio：
 
 ```c
 gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
-gvfg_set_channel_streams(handle, GVFG_CHANNEL_0,
-                         GVFG_STREAM_VIDEO | GVFG_STREAM_AUDIO);
+gvfg_set_channel_audio_enabled(handle, GVFG_CHANNEL_0, 1);
 
 gvfg_audio_format_t audio = {0};
 gvfg_get_channel_audio_format(handle, GVFG_CHANNEL_0, &audio);
 gvfg_start_channel(handle, GVFG_CHANNEL_0);
 
-uint8_t pcm[8192];
-uint32_t pcm_bytes = 0;
-gvfg_read_channel_audio(handle, GVFG_CHANNEL_0,
-                        pcm, sizeof(pcm), &pcm_bytes, 1000);
+gvfg_audio_frame_t pcm = {0};
+if (gvfg_read_channel_audio_frame(handle, GVFG_CHANNEL_0, &pcm, 1000) == GVFG_OK) {
+    /* Consume pcm.data / pcm.data_size here. */
+    gvfg_release_channel_audio_frame(handle, GVFG_CHANNEL_0, &pcm);
+}
 ```
 
 Video-only 使用 `IOCTL_GIGA_VIDEO_START/STOP`；video + audio 使用
 `IOCTL_GIGA_START/STOP_VIDEO_AUDIO`。PCM 由 driver DMA buffer 複製到
-caller-owned destination，SDK 不建立 audio ring buffer。Audio zero-copy
+SDK-owned frame buffer，再以和 video 相同的 read/release ownership 交付。
+SDK 不建立 audio ring buffer。Audio zero-copy
 尚未納入，CH1 audio 也尚未正式支援。
 
 ### 同一裝置雙 channel
