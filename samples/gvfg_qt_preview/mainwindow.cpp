@@ -26,6 +26,8 @@
 
 namespace
 {
+    constexpr bool kChannel1UiVisible = false;
+
     QString logFilePrefix()
     {
 #if GVFG_INTERNAL_DIAGNOSTICS
@@ -690,6 +692,9 @@ void MainWindow::updateSignalStatus(bool queryHardware)
 #endif
     for (int channelIndex = GVFG_CHANNEL_0; channelIndex <= GVFG_CHANNEL_1; ++channelIndex)
     {
+        if (channelIndex == GVFG_CHANNEL_1 && !kChannel1UiVisible)
+            continue;
+
         ChannelRuntime &channel = channels_[channelIndex];
         if (!channel.opened)
         {
@@ -829,7 +834,6 @@ void MainWindow::updateSignalStatus(bool queryHardware)
 
 void MainWindow::updateUiState()
 {
-    constexpr bool kChannel1UiVisible = false;
     const bool deviceOpen = handle_ != nullptr;
     const bool ch0Running = channels_[0].running.load(std::memory_order_acquire);
     const bool ch1Running = channels_[1].running.load(std::memory_order_acquire);
