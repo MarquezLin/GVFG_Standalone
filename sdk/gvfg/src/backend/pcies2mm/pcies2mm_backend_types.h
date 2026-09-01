@@ -58,6 +58,16 @@ typedef struct pcies2mm_frame_t
     uint32_t bit_depth;
 } pcies2mm_frame_t;
 
+typedef struct pcies2mm_audio_format_t
+{
+    uint32_t sample_rate;
+    uint32_t channels;
+    uint32_t bits_per_sample;
+    uint32_t frames_per_second;
+    uint32_t frame_bytes;
+    uint32_t block_align;
+} pcies2mm_audio_format_t;
+
 typedef struct pcies2mm_stream_stats_t
 {
     pcies2mm_stream_state_t state;

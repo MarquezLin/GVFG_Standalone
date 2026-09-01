@@ -77,6 +77,11 @@ register 與 DMA 實作不屬於本文件。
 | ------------------ | ---------- | ------------------------------------------------------- |
 | `capture_fps`      | `double`   | 依 `gvfg_read_channel_frame()` 成功交付時間估算並平滑化的 FPS；尚無足夠 frame 時為 0 |
 | `delivered_frames` | `uint64_t` | 此次 running session 中成功交付給 caller 的 frame 數              |
+| `zero_copy_enabled` | `int` | 非零表示目前使用 driver zero-copy frame delivery |
+| `driver_read_samples` | `uint64_t` | 排除前 30 張 warmup 後的 driver read/acquire timing 樣本數 |
+| `driver_read_average_us` | `double` | `GET_FRAME` 或 zero-copy acquire 平均時間，單位為微秒 |
+| `driver_read_max300_us` | `double` | 最近完成的 300-sample window 最大值，單位為微秒 |
+| `driver_read_max_us` | `double` | 本次 capture lifetime 最大值，單位為微秒 |
 
 ### 1.8 `gvfg_frame_t`
 
@@ -234,6 +239,32 @@ gvfg_status_t gvfg_set_channel_video_format(gvfg_handle handle,
 - Device 必須已 open，且 stream 必須尚未 start 或已 stop。
 - Streaming 中呼叫回傳 `GVFG_ESTATE`；不支援的 format 回傳 `GVFG_ENOTSUP` 或
   `GVFG_EINVAL`。
+- 同一裝置的 CH0、CH1 不可同時設定 Y210；第二個 Y210 request 回傳
+  `GVFG_ENOTSUP`。
+
+### 1.19a Audio capture selection and copy-out
+
+```c
+gvfg_status_t gvfg_set_channel_streams(gvfg_handle handle,
+                                       int channel_index,
+                                       uint32_t streams);
+gvfg_status_t gvfg_get_channel_audio_format(gvfg_handle handle,
+                                            int channel_index,
+                                            gvfg_audio_format_t *out_format);
+gvfg_status_t gvfg_read_channel_audio(gvfg_handle handle,
+                                      int channel_index,
+                                      void *destination,
+                                      uint32_t destination_capacity,
+                                      uint32_t *out_bytes,
+                                      uint32_t timeout_ms);
+```
+
+- 預設為 `GVFG_STREAM_VIDEO`。CH0 可在 start 前設定為
+  `GVFG_STREAM_VIDEO | GVFG_STREAM_AUDIO`；audio-only 與 CH1 audio 尚未支援。
+- `gvfg_start_channel()` 依 streams 選擇 video-only 或 video + audio driver start。
+- `gvfg_read_channel_audio()` 以 `MAXULONG` 取得下一個 PCM frame，並複製到
+  caller-owned destination。`out_bytes` 是 driver 回報的有效 byte 數。
+- SDK 不建立 audio ring，也不提供尚未完成的 audio zero-copy。
 
 ### 1.20 `gvfg_start_channel`
 

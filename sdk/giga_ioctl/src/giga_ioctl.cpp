@@ -3,6 +3,8 @@
 
 #include <limits>
 
+static_assert(sizeof(GIGA_AUDIO_INFO) == 12, "GIGA_AUDIO_INFO driver ABI size must remain 12 bytes");
+
 namespace
 {
     BOOL send_ioctl(HANDLE device,
@@ -84,6 +86,22 @@ extern "C"
         return ok;
     }
 
+    BOOL giga_ioctl_get_audio_frame(HANDLE device, uint32_t channel,
+                                    uint32_t frame_index, void *buffer,
+                                    uint32_t buffer_size, uint32_t *bytes_returned)
+    {
+        if (!buffer || !bytes_returned)
+            return invalid_output_pointer();
+
+        GIGA_FRAME_REQUEST request{channel, frame_index};
+        DWORD returned = 0;
+        const BOOL ok = send_ioctl(device, IOCTL_PCIES2MM_GET_AUDIO_FRAME,
+                                   &request, sizeof(request),
+                                   buffer, buffer_size, &returned);
+        *bytes_returned = returned;
+        return ok;
+    }
+
     BOOL giga_ioctl_video_start(HANDLE device, uint32_t channel)
     {
         return send_channel_ioctl(device, IOCTL_GIGA_VIDEO_START, channel);
@@ -92,6 +110,44 @@ extern "C"
     BOOL giga_ioctl_video_stop(HANDLE device, uint32_t channel)
     {
         return send_channel_ioctl(device, IOCTL_GIGA_VIDEO_STOP, channel);
+    }
+
+    BOOL giga_ioctl_start_video_audio(HANDLE device, uint32_t channel)
+    {
+        return send_channel_ioctl(device, IOCTL_GIGA_START_VIDEO_AUDIO, channel);
+    }
+
+    BOOL giga_ioctl_stop_video_audio(HANDLE device, uint32_t channel)
+    {
+        return send_channel_ioctl(device, IOCTL_GIGA_STOP_VIDEO_AUDIO, channel);
+    }
+
+    BOOL giga_ioctl_get_audio_info(HANDLE device, uint32_t channel,
+                                   giga_ioctl_audio_info *info)
+    {
+        if (!info)
+            return invalid_output_pointer();
+
+        ULONG channel_index = channel;
+        GIGA_AUDIO_INFO driver_info{};
+        DWORD returned = 0;
+        const BOOL ok = send_ioctl(device, IOCTL_GIGA_GET_AUDIO_INFO,
+                                   &channel_index, sizeof(channel_index),
+                                   &driver_info, sizeof(driver_info), &returned);
+        if (!ok)
+            return FALSE;
+        if (returned != sizeof(driver_info))
+        {
+            SetLastError(ERROR_INVALID_DATA);
+            return FALSE;
+        }
+
+        info->channels = driver_info.Channels;
+        info->samples_per_second = driver_info.SamplesPerSec;
+        info->bits_per_sample = driver_info.BitsPerSample;
+        info->frames_per_second = driver_info.FramesPerSec;
+        info->frame_buffer_size = driver_info.FrameBufSize;
+        return TRUE;
     }
 
     BOOL giga_ioctl_release_video_frame(HANDLE device, uint32_t channel)

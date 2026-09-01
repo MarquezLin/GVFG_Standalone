@@ -61,22 +61,23 @@ namespace
 
     static std::string win32_error(DWORD err)
     {
-        char *msg = nullptr;
-        const DWORD len = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+        wchar_t *msg = nullptr;
+        const DWORD len = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER |
                                              FORMAT_MESSAGE_FROM_SYSTEM |
                                              FORMAT_MESSAGE_IGNORE_INSERTS,
                                          nullptr,
                                          err,
                                          MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                                         reinterpret_cast<LPSTR>(&msg),
+                                         reinterpret_cast<LPWSTR>(&msg),
                                          0,
                                          nullptr);
         std::string out;
         if (len && msg)
         {
-            out.assign(msg, msg + len);
-            while (!out.empty() && (out.back() == '\r' || out.back() == '\n' || out.back() == ' '))
-                out.pop_back();
+            std::wstring wide(msg, msg + len);
+            while (!wide.empty() && (wide.back() == L'\r' || wide.back() == L'\n' || wide.back() == L' '))
+                wide.pop_back();
+            out = wide_to_utf8(wide);
         }
         if (msg)
             LocalFree(msg);
@@ -311,6 +312,55 @@ namespace gvfg::internal
         return PCIES2MM_OK;
     }
 
+    pcies2mm_status_t PcieS2mmCaptureSession::set_audio_enabled(bool enabled)
+    {
+        if (device_handle() == INVALID_HANDLE_VALUE)
+            return reject(PCIES2MM_ESTATE, "set audio enabled rejected: device is not open");
+        if (running_)
+            return reject(PCIES2MM_ESTATE, "set audio enabled rejected: stream is running");
+        if (enabled && active_channel() != 0)
+            return reject(PCIES2MM_ENOTSUP, "audio capture is currently supported only on channel 0");
+
+        if (audio_enabled_ == enabled)
+            return PCIES2MM_OK;
+
+        // Event handles are created according to audio_enabled_. Rebuild the
+        // registrations when the stopped channel changes between video-only
+        // and video+audio; otherwise the new audio handles remain null.
+        const bool wasMonitoring = monitoring_.load(std::memory_order_acquire);
+        if (wasMonitoring)
+            stop_event_monitoring();
+        audio_enabled_ = enabled;
+        if (wasMonitoring && !start_event_monitoring())
+            return fail(PCIES2MM_EIO, "restart event monitoring after audio stream change");
+        return PCIES2MM_OK;
+    }
+
+    pcies2mm_status_t PcieS2mmCaptureSession::get_audio_format(pcies2mm_audio_format_t &out) const
+    {
+        std::memset(&out, 0, sizeof(out));
+        if (device_handle() == INVALID_HANDLE_VALUE)
+            return reject(PCIES2MM_ESTATE, "get audio format rejected: device is not open");
+        if (active_channel() != 0)
+            return reject(PCIES2MM_ENOTSUP, "audio capture is currently supported only on channel 0");
+
+        giga_ioctl_audio_info info{};
+        if (!giga_ioctl_get_audio_info(device_handle(), active_channel(), &info))
+            return fail(PCIES2MM_EIO, "get audio info");
+        if (info.channels == 0 || info.samples_per_second == 0 ||
+            info.bits_per_sample == 0 || info.frames_per_second == 0 ||
+            info.frame_buffer_size == 0 || (info.bits_per_sample % 8) != 0)
+            return reject(PCIES2MM_EIO, "driver returned an invalid audio format");
+
+        out.sample_rate = info.samples_per_second;
+        out.channels = info.channels;
+        out.bits_per_sample = info.bits_per_sample;
+        out.frames_per_second = info.frames_per_second;
+        out.frame_bytes = info.frame_buffer_size;
+        out.block_align = info.channels * (info.bits_per_sample / 8);
+        return PCIES2MM_OK;
+    }
+
     pcies2mm_status_t PcieS2mmCaptureSession::get_signal_status(pcies2mm_signal_status_t &out) const
     {
         if (device_handle() == INVALID_HANDLE_VALUE)
@@ -433,6 +483,7 @@ namespace gvfg::internal
             held_frame_ = {};
             frame_held_ = false;
             read_in_progress_ = false;
+            audio_read_in_progress_ = false;
             active_delivery_started_ = {};
             latest_sequence_ = 0;
             delivered_sequence_ = 0;
@@ -490,14 +541,20 @@ namespace gvfg::internal
         stream_ready_pending_ = false;
 
         if (device_handle() != INVALID_HANDLE_VALUE)
-            stop_video(active_channel());
+            stop_capture(active_channel());
 
         if (dma_event_)
             SetEvent(dma_event_);
+        if (audio_event_)
+            SetEvent(audio_event_);
+        if (extra_video_event_)
+            SetEvent(extra_video_event_);
+        if (extra_audio_event_)
+            SetEvent(extra_audio_event_);
 
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            read_finished_cv_.wait(lock, [this] { return !read_in_progress_; });
+            read_finished_cv_.wait(lock, [this] { return !read_in_progress_ && !audio_read_in_progress_; });
         }
         const pcies2mm_status_t releaseStatus = release_all_zero_copy_frames(true);
         stop_event_monitoring();
@@ -506,9 +563,28 @@ namespace gvfg::internal
             std::lock_guard<std::mutex> lock(mutex_);
             held_frame_ = {};
             frame_held_ = false;
+            audio_read_in_progress_ = false;
             stats_.state = configured_ ? PCIES2MM_STREAM_CONFIGURED : PCIES2MM_STREAM_STOPPED;
         }
         return releaseStatus;
+    }
+
+    pcies2mm_status_t PcieS2mmCaptureSession::ensure_capture_started()
+    {
+        if (capture_active_.load(std::memory_order_acquire))
+            return PCIES2MM_OK;
+        if (!signal_presence_known_.load(std::memory_order_acquire) ||
+            !signal_present_.load(std::memory_order_acquire))
+            return PCIES2MM_ETIMEOUT;
+        if (!ResetEvent(dma_event_) || !ResetEvent(extra_video_event_) ||
+            (audio_enabled_ &&
+             (!ResetEvent(audio_event_) || !ResetEvent(extra_audio_event_))))
+            return fail(PCIES2MM_EIO, "reset capture event");
+        if (!start_capture(active_channel()))
+            return fail(PCIES2MM_EIO, "enable reader capture");
+        capture_active_.store(true, std::memory_order_release);
+        stream_ready_pending_.store(true, std::memory_order_release);
+        return PCIES2MM_OK;
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::wait_frame(uint32_t timeoutMs, pcies2mm_frame_t &out)
@@ -520,28 +596,9 @@ namespace gvfg::internal
             std::unique_lock<std::mutex> lock(mutex_);
             if (!running_ || frame_held_ || read_in_progress_)
                 return reject(PCIES2MM_ESTATE, "wait frame rejected: stream state does not allow another read");
-            if (!capture_active_.load(std::memory_order_acquire))
-            {
-                if (!signal_presence_known_.load(std::memory_order_acquire) ||
-                    !signal_present_.load(std::memory_order_acquire))
-                    return PCIES2MM_ETIMEOUT;
-                if (!ResetEvent(dma_event_))
-                {
-                    const DWORD err = GetLastError();
-                    ++stats_.dma_errors;
-                    lock.unlock();
-                    return fail(PCIES2MM_EIO, "reset DMA event", err);
-                }
-                if (!start_video(active_channel()))
-                {
-                    const DWORD err = GetLastError();
-                    ++stats_.dma_errors;
-                    lock.unlock();
-                    return fail(PCIES2MM_EIO, "enable reader capture", err);
-                }
-                capture_active_.store(true, std::memory_order_release);
-                stream_ready_pending_.store(true, std::memory_order_release);
-            }
+            const pcies2mm_status_t startStatus = ensure_capture_started();
+            if (startStatus != PCIES2MM_OK)
+                return startStatus;
             read_in_progress_ = true;
         }
 
@@ -573,7 +630,8 @@ namespace gvfg::internal
                 }
             }
 
-            const DWORD waitResult = WaitForSingleObject(dma_event_, waitMs);
+            HANDLE videoReadyEvents[] = {dma_event_, extra_video_event_};
+            const DWORD waitResult = WaitForMultipleObjects(2, videoReadyEvents, FALSE, waitMs);
             if (waitResult == WAIT_TIMEOUT)
             {
                 {
@@ -583,7 +641,7 @@ namespace gvfg::internal
                 finishRead();
                 return PCIES2MM_ETIMEOUT;
             }
-            if (waitResult != WAIT_OBJECT_0)
+            if (waitResult != WAIT_OBJECT_0 && waitResult != WAIT_OBJECT_0 + 1)
             {
                 const DWORD err = GetLastError();
                 finishRead();
@@ -678,6 +736,109 @@ namespace gvfg::internal
         return PCIES2MM_OK;
     }
 
+    pcies2mm_status_t PcieS2mmCaptureSession::wait_audio(uint32_t timeoutMs,
+                                                         void *destination,
+                                                         uint32_t destinationCapacity,
+                                                         uint32_t &outBytes)
+    {
+        outBytes = 0;
+        if (!destination || destinationCapacity == 0)
+            return reject(PCIES2MM_EINVAL, "wait audio rejected: destination is invalid");
+
+        pcies2mm_audio_format_t format{};
+        const pcies2mm_status_t formatStatus = get_audio_format(format);
+        if (formatStatus != PCIES2MM_OK)
+            return formatStatus;
+        if (destinationCapacity < format.frame_bytes)
+            return reject(PCIES2MM_EINVAL, "wait audio rejected: destination is smaller than the driver frame");
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!running_ || !audio_enabled_ || audio_read_in_progress_)
+                return reject(PCIES2MM_ESTATE, "wait audio rejected: stream state does not allow another audio read");
+            const pcies2mm_status_t startStatus = ensure_capture_started();
+            if (startStatus != PCIES2MM_OK)
+                return startStatus;
+            audio_read_in_progress_ = true;
+        }
+
+        const auto finishRead = [this]() {
+            std::lock_guard<std::mutex> lock(mutex_);
+            audio_read_in_progress_ = false;
+            read_finished_cv_.notify_all();
+        };
+        const bool infiniteWait = timeoutMs == UINT32_MAX;
+        const auto deadline = infiniteWait
+                                  ? (std::chrono::steady_clock::time_point::max)()
+                                  : std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+
+        for (;;)
+        {
+            DWORD waitMs = INFINITE;
+            if (!infiniteWait)
+            {
+                const auto now = std::chrono::steady_clock::now();
+                if (now >= deadline)
+                    waitMs = 0;
+                else
+                {
+                    const auto remainingUs = std::chrono::duration_cast<std::chrono::microseconds>(deadline - now).count();
+                    waitMs = static_cast<DWORD>((remainingUs + 999) / 1000);
+                }
+            }
+
+            HANDLE audioReadyEvents[] = {audio_event_, extra_audio_event_};
+            const DWORD waitResult = WaitForMultipleObjects(2, audioReadyEvents, FALSE, waitMs);
+            if (waitResult == WAIT_TIMEOUT)
+            {
+                finishRead();
+                return PCIES2MM_ETIMEOUT;
+            }
+            if (waitResult != WAIT_OBJECT_0 && waitResult != WAIT_OBJECT_0 + 1)
+            {
+                const DWORD err = GetLastError();
+                finishRead();
+                return fail(PCIES2MM_EIO, "wait audio event", err);
+            }
+            if (!running_.load(std::memory_order_acquire))
+            {
+                finishRead();
+                return PCIES2MM_ESTATE;
+            }
+            if (!capture_active_.load(std::memory_order_acquire))
+            {
+                finishRead();
+                return PCIES2MM_ETIMEOUT;
+            }
+
+            const int ret = get_audio_frame(active_channel(),
+                                            (std::numeric_limits<uint32_t>::max)(),
+                                            destination,
+                                            destinationCapacity);
+            if (ret >= 0)
+            {
+                if (ret == 0 || static_cast<uint32_t>(ret) > format.frame_bytes)
+                {
+                    finishRead();
+                    return reject(PCIES2MM_EIO, "driver returned an invalid audio byte count");
+                }
+                if (static_cast<uint32_t>(ret) != format.frame_bytes)
+                    PCIES2MM_LOG("audio frame size mismatch: expected=%u returned=%d",
+                                 format.frame_bytes, ret);
+                outBytes = static_cast<uint32_t>(ret);
+                finishRead();
+                return PCIES2MM_OK;
+            }
+
+            const DWORD frameError = GetLastError();
+            if (!is_transient_frame_not_ready_error(frameError))
+            {
+                finishRead();
+                return fail(PCIES2MM_EIO, "copy get audio frame", frameError);
+            }
+        }
+    }
+
     pcies2mm_status_t PcieS2mmCaptureSession::release_frame(const pcies2mm_frame_t &frame)
     {
         std::unique_lock<std::mutex> lock(mutex_);
@@ -766,6 +927,20 @@ namespace gvfg::internal
         return giga_ioctl_video_stop(device_handle(), channelIndex) != FALSE;
     }
 
+    bool PcieS2mmCaptureSession::start_capture(uint32_t channelIndex) const
+    {
+        return audio_enabled_
+                   ? giga_ioctl_start_video_audio(device_handle(), channelIndex) != FALSE
+                   : start_video(channelIndex);
+    }
+
+    bool PcieS2mmCaptureSession::stop_capture(uint32_t channelIndex) const
+    {
+        return audio_enabled_
+                   ? giga_ioctl_stop_video_audio(device_handle(), channelIndex) != FALSE
+                   : stop_video(channelIndex);
+    }
+
     bool PcieS2mmCaptureSession::acquire_zero_copy_frame(uint32_t channelIndex,
                                                          const uint8_t *&outData) const
     {
@@ -821,13 +996,27 @@ namespace gvfg::internal
     bool PcieS2mmCaptureSession::create_and_register_events(uint32_t channelIndex)
     {
         dma_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        extra_video_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (audio_enabled_)
+        {
+            audio_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            extra_audio_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        }
         format_change_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         plug_in_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         plug_out_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!dma_event_ || !format_change_event_ || !plug_in_event_ || !plug_out_event_)
+        if (!dma_event_ || !extra_video_event_ ||
+            (audio_enabled_ && (!audio_event_ || !extra_audio_event_)) ||
+            !format_change_event_ || !plug_in_event_ || !plug_out_event_)
             return false;
 
         if (!register_event(channelIndex, GIGA_IOCTL_EVENT_VIDEO_DMA, dma_event_))
+            return false;
+        if (!register_event(channelIndex, GIGA_IOCTL_EVENT_EXTRA_VIDEO_FRAME, extra_video_event_))
+            return false;
+        if (audio_enabled_ &&
+            (!register_event(channelIndex, GIGA_IOCTL_EVENT_AUDIO_DMA, audio_event_) ||
+             !register_event(channelIndex, GIGA_IOCTL_EVENT_EXTRA_AUDIO_FRAME, extra_audio_event_)))
             return false;
         if ((event_mask_filter_ & PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN) != 0 &&
             !register_event(channelIndex, GIGA_IOCTL_EVENT_VIDEO_FORMAT_CHANGE, format_change_event_))
@@ -844,6 +1033,12 @@ namespace gvfg::internal
     void PcieS2mmCaptureSession::unregister_events(uint32_t channelIndex)
     {
         unregister_event(channelIndex, GIGA_IOCTL_EVENT_VIDEO_DMA);
+        unregister_event(channelIndex, GIGA_IOCTL_EVENT_EXTRA_VIDEO_FRAME);
+        if (audio_enabled_)
+        {
+            unregister_event(channelIndex, GIGA_IOCTL_EVENT_AUDIO_DMA);
+            unregister_event(channelIndex, GIGA_IOCTL_EVENT_EXTRA_AUDIO_FRAME);
+        }
         if ((event_mask_filter_ & PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN) != 0)
             unregister_event(channelIndex, GIGA_IOCTL_EVENT_VIDEO_FORMAT_CHANGE);
         if ((event_mask_filter_ & PCIES2MM_EVENT_MASK_PLUG_IN) != 0)
@@ -858,6 +1053,21 @@ namespace gvfg::internal
         {
             CloseHandle(dma_event_);
             dma_event_ = nullptr;
+        }
+        if (audio_event_)
+        {
+            CloseHandle(audio_event_);
+            audio_event_ = nullptr;
+        }
+        if (extra_video_event_)
+        {
+            CloseHandle(extra_video_event_);
+            extra_video_event_ = nullptr;
+        }
+        if (extra_audio_event_)
+        {
+            CloseHandle(extra_audio_event_);
+            extra_audio_event_ = nullptr;
         }
         if (format_change_event_)
         {
@@ -912,6 +1122,12 @@ namespace gvfg::internal
 
         if (dma_event_)
             SetEvent(dma_event_);
+        if (audio_event_)
+            SetEvent(audio_event_);
+        if (extra_video_event_)
+            SetEvent(extra_video_event_);
+        if (extra_audio_event_)
+            SetEvent(extra_audio_event_);
         if (capture_thread_.joinable())
             capture_thread_.join();
 
@@ -925,6 +1141,19 @@ namespace gvfg::internal
         uint32_t bytesReturned = 0;
         const BOOL ok = giga_ioctl_get_frame(device_handle(), channelIndex, frameIndex,
                                               buffer, bufferSize, &bytesReturned);
+        if (!ok)
+            return -1;
+        return static_cast<int>(bytesReturned);
+    }
+
+    int PcieS2mmCaptureSession::get_audio_frame(uint32_t channelIndex,
+                                                uint32_t frameIndex,
+                                                void *buffer,
+                                                DWORD bufferSize) const
+    {
+        uint32_t bytesReturned = 0;
+        const BOOL ok = giga_ioctl_get_audio_frame(device_handle(), channelIndex, frameIndex,
+                                                    buffer, bufferSize, &bytesReturned);
         if (!ok)
             return -1;
         return static_cast<int>(bytesReturned);
@@ -985,14 +1214,18 @@ namespace gvfg::internal
             signal_metadata_valid_ = false;
         }
         emit_event(PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN);
-        stop_video(channel);
+        stop_capture(channel);
         capture_active_ = false;
         stream_ready_pending_ = false;
         if (dma_event_)
             SetEvent(dma_event_);
+        if (audio_event_)
+            SetEvent(audio_event_);
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            read_finished_cv_.wait(lock, [this] { return !read_in_progress_ && !frame_held_; });
+            read_finished_cv_.wait(lock, [this] {
+                return !read_in_progress_ && !audio_read_in_progress_ && !frame_held_;
+            });
         }
         if (running_.load(std::memory_order_acquire))
             refresh_stream_from_registers(true);
@@ -1006,10 +1239,12 @@ namespace gvfg::internal
 
         if (capture_active_.exchange(false, std::memory_order_acq_rel))
         {
-            stop_video(channel);
+            stop_capture(channel);
         }
         if (dma_event_)
             SetEvent(dma_event_);
+        if (audio_event_)
+            SetEvent(audio_event_);
         signal_probe_active_.store(false, std::memory_order_release);
         signal_present_.store(true, std::memory_order_release);
         signal_presence_known_.store(true, std::memory_order_release);
@@ -1020,7 +1255,9 @@ namespace gvfg::internal
         emit_event(PCIES2MM_EVENT_PLUG_IN);
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            read_finished_cv_.wait(lock, [this] { return !read_in_progress_ && !frame_held_; });
+            read_finished_cv_.wait(lock, [this] {
+                return !read_in_progress_ && !audio_read_in_progress_ && !frame_held_;
+            });
         }
         if (running_.load(std::memory_order_acquire))
             refresh_stream_from_registers(true);
@@ -1032,10 +1269,12 @@ namespace gvfg::internal
         stream_ready_pending_.store(false, std::memory_order_release);
         signal_present_.store(false, std::memory_order_release);
         signal_presence_known_.store(true, std::memory_order_release);
-        stop_video(channel);
+        stop_capture(channel);
         capture_active_ = false;
         if (dma_event_)
             SetEvent(dma_event_);
+        if (audio_event_)
+            SetEvent(audio_event_);
         emit_event(PCIES2MM_EVENT_PLUG_OUT);
 
         {

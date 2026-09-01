@@ -70,6 +70,12 @@ build/.../bin/gvfg_qt_preview.exe
   使用 function `0x832` 到 `0x837`。
 - `IOCTL_PCIES2MM_GET_FRAME` 接受 `frameIndex = MAXULONG`（`0xFFFFFFFF`），
   由 driver 自行選擇已完成的 frame。
+- `IOCTL_PCIES2MM_GET_AUDIO_FRAME`（function `0x809`）同樣接受
+  `frameIndex = MAXULONG`。
+- `IOCTL_GIGA_START_VIDEO_AUDIO`、`IOCTL_GIGA_STOP_VIDEO_AUDIO` 與
+  `IOCTL_GIGA_GET_AUDIO_INFO`（function `0x839` 到 `0x83B`）。
+- Extra video/audio frame event（event type `5`、`6`）表示 driver 仍有
+  frame 待取；SDK 將它們當成額外的 ready notification。
 
 SDK 不再呼叫 `IOCTL_PCIES2MM_GET_VIDEO_DONE_INDEX`，也不會在新 IOCTL
 不支援時退回直接寫入 `VIDEO_DMA_EN_OFFSET`、`VIDEO_EN_OFFSET` 或
@@ -105,6 +111,30 @@ Format-change driver event 則依 mask 註冊；關閉它們也會停用對應�
 `gvfg_release_channel_frame()` ownership contract，每次成功 read 都必須 release。
 SDK 會在 open 時 enable zero-copy，並在 close/destroy 時 disable。
 
+### Audio capture
+
+Channel 預設只啟動 video。CH0 可在 start 前改成 video + audio：
+
+```c
+gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
+gvfg_set_channel_streams(handle, GVFG_CHANNEL_0,
+                         GVFG_STREAM_VIDEO | GVFG_STREAM_AUDIO);
+
+gvfg_audio_format_t audio = {0};
+gvfg_get_channel_audio_format(handle, GVFG_CHANNEL_0, &audio);
+gvfg_start_channel(handle, GVFG_CHANNEL_0);
+
+uint8_t pcm[8192];
+uint32_t pcm_bytes = 0;
+gvfg_read_channel_audio(handle, GVFG_CHANNEL_0,
+                        pcm, sizeof(pcm), &pcm_bytes, 1000);
+```
+
+Video-only 使用 `IOCTL_GIGA_VIDEO_START/STOP`；video + audio 使用
+`IOCTL_GIGA_START/STOP_VIDEO_AUDIO`。PCM 由 driver DMA buffer 複製到
+caller-owned destination，SDK 不建立 audio ring buffer。Audio zero-copy
+尚未納入，CH1 audio 也尚未正式支援。
+
 ### 同一裝置雙 channel
 
 同一個 `gvfg_handle` 可對同一個 device index 開啟 CH0、CH1。SDK 只建立一個
@@ -126,6 +156,7 @@ gvfg_stop(handle); /* stop both channels */
 
 兩個 channel 應由不同 worker thread 讀取。所有 stream、frame、event、signal 與
 runtime API 都明確要求 `channel_index`；不再保留隱含 selected-channel 的舊 API。
+目前硬體不允許 CH0、CH1 同時使用 Y210；SDK 會拒絕第二個 Y210 設定。
 
 `gvfg_qt_preview.exe` 只使用 public API，主畫面只顯示 input 與 Preview
 狀態；CH0、CH1 各自有 Start、Stop 與獨立 Preview 視窗，可單獨測試，

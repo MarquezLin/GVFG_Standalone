@@ -41,14 +41,18 @@ namespace gvfg::internal
         pcies2mm_status_t set_channel(uint32_t channel);
         pcies2mm_status_t set_zero_copy_enabled(bool enabled);
         bool zero_copy_enabled() const { return zero_copy_enabled_; }
+        pcies2mm_status_t set_audio_enabled(bool enabled);
         pcies2mm_status_t set_video_format(pcies2mm_pixel_format_t format);
         pcies2mm_status_t get_signal_status(pcies2mm_signal_status_t &out) const;
+        pcies2mm_status_t get_audio_format(pcies2mm_audio_format_t &out) const;
 
         pcies2mm_status_t set_event_callback(pcies2mm_event_callback_t callback, void *user, uint32_t eventMask);
         pcies2mm_status_t configure_stream(const pcies2mm_stream_desc_t &desc);
         pcies2mm_status_t start_stream();
         pcies2mm_status_t stop_stream();
         pcies2mm_status_t wait_frame(uint32_t timeoutMs, pcies2mm_frame_t &out);
+        pcies2mm_status_t wait_audio(uint32_t timeoutMs, void *destination,
+                                    uint32_t destinationCapacity, uint32_t &outBytes);
         pcies2mm_status_t release_frame(const pcies2mm_frame_t &frame);
 
         void get_debug_stats(pcies2mm_stream_stats_t &outStats,
@@ -66,6 +70,8 @@ namespace gvfg::internal
         bool write_reg(uint32_t offset, uint32_t value) const;
         bool start_video(uint32_t channelIndex) const;
         bool stop_video(uint32_t channelIndex) const;
+        bool start_capture(uint32_t channelIndex) const;
+        bool stop_capture(uint32_t channelIndex) const;
         bool acquire_zero_copy_frame(uint32_t channelIndex, const uint8_t *&outData) const;
         bool release_zero_copy_frame(uint32_t channelIndex) const;
         pcies2mm_status_t release_all_zero_copy_frames(bool includeInUse);
@@ -77,6 +83,9 @@ namespace gvfg::internal
         void unregister_events(uint32_t channelIndex);
         void close_event_handles();
         int get_frame(uint32_t channelIndex, uint32_t frameIndex, uint8_t *buffer, DWORD bufferSize) const;
+        int get_audio_frame(uint32_t channelIndex, uint32_t frameIndex,
+                            void *buffer, DWORD bufferSize) const;
+        pcies2mm_status_t ensure_capture_started();
 
         void capture_thread_proc();
         void handle_format_change_event(uint32_t channel);
@@ -98,6 +107,9 @@ namespace gvfg::internal
         ChannelErrorState &error_state_;
         std::shared_ptr<PcieS2mmDeviceConnection> device_connection_;
         HANDLE dma_event_ = nullptr;
+        HANDLE audio_event_ = nullptr;
+        HANDLE extra_video_event_ = nullptr;
+        HANDLE extra_audio_event_ = nullptr;
         HANDLE format_change_event_ = nullptr;
         HANDLE plug_in_event_ = nullptr;
         HANDLE plug_out_event_ = nullptr;
@@ -107,6 +119,7 @@ namespace gvfg::internal
         uint32_t channel_ = 0;
         bool configured_ = false;
         bool zero_copy_enabled_ = false;
+        bool audio_enabled_ = false;
 
         std::atomic<bool> running_{false};
         std::atomic<bool> monitoring_{false};
@@ -139,6 +152,7 @@ namespace gvfg::internal
         pcies2mm_frame_t held_frame_{};
         bool frame_held_ = false;
         bool read_in_progress_ = false;
+        bool audio_read_in_progress_ = false;
         std::chrono::steady_clock::time_point active_delivery_started_{};
         bool stream_error_ = false;
         pcies2mm_stream_stats_t stats_{};

@@ -109,6 +109,22 @@ extern "C"
         GVFG_CHANNEL_1 = 1
     } gvfg_channel_t;
 
+    typedef enum
+    {
+        GVFG_STREAM_VIDEO = 1u << 0,
+        GVFG_STREAM_AUDIO = 1u << 1
+    } gvfg_stream_flag_t;
+
+    typedef struct
+    {
+        uint32_t sample_rate;
+        uint32_t channels;
+        uint32_t bits_per_sample;
+        uint32_t frames_per_second;
+        uint32_t frame_bytes;
+        uint32_t block_align;
+    } gvfg_audio_format_t;
+
     typedef struct
     {
         char name[128]; /* Display name for UI/logging. UTF-8, null-terminated. */
@@ -128,6 +144,12 @@ extern "C"
     {
         double capture_fps;        /* Runtime FPS measured from frames returned by gvfg_read_channel_frame(). */
         uint64_t delivered_frames; /* Number of frames returned by gvfg_read_channel_frame(). */
+        int zero_copy_enabled;     /* Non-zero when driver zero-copy delivery is selected. */
+        uint32_t reserved;
+        uint64_t driver_read_samples;
+        double driver_read_average_us;
+        double driver_read_max300_us;
+        double driver_read_max_us;
     } gvfg_runtime_info_t;
 
     typedef struct
@@ -317,6 +339,21 @@ extern "C"
         _In_ gvfg_pixel_format_t format);
 
     /*
+     * Select video-only or combined video+audio capture before starting the
+     * channel. The default is GVFG_STREAM_VIDEO. Audio-only capture is not
+     * supported by the current driver ABI.
+     */
+    GVFG_API gvfg_status_t gvfg_set_channel_streams(
+        _In_ gvfg_handle handle,
+        _In_ int channel_index,
+        _In_ uint32_t streams);
+
+    GVFG_API gvfg_status_t gvfg_get_channel_audio_format(
+        _In_ gvfg_handle handle,
+        _In_ int channel_index,
+        _Out_ gvfg_audio_format_t *out_format);
+
+    /*
      * Configure and start capture on an opened device.
      *
      * Parameters:
@@ -383,6 +420,19 @@ extern "C"
         _In_ gvfg_handle handle,
         _In_ int channel_index,
         _In_ const gvfg_frame_t *frame);
+
+    /*
+     * Copy one PCM frame from the driver into caller-owned memory. The channel
+     * must have been started with GVFG_STREAM_VIDEO | GVFG_STREAM_AUDIO.
+     * out_bytes receives the valid byte count reported by the driver.
+     */
+    GVFG_API gvfg_status_t gvfg_read_channel_audio(
+        _In_ gvfg_handle handle,
+        _In_ int channel_index,
+        _Out_writes_bytes_(destination_capacity) void *destination,
+        _In_ uint32_t destination_capacity,
+        _Out_ uint32_t *out_bytes,
+        _In_ uint32_t timeout_ms);
 
     /*
      * Convert a captured YUY2 or Y210 frame with the GPU and copy the result

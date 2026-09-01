@@ -44,6 +44,11 @@ private:
         std::atomic<bool> stopRequested{false};
         std::atomic<bool> frameAvailable{false};
         std::thread captureThread;
+        std::thread audioThread;
+        bool audioEnabled = false;
+        gvfg_audio_format_t audioFormat{};
+        std::atomic<uint64_t> audioFrames{0};
+        std::atomic<uint64_t> audioBytes{0};
         std::atomic<double> getFrameAverageMs{0.0};
         std::atomic<double> getFrameMaximumMs{0.0};
         std::atomic<double> getFrameWindowMaximumMs{0.0};
@@ -68,6 +73,7 @@ private:
     bool openDevice();
     bool openChannel(int channel);
     bool applyOutputFormat(int channel);
+    void updateOutputFormatOptions(int changedChannel = -1);
     void closeDevice();
     void startCapture(int channel);
     void stopCapture(int channel);
@@ -87,7 +93,9 @@ private:
 #endif
     void appendLog(const QString &message);
     void captureReadLoop(int channel);
+    void audioReadLoop(int channel);
     void joinCaptureThread(int channel);
+    void joinAudioThread(int channel);
 
     static constexpr qint64 kMaxLogFileBytes = 20ll * 1024ll * 1024ll;
 

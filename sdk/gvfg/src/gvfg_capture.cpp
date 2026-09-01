@@ -33,6 +33,8 @@ namespace
     static_assert(GVFG_EVENT_MASK_FORMAT_CHANGE_BEGIN == PCIES2MM_EVENT_MASK_FORMAT_CHANGE_BEGIN);
 
 #if INTPTR_MAX == INT64_MAX
+    static_assert(sizeof(gvfg_audio_format_t) == 24, "gvfg_audio_format_t ABI must remain frozen");
+    static_assert(sizeof(gvfg_runtime_info_t) == 56, "gvfg_runtime_info_t x64 ABI must remain frozen");
     static_assert(std::is_standard_layout_v<gvfg_frame_t>);
     static_assert(sizeof(gvfg_frame_t) == 48, "gvfg_frame_t x64 ABI must remain frozen");
     static_assert(offsetof(gvfg_frame_t, data) == 0);
@@ -314,6 +316,11 @@ struct gvfg_channel_session_t
         pcies2mm_debug_state_t debugState{};
         uint64_t waitTimeouts = 0;
         backend->get_debug_stats(stats, waitTimeouts, debugState);
+        out.zero_copy_enabled = debugState.get_frame_zero_copy;
+        out.driver_read_samples = debugState.get_frame_timing_samples;
+        out.driver_read_average_us = debugState.get_frame_timing_average_us;
+        out.driver_read_max300_us = debugState.get_frame_timing_max300_us;
+        out.driver_read_max_us = debugState.get_frame_timing_max_us;
         return GVFG_OK;
     }
 
@@ -666,6 +673,53 @@ struct gvfg_channel_session_t
         return map_status(status);
     }
 
+    gvfg_status_t setStreams(uint32_t value)
+    {
+        if (!backend)
+            return reject(GVFG_ESTATE, "gvfg_set_channel_streams rejected: channel is not open");
+        if (running)
+            return reject(GVFG_ESTATE, "gvfg_set_channel_streams rejected: channel is running");
+        const uint32_t supported = GVFG_STREAM_VIDEO | GVFG_STREAM_AUDIO;
+        if ((value & ~supported) != 0 || (value & GVFG_STREAM_VIDEO) == 0)
+            return reject(GVFG_EINVAL, "gvfg_set_channel_streams rejected: use video or video plus audio");
+
+        const bool enableAudio = (value & GVFG_STREAM_AUDIO) != 0;
+        const pcies2mm_status_t status = backend->set_audio_enabled(enableAudio);
+        if (status != PCIES2MM_OK)
+            return map_status(status);
+        streams = value;
+        return GVFG_OK;
+    }
+
+    gvfg_status_t getAudioFormat(gvfg_audio_format_t &out)
+    {
+        std::memset(&out, 0, sizeof(out));
+        if (!backend)
+            return reject(GVFG_ESTATE, "gvfg_get_channel_audio_format rejected: channel is not open");
+        pcies2mm_audio_format_t format{};
+        const pcies2mm_status_t status = backend->get_audio_format(format);
+        if (status != PCIES2MM_OK)
+            return map_status(status);
+        out.sample_rate = format.sample_rate;
+        out.channels = format.channels;
+        out.bits_per_sample = format.bits_per_sample;
+        out.frames_per_second = format.frames_per_second;
+        out.frame_bytes = format.frame_bytes;
+        out.block_align = format.block_align;
+        return GVFG_OK;
+    }
+
+    gvfg_status_t readAudio(void *destination, uint32_t destinationCapacity,
+                            uint32_t &outBytes, uint32_t timeoutMs)
+    {
+        outBytes = 0;
+        if (!backend)
+            return reject(GVFG_ESTATE, "gvfg_read_channel_audio rejected: channel is not open");
+        if (!running || (streams & GVFG_STREAM_AUDIO) == 0)
+            return reject(GVFG_ESTATE, "gvfg_read_channel_audio rejected: audio capture is not running");
+        return map_status(backend->wait_audio(timeoutMs, destination, destinationCapacity, outBytes));
+    }
+
     gvfg_status_t debugWriteRegister(uint32_t offset, uint32_t value)
     {
         if (!backend)
@@ -728,6 +782,7 @@ struct gvfg_channel_session_t
     int currentIndex = -1;
     uint32_t selectedChannel = GVFG_CHANNEL_0;
     bool zeroCopyRequested = false;
+    uint32_t streams = GVFG_STREAM_VIDEO;
     uint32_t eventMask = GVFG_EVENT_MASK_ALL;
 
     uint32_t width = 0;
@@ -874,6 +929,31 @@ struct gvfg_handle_t
         return GVFG_OK;
     }
 
+    gvfg_status_t setChannelVideoFormat(int channelIndex, gvfg_pixel_format_t format)
+    {
+        gvfg_channel_session_t *channel = findChannel(channelIndex);
+        if (!channel)
+            return rejectChannel(channelIndex,
+                                 GVFG_ESTATE,
+                                 "gvfg_set_channel_video_format rejected: channel is not open");
+        if (format != GVFG_PIXFMT_YUY2 && format != GVFG_PIXFMT_Y210)
+            return rejectChannel(channelIndex,
+                                 GVFG_EINVAL,
+                                 "gvfg_set_channel_video_format rejected: pixel format is invalid");
+
+        const int otherChannel = channelIndex == GVFG_CHANNEL_0 ? GVFG_CHANNEL_1 : GVFG_CHANNEL_0;
+        if (format == GVFG_PIXFMT_Y210 &&
+            requestedFormats[static_cast<size_t>(otherChannel)] == GVFG_PIXFMT_Y210)
+            return rejectChannel(channelIndex,
+                                 GVFG_ENOTSUP,
+                                 "both channels cannot use Y210 at the same time");
+
+        const gvfg_status_t status = channel->setVideoFormat(format);
+        if (status == GVFG_OK)
+            requestedFormats[static_cast<size_t>(channelIndex)] = format;
+        return status;
+    }
+
     gvfg_status_t stopAll()
     {
         gvfg_status_t result = GVFG_OK;
@@ -910,6 +990,7 @@ struct gvfg_handle_t
     std::array<uint32_t, 2> eventMasks{GVFG_EVENT_MASK_ALL, GVFG_EVENT_MASK_ALL};
     int currentIndex = -1;
     std::array<bool, 2> zeroCopyRequested{false, false};
+    std::array<gvfg_pixel_format_t, 2> requestedFormats{GVFG_PIXFMT_YUY2, GVFG_PIXFMT_YUY2};
 };
 
 extern "C"
@@ -1028,11 +1109,37 @@ extern "C"
     {
         if (!handle)
             return GVFG_EINVAL;
+        return handle->setChannelVideoFormat(channel_index, format);
+    }
+
+    gvfg_status_t gvfg_set_channel_streams(gvfg_handle handle,
+                                            int channel_index,
+                                            uint32_t streams)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
         gvfg_channel_session_t *channel = handle->findChannel(channel_index);
-        return channel ? channel->setVideoFormat(format)
+        return channel ? channel->setStreams(streams)
                        : handle->rejectChannel(channel_index,
                                                GVFG_ESTATE,
-                                               "gvfg_set_channel_video_format rejected: channel is not open");
+                                               "gvfg_set_channel_streams rejected: channel is not open");
+    }
+
+    gvfg_status_t gvfg_get_channel_audio_format(gvfg_handle handle,
+                                                 int channel_index,
+                                                 gvfg_audio_format_t *out_format)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        if (!out_format)
+            return handle->rejectChannel(channel_index,
+                                         GVFG_EINVAL,
+                                         "gvfg_get_channel_audio_format rejected: out_format is null");
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->getAudioFormat(*out_format)
+                       : handle->rejectChannel(channel_index,
+                                               GVFG_ESTATE,
+                                               "gvfg_get_channel_audio_format rejected: channel is not open");
     }
 
     gvfg_status_t gvfg_read_channel_frame(gvfg_handle handle,
@@ -1068,6 +1175,31 @@ extern "C"
                        : handle->rejectChannel(channel_index,
                                                GVFG_ESTATE,
                                                "gvfg_release_channel_frame rejected: channel is not open");
+    }
+
+    gvfg_status_t gvfg_read_channel_audio(gvfg_handle handle,
+                                           int channel_index,
+                                           void *destination,
+                                           uint32_t destination_capacity,
+                                           uint32_t *out_bytes,
+                                           uint32_t timeout_ms)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        if (out_bytes)
+            *out_bytes = 0;
+        if (!destination || destination_capacity == 0 || !out_bytes)
+            return handle->rejectChannel(channel_index,
+                                         GVFG_EINVAL,
+                                         "gvfg_read_channel_audio rejected: output buffer is invalid");
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->readAudio(destination,
+                                            destination_capacity,
+                                            *out_bytes,
+                                            timeout_ms)
+                       : handle->rejectChannel(channel_index,
+                                               GVFG_ESTATE,
+                                               "gvfg_read_channel_audio rejected: channel is not open");
     }
 
     gvfg_status_t gvfg_poll_channel_event(gvfg_handle handle,

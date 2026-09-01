@@ -5,8 +5,8 @@ project(gvfg_qt_preview LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
+find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Multimedia)
 
 set(GVFG_QT_PREVIEW_SOURCES
   main.cpp
@@ -26,6 +26,7 @@ endif()
 
 target_link_libraries(gvfg_qt_preview PRIVATE
   Qt${QT_VERSION_MAJOR}::Widgets
+  Qt${QT_VERSION_MAJOR}::Multimedia
   gvfg
   gvfg_preview
 )

@@ -34,6 +34,10 @@ if not exist "%SOURCE_BIN%\gvfg.dll" (
     echo [package] ERROR: gvfg.dll not found.
     goto fail
 )
+if not exist "%SOURCE_BIN%\giga_ioctl.dll" (
+    echo [package] ERROR: giga_ioctl.dll not found.
+    goto fail
+)
 if not exist "%SOURCE_BIN%\gvfg_preview.dll" (
     echo [package] ERROR: gvfg_preview.dll not found.
     goto fail
@@ -50,9 +54,11 @@ mkdir "%STAGE_DIR%" || goto fail
 echo [package] Copy application files and debug symbols...
 copy /Y "%SOURCE_BIN%\gvfg_qt_preview.exe" "%STAGE_DIR%\" >nul || goto fail
 copy /Y "%SOURCE_BIN%\gvfg.dll" "%STAGE_DIR%\" >nul || goto fail
+copy /Y "%SOURCE_BIN%\giga_ioctl.dll" "%STAGE_DIR%\" >nul || goto fail
 copy /Y "%SOURCE_BIN%\gvfg_preview.dll" "%STAGE_DIR%\" >nul || goto fail
 if exist "%SOURCE_BIN%\gvfg_qt_preview.pdb" copy /Y "%SOURCE_BIN%\gvfg_qt_preview.pdb" "%STAGE_DIR%\" >nul || goto fail
 if exist "%SOURCE_BIN%\gvfg.pdb" copy /Y "%SOURCE_BIN%\gvfg.pdb" "%STAGE_DIR%\" >nul || goto fail
+if exist "%SOURCE_BIN%\giga_ioctl.pdb" copy /Y "%SOURCE_BIN%\giga_ioctl.pdb" "%STAGE_DIR%\" >nul || goto fail
 if exist "%SOURCE_BIN%\gvfg_preview.pdb" copy /Y "%SOURCE_BIN%\gvfg_preview.pdb" "%STAGE_DIR%\" >nul || goto fail
 
 echo [package] Deploy Qt Debug runtime...

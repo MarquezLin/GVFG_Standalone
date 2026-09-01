@@ -33,6 +33,10 @@ if not exist "%SOURCE_BIN%\gvfg.dll" (
     echo [package] ERROR: gvfg.dll not found.
     goto fail
 )
+if not exist "%SOURCE_BIN%\giga_ioctl.dll" (
+    echo [package] ERROR: giga_ioctl.dll not found.
+    goto fail
+)
 if not exist "%SOURCE_BIN%\gvfg_preview.dll" (
     echo [package] ERROR: gvfg_preview.dll not found.
     goto fail
@@ -49,12 +53,38 @@ mkdir "%STAGE_DIR%" || goto fail
 echo [package] Copy application files...
 copy /Y "%SOURCE_BIN%\gvfg_qt_preview.exe" "%STAGE_DIR%\" >nul || goto fail
 copy /Y "%SOURCE_BIN%\gvfg.dll" "%STAGE_DIR%\" >nul || goto fail
+copy /Y "%SOURCE_BIN%\giga_ioctl.dll" "%STAGE_DIR%\" >nul || goto fail
 copy /Y "%SOURCE_BIN%\gvfg_preview.dll" "%STAGE_DIR%\" >nul || goto fail
 
 echo [package] Deploy Qt runtime...
 if exist "%VSDEVCMD%" call "%VSDEVCMD%" -arch=x64 >nul || goto fail
 "%WINDEPLOYQT%" --release --compiler-runtime --force --dir "%STAGE_DIR%" "%STAGE_DIR%\gvfg_qt_preview.exe"
 if errorlevel 1 goto fail
+
+echo [package] Deploy MSVC runtime...
+if not defined VCToolsRedistDir (
+    echo [package] ERROR: VCToolsRedistDir was not set by VsDevCmd.bat.
+    goto fail
+)
+set "VC_RUNTIME_DIR=%VCToolsRedistDir%x64\Microsoft.VC143.CRT"
+if not exist "%VC_RUNTIME_DIR%\msvcp140.dll" (
+    echo [package] ERROR: MSVC runtime not found in "%VC_RUNTIME_DIR%".
+    goto fail
+)
+copy /Y "%VC_RUNTIME_DIR%\*.dll" "%STAGE_DIR%\" >nul || goto fail
+
+if not exist "%STAGE_DIR%\msvcp140.dll" (
+    echo [package] ERROR: msvcp140.dll was not deployed.
+    goto fail
+)
+if not exist "%STAGE_DIR%\vcruntime140.dll" (
+    echo [package] ERROR: vcruntime140.dll was not deployed.
+    goto fail
+)
+if not exist "%STAGE_DIR%\vcruntime140_1.dll" (
+    echo [package] ERROR: vcruntime140_1.dll was not deployed.
+    goto fail
+)
 
 echo [package] Create zip...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^

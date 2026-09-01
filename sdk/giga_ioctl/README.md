@@ -14,3 +14,21 @@ When adding a driver operation:
    for invalid caller output pointers.
 
 The header is an internal dependency of `gvfg`; it is not a customer SDK API.
+
+## Current audio ABI
+
+The implemented audio path is copy-out, not zero-copy:
+
+- Register `GIGA_IOCTL_EVENT_AUDIO_DMA` and
+  `GIGA_IOCTL_EVENT_EXTRA_AUDIO_FRAME` as wake-up notifications.
+- Start and stop capture with `giga_ioctl_start_video_audio()` and
+  `giga_ioctl_stop_video_audio()`.
+- Query the PCM layout and driver frame size with
+  `giga_ioctl_get_audio_info()`.
+- Read the next available driver frame with `giga_ioctl_get_audio_frame()` and
+  `frame_index == UINT32_MAX`. The returned byte count is the valid copy size.
+
+The extra-frame events mean that more frames are ready and the consumer should
+drain promptly. They do not transfer ownership of a frame. Audio zero-copy is a
+future driver capability and is intentionally not exposed here until its
+acquire/release ABI is complete.
