@@ -9,9 +9,12 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 class QCloseEvent;
 class PreviewWindow;
@@ -45,10 +48,15 @@ private:
         std::atomic<bool> frameAvailable{false};
         std::thread captureThread;
         std::thread audioThread;
+        std::thread audioPlaybackThread;
+        std::mutex audioQueueMutex;
+        std::condition_variable audioQueueReady;
+        std::deque<std::vector<uint8_t>> audioQueue;
         bool audioEnabled = false;
         gvfg_audio_format_t audioFormat{};
         std::atomic<uint64_t> audioFrames{0};
         std::atomic<uint64_t> audioBytes{0};
+        std::atomic<uint64_t> audioQueueDrops{0};
         std::atomic<double> getFrameAverageMs{0.0};
         std::atomic<double> getFrameMaximumMs{0.0};
         std::atomic<double> getFrameWindowMaximumMs{0.0};
@@ -94,6 +102,7 @@ private:
     void appendLog(const QString &message);
     void captureReadLoop(int channel);
     void audioReadLoop(int channel);
+    void audioPlaybackLoop(int channel);
     void joinCaptureThread(int channel);
     void joinAudioThread(int channel);
 

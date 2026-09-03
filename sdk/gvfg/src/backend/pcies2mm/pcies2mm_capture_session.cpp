@@ -1005,9 +1005,11 @@ namespace gvfg::internal
         format_change_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         plug_in_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         plug_out_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        monitor_stop_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         if (!dma_event_ || !extra_video_event_ ||
             (audio_enabled_ && (!audio_event_ || !extra_audio_event_)) ||
-            !format_change_event_ || !plug_in_event_ || !plug_out_event_)
+            !format_change_event_ || !plug_in_event_ || !plug_out_event_ ||
+            !monitor_stop_event_)
             return false;
 
         if (!register_event(channelIndex, GIGA_IOCTL_EVENT_VIDEO_DMA, dma_event_))
@@ -1084,6 +1086,11 @@ namespace gvfg::internal
             CloseHandle(plug_out_event_);
             plug_out_event_ = nullptr;
         }
+        if (monitor_stop_event_)
+        {
+            CloseHandle(monitor_stop_event_);
+            monitor_stop_event_ = nullptr;
+        }
     }
 
     bool PcieS2mmCaptureSession::start_event_monitoring()
@@ -1128,6 +1135,8 @@ namespace gvfg::internal
             SetEvent(extra_video_event_);
         if (extra_audio_event_)
             SetEvent(extra_audio_event_);
+        if (monitor_stop_event_)
+            SetEvent(monitor_stop_event_);
         if (capture_thread_.joinable())
             capture_thread_.join();
 
@@ -1162,15 +1171,19 @@ namespace gvfg::internal
     void PcieS2mmCaptureSession::capture_thread_proc()
     {
         const uint32_t channel = active_channel();
-        HANDLE waitHandles[] = {format_change_event_, plug_in_event_, plug_out_event_};
-        constexpr DWORD waitHandleCount = 3;
+        HANDLE waitHandles[] = {
+            monitor_stop_event_,
+            format_change_event_,
+            plug_in_event_,
+            plug_out_event_};
+        constexpr DWORD waitHandleCount = 4;
 
         while (monitoring_.load(std::memory_order_acquire))
         {
             const DWORD waitResult = WaitForMultipleObjects(waitHandleCount,
                                                             waitHandles,
                                                             FALSE,
-                                                            1000);
+                                                            INFINITE);
             if (!monitoring_.load(std::memory_order_acquire))
                 break;
             if (waitResult == WAIT_TIMEOUT)
@@ -1188,14 +1201,16 @@ namespace gvfg::internal
             switch (waitResult - WAIT_OBJECT_0)
             {
             case 0:
+                break;
+            case 1:
                 PCIES2MM_LOG("event: FORMAT_CHANGE");
                 handle_format_change_event(channel);
                 break;
-            case 1:
+            case 2:
                 PCIES2MM_LOG("event: PLUG_IN");
                 handle_plugin_event(channel);
                 break;
-            case 2:
+            case 3:
                 PCIES2MM_LOG("event: PLUG_OUT");
                 handle_unplug_event(channel);
                 break;

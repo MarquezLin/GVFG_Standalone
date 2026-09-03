@@ -22,11 +22,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
+#include <utility>
 #include <vector>
 
 namespace
 {
     constexpr bool kChannel1UiVisible = false;
+    constexpr size_t kMaxQueuedAudioFrames = 10;
 
     QString logFilePrefix()
     {
@@ -176,7 +179,7 @@ MainWindow::MainWindow(QWidget *parent)
     new LogHighlighter(ui_->logEdit->document());
     ui_->statusLabel->setWordWrap(true);
     runtimeStatusTimer_ = new QTimer(this);
-    runtimeStatusTimer_->setInterval(1000);
+    runtimeStatusTimer_->setInterval(200);
     openLogFile();
 
     connect(ui_->refreshButton, &QPushButton::clicked, this, [this]()
@@ -566,6 +569,11 @@ void MainWindow::startCapture(int channelIndex)
     channel.audioEnabled = audioEnabled;
     channel.audioFrames.store(0, std::memory_order_relaxed);
     channel.audioBytes.store(0, std::memory_order_relaxed);
+    channel.audioQueueDrops.store(0, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
+        channel.audioQueue.clear();
+    }
 #if GVFG_INTERNAL_DIAGNOSTICS
     channel.haveDebugBaseline = false;
     channel.lastDebugDmaErrors = 0;
@@ -575,8 +583,12 @@ void MainWindow::startCapture(int channelIndex)
     channel.captureThread = std::thread([this, channelIndex]()
                                         { captureReadLoop(channelIndex); });
     if (audioEnabled)
+    {
+        channel.audioPlaybackThread = std::thread([this, channelIndex]()
+                                                   { audioPlaybackLoop(channelIndex); });
         channel.audioThread = std::thread([this, channelIndex]()
                                           { audioReadLoop(channelIndex); });
+    }
     updateUiState();
     appendLog(audioEnabled
                   ? QStringLiteral("CH%1 Started video + audio | %2 Hz %3 ch %4-bit")
@@ -594,6 +606,7 @@ void MainWindow::stopCapture(int channelIndex)
     if (handle_ && channel.running.load(std::memory_order_acquire))
     {
         channel.stopRequested.store(true, std::memory_order_release);
+        channel.audioQueueReady.notify_all();
         joinCaptureThread(channelIndex);
         joinAudioThread(channelIndex);
         gvfg_stop_channel(handle_, channelIndex);
@@ -757,13 +770,14 @@ void MainWindow::updateSignalStatus(bool queryHardware)
                            .arg(zeroCopy ? QStringLiteral("Zero-copy") : QStringLiteral("Copy"));
         if (channel.audioEnabled)
         {
-            statusLines << QStringLiteral("CH%1 Audio | %2 Hz %3 ch %4-bit | frames=%5 bytes=%6")
+            statusLines << QStringLiteral("CH%1 Audio | %2 Hz %3 ch %4-bit | frames=%5 bytes=%6 queue_drops=%7")
                                .arg(channelIndex)
                                .arg(channel.audioFormat.sample_rate)
                                .arg(channel.audioFormat.channels)
                                .arg(channel.audioFormat.bits_per_sample)
                                .arg(static_cast<qulonglong>(channel.audioFrames.load(std::memory_order_relaxed)))
-                               .arg(static_cast<qulonglong>(channel.audioBytes.load(std::memory_order_relaxed)));
+                               .arg(static_cast<qulonglong>(channel.audioBytes.load(std::memory_order_relaxed)))
+                               .arg(static_cast<qulonglong>(channel.audioQueueDrops.load(std::memory_order_relaxed)));
         }
         statusLines << QStringLiteral("CH%1 Preview | %2 FPS | %3")
                            .arg(channelIndex)
@@ -1199,6 +1213,54 @@ void MainWindow::joinCaptureThread(int channel)
 void MainWindow::audioReadLoop(int channelIndex)
 {
     ChannelRuntime &channel = channels_[channelIndex];
+    while (!channel.stopRequested.load(std::memory_order_acquire))
+    {
+        gvfg_audio_frame_t frame{};
+        const gvfg_status_t status = gvfg_read_channel_audio_frame(
+            handle_, channelIndex, &frame, 200);
+        if (status == GVFG_ETIMEOUT)
+            continue;
+        if (status != GVFG_OK)
+        {
+            if (!channel.stopRequested.load(std::memory_order_acquire))
+            {
+                QMetaObject::invokeMethod(this, [this, channelIndex, status]()
+                                          { showError(QStringLiteral("gvfg_read_channel_audio_frame"), status, channelIndex); }, Qt::QueuedConnection);
+            }
+            break;
+        }
+
+        std::vector<uint8_t> pcm(frame.data_size);
+        std::memcpy(pcm.data(), frame.data, frame.data_size);
+        const gvfg_status_t releaseStatus =
+            gvfg_release_channel_audio_frame(handle_, channelIndex, &frame);
+        if (releaseStatus != GVFG_OK && !channel.stopRequested.load(std::memory_order_acquire))
+        {
+            QMetaObject::invokeMethod(this, [this, channelIndex, releaseStatus]()
+                                          { showError(QStringLiteral("gvfg_release_channel_audio_frame"), releaseStatus, channelIndex); }, Qt::QueuedConnection);
+            break;
+        }
+
+        if (releaseStatus == GVFG_OK)
+        {
+            {
+                std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
+                if (channel.audioQueue.size() >= kMaxQueuedAudioFrames)
+                {
+                    channel.audioQueue.pop_front();
+                    channel.audioQueueDrops.fetch_add(1, std::memory_order_relaxed);
+                }
+                channel.audioQueue.push_back(std::move(pcm));
+            }
+            channel.audioQueueReady.notify_one();
+        }
+    }
+    channel.audioQueueReady.notify_all();
+}
+
+void MainWindow::audioPlaybackLoop(int channelIndex)
+{
+    ChannelRuntime &channel = channels_[channelIndex];
     const gvfg_audio_format_t format = channel.audioFormat;
 
     QAudioFormat outputFormat;
@@ -1244,37 +1306,34 @@ void MainWindow::audioReadLoop(int channelIndex)
         return;
     }
 
-    while (!channel.stopRequested.load(std::memory_order_acquire))
+    for (;;)
     {
-        gvfg_audio_frame_t frame{};
-        const gvfg_status_t status = gvfg_read_channel_audio_frame(
-            handle_, channelIndex, &frame, 200);
-        if (status == GVFG_ETIMEOUT)
-            continue;
-        if (status != GVFG_OK)
+        std::vector<uint8_t> pcm;
         {
-            if (!channel.stopRequested.load(std::memory_order_acquire))
-            {
-                QMetaObject::invokeMethod(this, [this, channelIndex, status]()
-                                          { showError(QStringLiteral("gvfg_read_channel_audio_frame"), status, channelIndex); }, Qt::QueuedConnection);
-            }
-            break;
+            std::unique_lock<std::mutex> lock(channel.audioQueueMutex);
+            channel.audioQueueReady.wait(lock, [&channel]() {
+                return channel.stopRequested.load(std::memory_order_acquire) ||
+                       !channel.audioQueue.empty();
+            });
+            if (channel.stopRequested.load(std::memory_order_acquire))
+                break;
+            pcm = std::move(channel.audioQueue.front());
+            channel.audioQueue.pop_front();
         }
 
         qint64 written = 0;
-        while (written < static_cast<qint64>(frame.data_size) &&
+        while (written < static_cast<qint64>(pcm.size()) &&
                !channel.stopRequested.load(std::memory_order_acquire))
         {
             const qint64 result = audioOutput->write(
-                static_cast<const char *>(frame.data) + written,
-                static_cast<qint64>(frame.data_size) - written);
+                reinterpret_cast<const char *>(pcm.data()) + written,
+                static_cast<qint64>(pcm.size()) - written);
             if (result < 0)
             {
                 QMetaObject::invokeMethod(this, [this, channelIndex]()
                                           {
                                               appendLog(QStringLiteral("CH%1 Audio output write failed").arg(channelIndex));
                                               stopCapture(channelIndex); }, Qt::QueuedConnection);
-                gvfg_release_channel_audio_frame(handle_, channelIndex, &frame);
                 audioSink.stop();
                 return;
             }
@@ -1285,18 +1344,10 @@ void MainWindow::audioReadLoop(int channelIndex)
             }
             written += result;
         }
-        if (written == static_cast<qint64>(frame.data_size))
+        if (written == static_cast<qint64>(pcm.size()))
         {
             channel.audioFrames.fetch_add(1, std::memory_order_relaxed);
-            channel.audioBytes.fetch_add(frame.data_size, std::memory_order_relaxed);
-        }
-        const gvfg_status_t releaseStatus =
-            gvfg_release_channel_audio_frame(handle_, channelIndex, &frame);
-        if (releaseStatus != GVFG_OK && !channel.stopRequested.load(std::memory_order_acquire))
-        {
-            QMetaObject::invokeMethod(this, [this, channelIndex, releaseStatus]()
-                                      { showError(QStringLiteral("gvfg_release_channel_audio_frame"), releaseStatus, channelIndex); }, Qt::QueuedConnection);
-            break;
+            channel.audioBytes.fetch_add(pcm.size(), std::memory_order_relaxed);
         }
     }
     audioSink.stop();
@@ -1306,4 +1357,9 @@ void MainWindow::joinAudioThread(int channel)
 {
     if (channels_[channel].audioThread.joinable())
         channels_[channel].audioThread.join();
+    channels_[channel].audioQueueReady.notify_all();
+    if (channels_[channel].audioPlaybackThread.joinable())
+        channels_[channel].audioPlaybackThread.join();
+    std::lock_guard<std::mutex> lock(channels_[channel].audioQueueMutex);
+    channels_[channel].audioQueue.clear();
 }

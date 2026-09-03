@@ -113,6 +113,7 @@ namespace gvfg::internal
         HANDLE format_change_event_ = nullptr;
         HANDLE plug_in_event_ = nullptr;
         HANDLE plug_out_event_ = nullptr;
+        HANDLE monitor_stop_event_ = nullptr;
 
         pcies2mm_stream_desc_t stream_desc_{};
         uint32_t stream_bit_depth_ = 8;
