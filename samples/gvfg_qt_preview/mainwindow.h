@@ -51,12 +51,34 @@ private:
         std::thread audioPlaybackThread;
         std::mutex audioQueueMutex;
         std::condition_variable audioQueueReady;
-        std::deque<std::vector<uint8_t>> audioQueue;
+        struct AudioPacket { std::vector<uint8_t> pcm; uint64_t id; };
+        std::deque<AudioPacket> audioQueue;
         bool audioEnabled = false;
         gvfg_audio_format_t audioFormat{};
         std::atomic<uint64_t> audioFrames{0};
         std::atomic<uint64_t> audioBytes{0};
         std::atomic<uint64_t> audioQueueDrops{0};
+        // Audio accounting is protected by audioQueueMutex. Accepted means
+        // written to QAudioSink, not physically played by the device.
+        uint64_t audioReceivedBytes = 0;
+        uint64_t audioAcceptedBytes = 0;
+        uint64_t audioQueuedBytes = 0;
+        uint64_t audioDroppedBytes = 0;
+        uint64_t audioCancelledBytes = 0;
+        uint64_t audioFailedBytes = 0;
+        uint64_t audioIdGaps = 0;
+        uint64_t audioIdResets = 0;
+        uint64_t audioLastId = 0;
+        uint64_t audioLastDropId = 0;
+        qint64 audioLastDropTimeMs = 0;
+        double audioMaxWriteStallMs = 0;
+        double audioMaxReadGapMs = 0;
+        std::atomic<uint64_t> videoReceived{0}, videoSubmitted{0}, videoFailed{0};
+        std::atomic<uint64_t> videoIdGaps{0}, videoIdResets{0};
+        std::atomic<uint64_t> videoLastId{0};
+        gvfg_preview_delivery_stats_t previewBaseline{};
+        uint64_t lastLoggedVideoIssues = 0, lastLoggedAudioIssues = 0;
+        qint64 lastDeliveryLogMs = 0;
         std::atomic<double> getFrameAverageMs{0.0};
         std::atomic<double> getFrameMaximumMs{0.0};
         std::atomic<double> getFrameWindowMaximumMs{0.0};
@@ -105,6 +127,7 @@ private:
     void audioPlaybackLoop(int channel);
     void joinCaptureThread(int channel);
     void joinAudioThread(int channel);
+    void logDeliveryStatus(int channel, bool finalSnapshot = false);
 
     static constexpr qint64 kMaxLogFileBytes = 20ll * 1024ll * 1024ll;
 

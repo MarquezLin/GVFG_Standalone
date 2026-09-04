@@ -78,6 +78,34 @@ typedef struct
     uint64_t skipped_presents;
 } gvfg_preview_stats_t;
 
+/* Lifetime counters (until shutdown); configure/clear do not reset them.
+ * submitted = presented + replaced + busy + failed + cancelled + in_flight.
+ * Presented means DXGI accepted Present, not proof of physical scanout.
+ * Failed render API calls are counted by the caller, not in submitted.
+ */
+typedef struct
+{
+    uint64_t submitted;
+    uint64_t presented;
+    uint64_t replaced;
+    uint64_t busy;
+    uint64_t failed;
+    uint64_t cancelled;
+    uint64_t in_flight;
+    uint64_t last_presented_id;
+    uint64_t present_busy;
+    uint64_t slots_busy;
+    uint64_t last_busy_id;
+} gvfg_preview_delivery_stats_t;
+
+GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_get_delivery_stats(
+    gvfg_preview_handle handle, gvfg_preview_delivery_stats_t *out_stats);
+
+/* Call after stopping submissions. Wait at most timeout_ms for queued work.
+ * Returns ESTATE if work remains; does not discard or reset counters. */
+GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_wait_idle(
+    gvfg_preview_handle handle, uint32_t timeout_ms);
+
 GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_create(
     gvfg_preview_handle *out_handle);
 

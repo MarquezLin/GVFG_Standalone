@@ -163,7 +163,6 @@ MainWindow::MainWindow(QWidget *parent)
     : QWidget(parent), ui_(new Ui::MainWindow)
 {
     ui_->setupUi(this);
-
 #if GVFG_INTERNAL_DIAGNOSTICS
     setWindowTitle(QStringLiteral("GVFG Internal Diagnostic - SDK v%1")
                        .arg(QString::fromLatin1(gvfg_get_version())));
@@ -547,6 +546,11 @@ void MainWindow::startCapture(int channelIndex)
     appendLog(QStringLiteral("FPGA signal before stream start"));
 #endif
 
+    if (gvfg_preview_wait_idle(channel.previewHandle, 2000) != GVFG_PREVIEW_OK)
+    {
+        appendLog(QStringLiteral("CH%1 Preview still busy from previous run; retry Start after it completes.").arg(channelIndex));
+        return;
+    }
     st = gvfg_start_channel(handle_, channelIndex);
     if (st != GVFG_OK)
     {
@@ -570,9 +574,23 @@ void MainWindow::startCapture(int channelIndex)
     channel.audioFrames.store(0, std::memory_order_relaxed);
     channel.audioBytes.store(0, std::memory_order_relaxed);
     channel.audioQueueDrops.store(0, std::memory_order_relaxed);
+    channel.videoReceived = 0; channel.videoSubmitted = 0; channel.videoFailed = 0;
+    channel.videoIdGaps = 0; channel.videoIdResets = 0;
+    channel.videoLastId = 0;
+    channel.lastLoggedVideoIssues = channel.lastLoggedAudioIssues = 0;
+    channel.lastDeliveryLogMs = 0;
+    channel.previewBaseline = {};
+    gvfg_preview_get_delivery_stats(channel.previewHandle, &channel.previewBaseline);
     {
         std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
         channel.audioQueue.clear();
+        channel.audioReceivedBytes = channel.audioAcceptedBytes = channel.audioQueuedBytes = 0;
+        channel.audioDroppedBytes = channel.audioCancelledBytes = 0;
+        channel.audioFailedBytes = channel.audioIdGaps = channel.audioIdResets = 0;
+        channel.audioLastId = channel.audioLastDropId = 0;
+        channel.audioLastDropTimeMs = 0;
+        channel.audioMaxWriteStallMs = 0;
+        channel.audioMaxReadGapMs = 0;
     }
 #if GVFG_INTERNAL_DIAGNOSTICS
     channel.haveDebugBaseline = false;
@@ -609,6 +627,9 @@ void MainWindow::stopCapture(int channelIndex)
         channel.audioQueueReady.notify_all();
         joinCaptureThread(channelIndex);
         joinAudioThread(channelIndex);
+        if (gvfg_preview_wait_idle(channel.previewHandle, 2000) != GVFG_PREVIEW_OK)
+            appendLog(QStringLiteral("CH%1 Preview drain timed out; remaining in_flight is not counted as lost.").arg(channelIndex));
+        logDeliveryStatus(channelIndex, true);
         gvfg_stop_channel(handle_, channelIndex);
         channel.running.store(false, std::memory_order_release);
         channel.frameAvailable.store(false, std::memory_order_release);
@@ -770,18 +791,17 @@ void MainWindow::updateSignalStatus(bool queryHardware)
                            .arg(zeroCopy ? QStringLiteral("Zero-copy") : QStringLiteral("Copy"));
         if (channel.audioEnabled)
         {
-            statusLines << QStringLiteral("CH%1 Audio | %2 Hz %3 ch %4-bit | frames=%5 bytes=%6 queue_drops=%7")
+            statusLines << QStringLiteral("CH%1 Audio | %2 Hz %3 ch %4-bit | queue_drops=%5")
                                .arg(channelIndex)
                                .arg(channel.audioFormat.sample_rate)
                                .arg(channel.audioFormat.channels)
                                .arg(channel.audioFormat.bits_per_sample)
-                               .arg(static_cast<qulonglong>(channel.audioFrames.load(std::memory_order_relaxed)))
-                               .arg(static_cast<qulonglong>(channel.audioBytes.load(std::memory_order_relaxed)))
                                .arg(static_cast<qulonglong>(channel.audioQueueDrops.load(std::memory_order_relaxed)));
         }
         statusLines << QStringLiteral("CH%1 Preview | %2 FPS | %3")
                            .arg(channelIndex)
                            .arg(previewFps, previewFrame);
+        logDeliveryStatus(channelIndex);
         const uint64_t readSamples = channel.getFrameSamples.load(std::memory_order_relaxed);
         statusLines << (readSamples >= 300
                             ? QStringLiteral("CH%1 Read | avg=%2 max300=%3 max=%4 ms samples=%5")
@@ -1005,6 +1025,94 @@ void MainWindow::appendLog(const QString &message)
     }
 }
 
+void MainWindow::logDeliveryStatus(int channelIndex, bool finalSnapshot)
+{
+    auto &c = channels_[channelIndex];
+    if (!finalSnapshot && !c.running.load())
+        return;
+    const qint64 now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    // Keep normal operation quiet; aggregate repeated failures at most every 5 s.
+    if (!finalSnapshot && now - c.lastDeliveryLogMs < 5000)
+        return;
+
+    const auto count = [](uint64_t value) { return QString::number(static_cast<qulonglong>(value)); };
+    gvfg_preview_delivery_stats_t p{};
+    const bool previewOk = c.previewHandle &&
+        gvfg_preview_get_delivery_stats(c.previewHandle, &p) == GVFG_PREVIEW_OK;
+    const auto &b = c.previewBaseline;
+    const uint64_t replaced = previewOk ? p.replaced - b.replaced : 0;
+    const uint64_t busy = previewOk ? p.busy - b.busy : 0;
+    const uint64_t failed = (previewOk ? p.failed - b.failed : 0) + c.videoFailed.load();
+    const uint64_t videoDrops = replaced + busy + failed;
+    const uint64_t videoIssues = videoDrops + c.videoIdGaps.load() + c.videoIdResets.load();
+
+    uint64_t audioIssues, audioDrops, audioGaps, audioResets, audioFailed, lastDropId;
+    double droppedMs, writeStallMs, readGapMs;
+    bool audioAccounted;
+    qint64 lastDropTime;
+    {
+        std::lock_guard<std::mutex> lock(c.audioQueueMutex);
+        const double bytesPerSecond = static_cast<double>(c.audioFormat.sample_rate) *
+            c.audioFormat.channels * (c.audioFormat.bits_per_sample / 8);
+        droppedMs = bytesPerSecond > 0 ? c.audioDroppedBytes * 1000.0 / bytesPerSecond : 0;
+        audioDrops = c.audioQueueDrops.load();
+        audioGaps = c.audioIdGaps;
+        audioResets = c.audioIdResets;
+        audioFailed = c.audioFailedBytes;
+        audioIssues = audioDrops + audioGaps + audioResets + c.audioFailedBytes;
+        writeStallMs = c.audioMaxWriteStallMs;
+        readGapMs = c.audioMaxReadGapMs;
+        lastDropId = c.audioLastDropId;
+        lastDropTime = c.audioLastDropTimeMs;
+        audioAccounted = c.audioQueuedBytes == 0 && c.audioReceivedBytes ==
+            c.audioAcceptedBytes + c.audioDroppedBytes + c.audioCancelledBytes + c.audioFailedBytes;
+    }
+    if (finalSnapshot)
+    {
+        appendLog(QStringLiteral("CH%1 Summary | video_received=%2 preview_drops=%3 | audio_drops=%4 (%5 ms)")
+            .arg(channelIndex).arg(count(c.videoReceived.load())).arg(count(videoDrops))
+            .arg(count(audioDrops)).arg(droppedMs, 0, 'f', 1));
+        const bool videoAccounted = previewOk && c.videoReceived.load() ==
+            c.videoSubmitted.load() + c.videoFailed.load() &&
+            c.videoSubmitted.load() == p.submitted - b.submitted;
+        if (!videoAccounted || !audioAccounted)
+            appendLog(QStringLiteral("CH%1 ERROR delivery accounting mismatch | video=%2 audio=%3")
+                .arg(channelIndex).arg(videoAccounted ? QStringLiteral("OK") : QStringLiteral("MISMATCH"))
+                .arg(audioAccounted ? QStringLiteral("OK") : QStringLiteral("MISMATCH")));
+    }
+    // Also flush any changes since the last aggregate when stopping.
+    if (videoIssues != c.lastLoggedVideoIssues)
+    {
+        QString message = QStringLiteral("CH%1 Video issue +%2 | preview_drops=%3 (replaced=%4 busy=%5 failed=%6)")
+            .arg(channelIndex).arg(count(videoIssues - c.lastLoggedVideoIssues)).arg(count(videoDrops))
+            .arg(count(replaced)).arg(count(busy)).arg(count(failed));
+        if (busy)
+            message += QStringLiteral(" | busy_reason: present=%1 slots=%2 last_frame_id=%3")
+                .arg(count(p.present_busy - b.present_busy)).arg(count(p.slots_busy - b.slots_busy))
+                .arg(count(p.last_busy_id));
+        if (c.videoIdGaps.load() || c.videoIdResets.load())
+            message += QStringLiteral(" | id_gaps=%1 reset_or_duplicate=%2")
+                .arg(count(c.videoIdGaps.load())).arg(count(c.videoIdResets.load()));
+        appendLog(message);
+    }
+    if (audioIssues != c.lastLoggedAudioIssues)
+    {
+        QString message = QStringLiteral("CH%1 Audio issue | drops=%2 (%3 ms) max_write_stall=%4 ms max_read_gap=%5 ms last_drop=%6@%7")
+            .arg(channelIndex).arg(count(audioDrops)).arg(droppedMs, 0, 'f', 1)
+            .arg(writeStallMs, 0, 'f', 1).arg(readGapMs, 0, 'f', 1).arg(count(lastDropId))
+            .arg(lastDropTime ? QDateTime::fromMSecsSinceEpoch(lastDropTime).toString(QStringLiteral("HH:mm:ss.zzz")) : QStringLiteral("--"));
+        if (audioGaps || audioResets || audioFailed)
+            message += QStringLiteral(" | id_gaps=%1 reset_or_duplicate=%2 failed_bytes=%3")
+                .arg(count(audioGaps)).arg(count(audioResets)).arg(count(audioFailed));
+        appendLog(message);
+    }
+    if (finalSnapshot || videoIssues != c.lastLoggedVideoIssues || audioIssues != c.lastLoggedAudioIssues)
+        c.lastDeliveryLogMs = now;
+    c.lastLoggedVideoIssues = videoIssues;
+    c.lastLoggedAudioIssues = audioIssues;
+}
+
 void MainWindow::captureReadLoop(int channelIndex)
 {
     constexpr uint64_t kTimingWarmupFrames = 30;
@@ -1032,6 +1140,14 @@ void MainWindow::captureReadLoop(int channelIndex)
                 .count();
         if (st == GVFG_OK)
         {
+            const uint64_t previousId = channel.videoLastId.exchange(frame.frame_id);
+            if (channel.videoReceived.fetch_add(1) != 0)
+            {
+                if (frame.frame_id > previousId && frame.frame_id - previousId > 1)
+                    channel.videoIdGaps += frame.frame_id - previousId - 1;
+                else if (frame.frame_id <= previousId)
+                    ++channel.videoIdResets;
+            }
             const bool timingWarmupComplete = ++successfulFrameCount > kTimingWarmupFrames;
             if (timingWarmupComplete)
             {
@@ -1103,6 +1219,7 @@ void MainWindow::captureReadLoop(int channelIndex)
                     std::chrono::duration<double, std::milli>(previewEnd - previewStart).count();
                 if (previewStatus != GVFG_PREVIEW_OK)
                 {
+                    ++channel.videoFailed;
                     const uint64_t failures = ++channel.previewFailureCount;
                     if (failures == 1)
                     {
@@ -1115,6 +1232,7 @@ void MainWindow::captureReadLoop(int channelIndex)
                 }
                 else
                 {
+                    ++channel.videoSubmitted;
                     if (channel.previewFailureCount != 0)
                     {
                         const uint64_t failures = channel.previewFailureCount;
@@ -1152,6 +1270,8 @@ void MainWindow::captureReadLoop(int channelIndex)
                     }
                 }
             }
+            if (!channel.previewHandle)
+                ++channel.videoFailed;
             const gvfg_status_t releaseStatus = gvfg_release_channel_frame(handle_, channelIndex, &frame);
             if (releaseStatus != GVFG_OK)
             {
@@ -1213,6 +1333,7 @@ void MainWindow::joinCaptureThread(int channel)
 void MainWindow::audioReadLoop(int channelIndex)
 {
     ChannelRuntime &channel = channels_[channelIndex];
+    auto lastArrival = std::chrono::steady_clock::time_point{};
     while (!channel.stopRequested.load(std::memory_order_acquire))
     {
         gvfg_audio_frame_t frame{};
@@ -1230,10 +1351,33 @@ void MainWindow::audioReadLoop(int channelIndex)
             break;
         }
 
+        const uint64_t audioId = frame.frame_id;
+        const auto arrival = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
+            if (lastArrival != std::chrono::steady_clock::time_point{})
+                channel.audioMaxReadGapMs = (std::max)(channel.audioMaxReadGapMs,
+                    std::chrono::duration<double, std::milli>(arrival - lastArrival).count());
+            if (channel.audioReceivedBytes != 0)
+            {
+                if (audioId > channel.audioLastId && audioId - channel.audioLastId > 1)
+                    channel.audioIdGaps += audioId - channel.audioLastId - 1;
+                else if (audioId <= channel.audioLastId)
+                    ++channel.audioIdResets;
+            }
+            channel.audioLastId = audioId;
+            channel.audioReceivedBytes += frame.data_size;
+        }
+        lastArrival = arrival;
         std::vector<uint8_t> pcm(frame.data_size);
         std::memcpy(pcm.data(), frame.data, frame.data_size);
         const gvfg_status_t releaseStatus =
             gvfg_release_channel_audio_frame(handle_, channelIndex, &frame);
+        if (releaseStatus != GVFG_OK)
+        {
+            std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
+            channel.audioFailedBytes += pcm.size();
+        }
         if (releaseStatus != GVFG_OK && !channel.stopRequested.load(std::memory_order_acquire))
         {
             QMetaObject::invokeMethod(this, [this, channelIndex, releaseStatus]()
@@ -1245,12 +1389,23 @@ void MainWindow::audioReadLoop(int channelIndex)
         {
             {
                 std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
+                if (channel.stopRequested.load(std::memory_order_acquire))
+                {
+                    channel.audioCancelledBytes += pcm.size();
+                    break;
+                }
                 if (channel.audioQueue.size() >= kMaxQueuedAudioFrames)
                 {
+                    const auto &oldest = channel.audioQueue.front();
+                    channel.audioDroppedBytes += oldest.pcm.size();
+                    channel.audioQueuedBytes -= oldest.pcm.size();
+                    channel.audioLastDropId = oldest.id;
+                    channel.audioLastDropTimeMs = QDateTime::currentMSecsSinceEpoch();
                     channel.audioQueue.pop_front();
                     channel.audioQueueDrops.fetch_add(1, std::memory_order_relaxed);
                 }
-                channel.audioQueue.push_back(std::move(pcm));
+                channel.audioQueuedBytes += pcm.size();
+                channel.audioQueue.push_back({std::move(pcm), audioId});
             }
             channel.audioQueueReady.notify_one();
         }
@@ -1317,22 +1472,39 @@ void MainWindow::audioPlaybackLoop(int channelIndex)
             });
             if (channel.stopRequested.load(std::memory_order_acquire))
                 break;
-            pcm = std::move(channel.audioQueue.front());
+            pcm = std::move(channel.audioQueue.front().pcm);
             channel.audioQueue.pop_front();
+            channel.audioQueuedBytes -= pcm.size();
         }
 
         qint64 written = 0;
+        auto lastProgress = std::chrono::steady_clock::now();
         while (written < static_cast<qint64>(pcm.size()) &&
                !channel.stopRequested.load(std::memory_order_acquire))
         {
             const qint64 result = audioOutput->write(
                 reinterpret_cast<const char *>(pcm.data()) + written,
                 static_cast<qint64>(pcm.size()) - written);
-            if (result < 0)
+            const auto writeEnd = std::chrono::steady_clock::now();
+            const bool stalled = result == 0 && writeEnd - lastProgress >= std::chrono::seconds(2);
             {
-                QMetaObject::invokeMethod(this, [this, channelIndex]()
+                std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
+                channel.audioMaxWriteStallMs = (std::max)(channel.audioMaxWriteStallMs,
+                    std::chrono::duration<double, std::milli>(writeEnd - lastProgress).count());
+                if (result > 0)
+                    channel.audioAcceptedBytes += static_cast<uint64_t>(result);
+                else if (result < 0 || stalled)
+                    channel.audioFailedBytes += pcm.size() - static_cast<uint64_t>(written);
+            }
+            if (result > 0)
+                lastProgress = writeEnd;
+            if (result < 0 || stalled)
+            {
+                QMetaObject::invokeMethod(this, [this, channelIndex, stalled]()
                                           {
-                                              appendLog(QStringLiteral("CH%1 Audio output write failed").arg(channelIndex));
+                                              appendLog(stalled
+                                                  ? QStringLiteral("CH%1 Audio output made no write progress for 2 seconds; stopping. Check the playback device, then Start again.").arg(channelIndex)
+                                                  : QStringLiteral("CH%1 Audio output write failed").arg(channelIndex));
                                               stopCapture(channelIndex); }, Qt::QueuedConnection);
                 audioSink.stop();
                 return;
@@ -1349,6 +1521,11 @@ void MainWindow::audioPlaybackLoop(int channelIndex)
             channel.audioFrames.fetch_add(1, std::memory_order_relaxed);
             channel.audioBytes.fetch_add(pcm.size(), std::memory_order_relaxed);
         }
+        else
+        {
+            std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
+            channel.audioCancelledBytes += pcm.size() - static_cast<uint64_t>(written);
+        }
     }
     audioSink.stop();
 }
@@ -1361,5 +1538,7 @@ void MainWindow::joinAudioThread(int channel)
     if (channels_[channel].audioPlaybackThread.joinable())
         channels_[channel].audioPlaybackThread.join();
     std::lock_guard<std::mutex> lock(channels_[channel].audioQueueMutex);
+    channels_[channel].audioCancelledBytes += channels_[channel].audioQueuedBytes;
+    channels_[channel].audioQueuedBytes = 0;
     channels_[channel].audioQueue.clear();
 }

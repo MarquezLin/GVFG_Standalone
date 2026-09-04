@@ -29,7 +29,9 @@ public:
     bool configure(void *hwnd)
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> d3dLock(d3dMutex_);
         resetPresentStats();
+        startupPresentRetries_ = 8;
         hwnd_ = hwnd;
         configured_ = hwnd_ != nullptr;
         if (configured_ && ensureDevice())
@@ -42,8 +44,6 @@ public:
             desc.enable_preview = configured_ ? 1 : 0;
             desc.swapchain_10bit = gvfg::internal::GVFG_RENDER_PREVIEW_BITDEPTH_AUTO;
             pipeline_->configurePreview(desc);
-            if (!pipeline_->create_shaders_and_states())
-                return false;
         }
         else if (pipeline_)
         {
@@ -78,6 +78,10 @@ public:
         if (slotIndex == slots_.size())
         {
             ++skippedSubmits_;
+            ++delivery_.submitted;
+            ++delivery_.busy;
+            ++delivery_.slots_busy;
+            delivery_.last_busy_id = frame.frame_id;
             return true;
         }
 
@@ -86,6 +90,7 @@ public:
         {
             slot.commands.Reset();
             ++skippedSubmits_;
+            ++delivery_.replaced;
         }
         slot.state = SlotState::Uploading;
         ID3D11DeviceContext *deferred = slot.deferred.Get();
@@ -121,7 +126,13 @@ public:
         lock.lock();
         for (UploadSlot &other : slots_)
             if (&other != &slot && other.state == SlotState::Pending)
+            {
+                other.commands.Reset();
                 other.state = SlotState::Free;
+                ++skippedSubmits_;
+                ++delivery_.replaced;
+            }
+        ++delivery_.submitted;
         slot.commands = commands;
         slot.width = frame.width;
         slot.height = frame.height;
@@ -154,6 +165,7 @@ public:
             {
                 if (slot.state == SlotState::Pending)
                 {
+                    ++delivery_.cancelled;
                     slot.commands.Reset();
                     slot.state = SlotState::Free;
                 }
@@ -193,6 +205,7 @@ public:
         uploadPixelFormat_ = -1;
         clearActiveInfo();
         resetPresentStats();
+        delivery_ = {};
     }
 
     bool active() const
@@ -240,6 +253,25 @@ public:
                                 : 0.0;
     }
 
+    void getDeliveryStats(gvfg_preview_delivery_stats_t &stats) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stats = delivery_;
+        stats.in_flight = stats.submitted - stats.presented - stats.replaced -
+                          stats.busy - stats.failed - stats.cancelled;
+    }
+
+    bool waitIdle(uint32_t timeoutMs)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return workerCv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
+            for (const auto &slot : slots_)
+                if (slot.state != SlotState::Free)
+                    return false;
+            return true;
+        });
+    }
+
 private:
     enum class SlotState { Free, Uploading, Pending, Presenting };
 
@@ -247,6 +279,7 @@ private:
     {
         ComPtr<ID3D11DeviceContext> deferred;
         ComPtr<ID3D11Texture2D> texture;
+        ComPtr<ID3D11ShaderResourceView> view;
         ComPtr<ID3D11CommandList> commands;
         SlotState state = SlotState::Free;
         int width = 0;
@@ -462,7 +495,12 @@ private:
             desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
             if (FAILED(d3d_->device->CreateTexture2D(&desc, nullptr, &slot.texture)))
                 return false;
+            if (FAILED(d3d_->device->CreateShaderResourceView(slot.texture.Get(), nullptr, &slot.view)))
+                return false;
         }
+        for (const UploadSlot &slot : slots_)
+            if (slot.state == SlotState::Pending)
+                ++delivery_.cancelled;
         slots_ = std::move(replacement);
         uploadWidth_ = width;
         uploadHeight_ = height;
@@ -498,20 +536,25 @@ private:
                         slots_[i].commands.Reset();
                         slots_[i].state = SlotState::Free;
                         ++skippedSubmits_;
+                        ++delivery_.replaced;
                     }
                 slots_[selected].state = SlotState::Presenting;
                 work = slots_[selected];
             }
 
             bool ready = false;
+            unsigned startupRetries = 0;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 ready = configured_ && !workerStopping_ &&
                         ensurePipeline(work.width, work.height, work.bitDepth);
+                if (ready)
+                {
+                    startupRetries = startupPresentRetries_;
+                    startupPresentRetries_ = 0;
+                }
             }
             bool rendered = false;
-            bool copied = false;
-            bool blitted = false;
             gvfg::internal::gvfg_preview_present_result_t presentResult =
                 gvfg::internal::GVFG_PREVIEW_PRESENT_FAILED;
             if (ready)
@@ -525,20 +568,49 @@ private:
                             ? gvfg::internal::GVFG_RENDER_FMT_Y210
                             : gvfg::internal::GVFG_RENDER_FMT_YUY2;
                     rendered = pipeline_->render_texture_to_fp16(work.texture.Get(), renderFmt,
-                                                                  work.width, work.height);
-                    copied = rendered && pipeline_->copy_fp16_to_scene();
-                    blitted = copied && (pipeline_->preview_swapchain_10bit() ||
-                                         pipeline_->blit_fp16_to_rgba8(work.width, work.height));
-                    if (blitted)
+                                                                  work.width, work.height, work.view.Get());
+                    if (rendered)
+                    {
                         presentResult = pipeline_->present_preview(work.width, work.height);
+                        const auto retryDeadline = std::chrono::steady_clock::now() +
+                                                   std::chrono::milliseconds(16);
+                        // Retry the same uploaded image only on the first presentation
+                        // after attach. Keep normal playback non-blocking. These waits
+                        // run on the preview worker, never while holding an SDK frame.
+                        while (presentResult == gvfg::internal::GVFG_PREVIEW_PRESENT_SKIPPED &&
+                               startupRetries > 0 && std::chrono::steady_clock::now() < retryDeadline)
+                        {
+                            --startupRetries;
+                            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                            if (work.generation != clearGeneration_.load(std::memory_order_acquire))
+                            {
+                                presentResult = gvfg::internal::GVFG_PREVIEW_PRESENT_FAILED;
+                                break;
+                            }
+                            if (std::chrono::steady_clock::now() >= retryDeadline)
+                                break;
+                            presentResult = pipeline_->retry_preview_present();
+                        }
+                    }
                 }
             }
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                if (ready && rendered && copied && blitted &&
+                if (ready && rendered &&
                     presentResult != gvfg::internal::GVFG_PREVIEW_PRESENT_FAILED)
                 {
                     recordPresentResult(presentResult);
+                    if (presentResult == gvfg::internal::GVFG_PREVIEW_PRESENT_SKIPPED)
+                    {
+                        ++delivery_.busy;
+                        ++delivery_.present_busy;
+                        delivery_.last_busy_id = work.frameId;
+                    }
+                    else
+                    {
+                        ++delivery_.presented;
+                        delivery_.last_presented_id = work.frameId;
+                    }
                     width_.store(work.width, std::memory_order_relaxed);
                     height_.store(work.height, std::memory_order_relaxed);
                     bitDepth_.store(work.bitDepth, std::memory_order_relaxed);
@@ -546,15 +618,23 @@ private:
                     active_.store(true, std::memory_order_relaxed);
                 }
                 else
+                {
+                    if (work.generation != clearGeneration_.load(std::memory_order_acquire))
+                        ++delivery_.cancelled;
+                    else
+                        ++delivery_.failed;
                     clearActiveInfo();
+                }
                 slots_[selected].commands.Reset();
                 slots_[selected].state = SlotState::Free;
+                workerCv_.notify_all();
             }
         }
     }
 
     bool ensurePipeline(int width, int height, int sourceBitDepth)
     {
+        std::lock_guard<std::mutex> d3dLock(d3dMutex_);
         if (!pipeline_)
             pipeline_ = std::make_unique<gvfg::internal::D3DPreviewPipeline>();
 
@@ -567,7 +647,7 @@ private:
         desc.swapchain_10bit = gvfg::internal::GVFG_RENDER_PREVIEW_BITDEPTH_AUTO;
         pipeline_->configurePreview(desc);
         pipeline_->set_source_bit_depth(sourceBitDepth > 0 ? sourceBitDepth : 8);
-        const bool ready = pipeline_->ensure_rt_and_pipeline(width, height) &&
+        const bool ready = pipeline_->ensure_rt_and_pipeline(width, height, true) &&
                            pipeline_->ensure_preview_swapchain(width, height);
         return ready;
     }
@@ -588,6 +668,8 @@ private:
     uint64_t presentedFrames_ = 0;
     uint64_t skippedPresents_ = 0;
     uint64_t skippedSubmits_ = 0;
+    gvfg_preview_delivery_stats_t delivery_{};
+    unsigned startupPresentRetries_ = 0; // Protected by mutex_; rearmed on attach.
     std::array<UploadSlot, 3> slots_{};
     std::thread worker_;
     std::condition_variable workerCv_;
@@ -732,6 +814,22 @@ extern "C"
         handle->renderer.getStats(stats);
         *out_stats = stats;
         return GVFG_PREVIEW_OK;
+    }
+
+    gvfg_preview_status_t gvfg_preview_get_delivery_stats(
+        gvfg_preview_handle handle, gvfg_preview_delivery_stats_t *out_stats)
+    {
+        if (!handle || !out_stats)
+            return GVFG_PREVIEW_EINVAL;
+        handle->renderer.getDeliveryStats(*out_stats);
+        return GVFG_PREVIEW_OK;
+    }
+
+    gvfg_preview_status_t gvfg_preview_wait_idle(gvfg_preview_handle handle, uint32_t timeout_ms)
+    {
+        if (!handle)
+            return GVFG_PREVIEW_EINVAL;
+        return handle->renderer.waitIdle(timeout_ms) ? GVFG_PREVIEW_OK : GVFG_PREVIEW_ESTATE;
     }
 
     gvfg_preview_status_t gvfg_preview_shutdown(gvfg_preview_handle handle)

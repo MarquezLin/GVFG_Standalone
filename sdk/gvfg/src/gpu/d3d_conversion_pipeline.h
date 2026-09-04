@@ -49,10 +49,12 @@ public:
     void release_preview_swapchain();
 
     bool create_shaders_and_states();
-    bool ensure_rt_and_pipeline(int w, int h);
+    bool ensure_rt_and_pipeline(int w, int h, bool previewOnly = false);
     bool ensure_preview_swapchain(int w, int h);
     bool preview_swapchain_10bit() const { return preview_swapchain_10bit_; }
     gvfg_preview_present_result_t present_preview(int src_w, int src_h);
+    // Retry a busy Present while the caller retains exclusive context access.
+    gvfg_preview_present_result_t retry_preview_present();
     bool clear_preview_black();
     DXGI_FORMAT preview_backbuffer_format() const;
     DXGI_FORMAT scene_texture_format() const;
@@ -66,7 +68,7 @@ public:
     bool render_texture_to_fp16(ID3D11Texture2D *texture,
                                 gvfg_render_pixfmt_t fmt,
                                 int frame_w,
-                                int frame_h);
+                                int frame_h, ID3D11ShaderResourceView *cachedView = nullptr);
     bool copy_fp16_to_scene();
     bool readback_to_buffer(void *destination,
                             uint64_t destination_size,
@@ -133,6 +135,9 @@ public:
 
     int rt_w_ = 0;
     int rt_h_ = 0;
+    bool preview_only_ = false;
+    int params_w_ = 0;
+    int params_h_ = 0;
 
     Microsoft::WRL::ComPtr<IDXGISwapChain1> preview_swapchain_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> preview_backbuf_;

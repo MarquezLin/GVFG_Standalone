@@ -80,30 +80,6 @@ cbuffer ProcAmp : register(b0)
     float pad1;
 };
 
-static float3 apply_rgb_procamp(float3 rgb)
-{
-    // contrast + brightness
-    rgb = (rgb - 0.5) * ct + 0.5 + br;
-
-    // saturation
-    float l = dot(rgb, float3(0.299, 0.587, 0.114));
-    rgb = lerp(float3(l, l, l), rgb, sat);
-
-    return saturate(rgb);
-}
-
-static float2 rotate_uv(float2 uv01)
-{
-    // uv01 is 0..1, convert to signed around 0
-    float2 uv = uv01 - 0.5;
-    float u = uv.x;
-    float v = uv.y;
-    float u2 = u * hueCos - v * hueSin;
-    float v2 = u * hueSin + v * hueCos;
-    return float2(u2, v2) + 0.5;
-}
-
-
 float3 yuv_to_rgb709(float y, float u, float v)
 {
     y = y * 255.0;
@@ -118,46 +94,14 @@ float3 yuv_to_rgb709(float y, float u, float v)
     return float3(r,g,b)/255.0;
 }
 
-float loadY(int x, int y)
-{
-    x = clamp(x, 0, (int)width - 1);
-    y = clamp(y, 0, (int)height - 1);
-    uint4 p = texP.Load(int3(x >> 1, y, 0));
-    uint yy = ((x & 1) != 0) ? p.b : p.r;
-    return (float)yy / 255.0;
-}
-
-float2 loadUV01(int x, int y)
-{
-    x = clamp(x, 0, (int)width - 1);
-    y = clamp(y, 0, (int)height - 1);
-    uint4 p = texP.Load(int3(x >> 1, y, 0));
-    float u = (float)p.g / 255.0;
-    float v = (float)p.a / 255.0;
-    return float2(u, v);
-}
-
 float4 main(float4 pos:SV_Position, float2 uv:TEXCOORD0) : SV_Target
 {
     int2 ip = int2(pos.xy);
-    int px = ip.x;
-    int py = ip.y;
-
-    // Sharpness on luma
-    float yC = loadY(px, py);
-    float yL = loadY(px - 1, py);
-    float yR = loadY(px + 1, py);
-    float yU = loadY(px, py - 1);
-    float yD = loadY(px, py + 1);
-    float blur = (yC*4.0 + yL + yR + yU + yD) / 8.0;
-    float y = saturate(yC + sharpAmt * (yC - blur));
-
-    float2 uv01 = loadUV01(px, py);
-    uv01 = rotate_uv(uv01);
-
-    float3 rgb = yuv_to_rgb709(y, uv01.x, uv01.y);
-    rgb = apply_rgb_procamp(rgb);
-    return float4(rgb, 1.0);
+    uint4 p = texP.Load(int3(ip.x >> 1, ip.y, 0));
+    float y = (float)(((ip.x & 1) != 0) ? p.b : p.r) / 255.0;
+    float u = (float)p.g / 255.0;
+    float v = (float)p.a / 255.0;
+    return float4(saturate(yuv_to_rgb709(y, u, v)), 1.0);
 }
 )";
 
@@ -190,24 +134,6 @@ cbuffer ProcAmp : register(b0)
     float pad1;
 };
 
-static float3 apply_rgb_procamp(float3 rgb)
-{
-    rgb = (rgb - 0.5) * ct + 0.5 + br;
-    float l = dot(rgb, float3(0.299, 0.587, 0.114));
-    rgb = lerp(float3(l, l, l), rgb, sat);
-    return saturate(rgb);
-}
-
-static float2 rotate_uv(float2 uv01)
-{
-    float2 uv = uv01 - 0.5;
-    float u = uv.x;
-    float v = uv.y;
-    float u2 = u * hueCos - v * hueSin;
-    float v2 = u * hueSin + v * hueCos;
-    return float2(u2, v2) + 0.5;
-}
-
 float3 yuv_to_rgb709(float y, float u, float v)
 {
     y = y * 255.0;
@@ -222,58 +148,23 @@ float3 yuv_to_rgb709(float y, float u, float v)
     return float3(r,g,b)/255.0;
 }
 
-float loadY(int x, int y)
-{
-    x = clamp(x, 0, (int)width - 1);
-    y = clamp(y, 0, (int)height - 1);
-    uint4 p = texP.Load(int3(x >> 1, y, 0));
-    uint yy = (((x & 1) != 0) ? p.b : p.r) >> 6;
-    return (float)(yy & 1023) / 1023.0;
-}
-
-float2 loadUV01(int x, int y)
-{
-    x = clamp(x, 0, (int)width - 1);
-    y = clamp(y, 0, (int)height - 1);
-    uint4 p = texP.Load(int3(x >> 1, y, 0));
-    uint chroma1 = (p.g >> 6) & 1023;
-    uint chroma2 = (p.a >> 6) & 1023;
-    uint u10 = kSwapUV ? chroma2 : chroma1;
-    uint v10 = kSwapUV ? chroma1 : chroma2;
-    // An odd-width tail has no complete second chroma word; match the old
-    // upload behavior by reusing the available chroma component.
-    if (((width & 1) != 0) && x == (int)width - 1)
-    {
-        if (kSwapUV)
-            u10 = v10;
-        else
-            v10 = u10;
-    }
-    float u = (float)u10 / 1023.0;
-    float v = (float)v10 / 1023.0;
-    return float2(u, v);
-}
-
 float4 main(float4 pos:SV_Position, float2 uv:TEXCOORD0) : SV_Target
 {
     int2 ip = int2(pos.xy);
-    int px = ip.x;
-    int py = ip.y;
-
-    float yC = loadY(px, py);
-    float yL = loadY(px - 1, py);
-    float yR = loadY(px + 1, py);
-    float yU = loadY(px, py - 1);
-    float yD = loadY(px, py + 1);
-    float blur = (yC*4.0 + yL + yR + yU + yD) / 8.0;
-    float y = saturate(yC + sharpAmt * (yC - blur));
-
-    float2 uv01 = loadUV01(px, py);
-    uv01 = rotate_uv(uv01);
-
-    float3 rgb = yuv_to_rgb709(y, uv01.x, uv01.y);
-    rgb = apply_rgb_procamp(rgb);
-    return float4(rgb, 1.0);
+    uint4 p = texP.Load(int3(ip.x >> 1, ip.y, 0));
+    uint yy = ((((ip.x & 1) != 0) ? p.b : p.r) >> 6) & 1023;
+    uint c1 = (p.g >> 6) & 1023;
+    uint c2 = (p.a >> 6) & 1023;
+    uint u10 = kSwapUV ? c2 : c1;
+    uint v10 = kSwapUV ? c1 : c2;
+    // Preserve the existing odd-width tail chroma rule.
+    if (((width & 1) != 0) && ip.x == (int)width - 1)
+    {
+        if (kSwapUV) u10 = v10;
+        else v10 = u10;
+    }
+    return float4(saturate(yuv_to_rgb709((float)yy / 1023.0,
+        (float)u10 / 1023.0, (float)v10 / 1023.0)), 1.0);
 }
 )";
 
@@ -407,8 +298,8 @@ bool D3DPreviewPipeline::create_shaders_and_states()
 {
     if (vs_ && il_ &&
         ps_yuy2_ && ps_y210_ &&
-        ps_fp16_to_rgba8_ &&
-        ps_fp16_to_nv12_y_ && ps_fp16_to_nv12_uv_ &&
+        (preview_only_ || (ps_fp16_to_rgba8_ &&
+                          ps_fp16_to_nv12_y_ && ps_fp16_to_nv12_uv_)) &&
         ps_fp16_to_preview_ && ps_rgba8_to_preview_ &&
         vb_ && samp_ && cs_params_)
         return true;
@@ -441,23 +332,27 @@ bool D3DPreviewPipeline::create_shaders_and_states()
     if (FAILED(d3d_->CreatePixelShader(psbY210->GetBufferPointer(), psbY210->GetBufferSize(), nullptr, &ps_y210_)))
         return false;
 
-    if (FAILED(D3DCompile(g_ps_fp16_to_rgba8, strlen(g_ps_fp16_to_rgba8), nullptr, nullptr, nullptr,
-                          "main", "ps_5_0", 0, 0, &psb4, &err)))
-        return false;
-    if (FAILED(d3d_->CreatePixelShader(psb4->GetBufferPointer(), psb4->GetBufferSize(), nullptr, &ps_fp16_to_rgba8_)))
-        return false;
+    if (!preview_only_)
+    {
+        if (FAILED(D3DCompile(g_ps_fp16_to_rgba8, strlen(g_ps_fp16_to_rgba8), nullptr, nullptr, nullptr,
+                              "main", "ps_5_0", 0, 0, &psb4, &err)))
+            return false;
+        if (FAILED(d3d_->CreatePixelShader(psb4->GetBufferPointer(), psb4->GetBufferSize(), nullptr, &ps_fp16_to_rgba8_)))
+            return false;
 
-    ComPtr<ID3DBlob> psbNv12Y, psbNv12Uv;
-    if (FAILED(D3DCompile(g_ps_fp16_to_nv12_y, strlen(g_ps_fp16_to_nv12_y), nullptr, nullptr, nullptr,
-                          "main", "ps_5_0", 0, 0, &psbNv12Y, &err)) ||
-        FAILED(d3d_->CreatePixelShader(psbNv12Y->GetBufferPointer(), psbNv12Y->GetBufferSize(),
-                                       nullptr, &ps_fp16_to_nv12_y_)))
-        return false;
-    if (FAILED(D3DCompile(g_ps_fp16_to_nv12_uv, strlen(g_ps_fp16_to_nv12_uv), nullptr, nullptr, nullptr,
-                          "main", "ps_5_0", 0, 0, &psbNv12Uv, &err)) ||
-        FAILED(d3d_->CreatePixelShader(psbNv12Uv->GetBufferPointer(), psbNv12Uv->GetBufferSize(),
-                                       nullptr, &ps_fp16_to_nv12_uv_)))
-        return false;
+        ComPtr<ID3DBlob> psbNv12Y, psbNv12Uv;
+        if (FAILED(D3DCompile(g_ps_fp16_to_nv12_y, strlen(g_ps_fp16_to_nv12_y), nullptr, nullptr, nullptr,
+                              "main", "ps_5_0", 0, 0, &psbNv12Y, &err)) ||
+            FAILED(d3d_->CreatePixelShader(psbNv12Y->GetBufferPointer(), psbNv12Y->GetBufferSize(),
+                                           nullptr, &ps_fp16_to_nv12_y_)))
+            return false;
+        if (FAILED(D3DCompile(g_ps_fp16_to_nv12_uv, strlen(g_ps_fp16_to_nv12_uv), nullptr, nullptr, nullptr,
+                              "main", "ps_5_0", 0, 0, &psbNv12Uv, &err)) ||
+            FAILED(d3d_->CreatePixelShader(psbNv12Uv->GetBufferPointer(), psbNv12Uv->GetBufferSize(),
+                                           nullptr, &ps_fp16_to_nv12_uv_)))
+            return false;
+
+    }
 
     if (FAILED(D3DCompile(g_ps_fp16_to_preview, strlen(g_ps_fp16_to_preview), nullptr, nullptr, nullptr,
                           "main", "ps_5_0", 0, 0, &psb5, &err)))
@@ -510,16 +405,23 @@ bool D3DPreviewPipeline::create_shaders_and_states()
     return true;
 }
 
-bool D3DPreviewPipeline::ensure_rt_and_pipeline(int w, int h)
+bool D3DPreviewPipeline::ensure_rt_and_pipeline(int w, int h, bool previewOnly)
 {
+    if (!d3d_ || !ctx_ || w <= 0 || h <= 0)
+        return false;
     const bool hasAllTargets = rt_fp16_ && rtv_fp16_ && srv_fp16_ &&
                                rt_scene_fp16_ && rtv_scene_fp16_ && srv_scene_fp16_ &&
                                rt_rgba_ && rtv_rgba_ && srv_rgba_ &&
                                rt_rgb10_ && rtv_rgb10_ &&
                                rt_nv12_y_ && rtv_nv12_y_ && rt_nv12_uv_ && rtv_nv12_uv_;
 
-    if (hasAllTargets && rt_w_ == w && rt_h_ == h)
-        return true;
+    const bool hasPreviewTarget = rt_fp16_ && rtv_fp16_ && srv_fp16_;
+    if ((previewOnly ? hasPreviewTarget : hasAllTargets) &&
+        preview_only_ == previewOnly && rt_w_ == w && rt_h_ == h)
+        return create_shaders_and_states();
+
+    preview_only_ = previewOnly;
+    ctx_->OMSetRenderTargets(0, nullptr, nullptr);
 
     rt_fp16_.Reset();
     rtv_fp16_.Reset();
@@ -560,6 +462,17 @@ bool D3DPreviewPipeline::ensure_rt_and_pipeline(int w, int h)
         return false;
     if (FAILED(d3d_->CreateShaderResourceView(rt_fp16_.Get(), nullptr, &srv_fp16_)))
         return false;
+
+    // A preview needs only the full-precision conversion target. Export-only
+    // BGRA/RGB10/NV12 targets remain available to the public buffer converter.
+    if (previewOnly)
+    {
+        if (!create_shaders_and_states())
+            return false;
+        rt_w_ = w;
+        rt_h_ = h;
+        return true;
+    }
 
     // 2) Scene FP16 target used by the preview path
     td.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -990,13 +903,13 @@ bool D3DPreviewPipeline::render_uploaded_yuv_to_fp16(gvfg_render_pixfmt_t fmt, i
 bool D3DPreviewPipeline::render_texture_to_fp16(ID3D11Texture2D *texture,
                                                 gvfg_render_pixfmt_t fmt,
                                                 int frame_w,
-                                                int frame_h)
+                                                int frame_h, ID3D11ShaderResourceView *cachedView)
 {
     if (!ctx_ || !vs_ || !il_ || !vb_ || !rtv_fp16_ || !rt_fp16_ || frame_w <= 0 || frame_h <= 0)
         return false;
 
     ID3D11PixelShader *ps = nullptr;
-    ComPtr<ID3D11ShaderResourceView> srv0;
+    ComPtr<ID3D11ShaderResourceView> srv0 = cachedView;
     if (fmt == GVFG_RENDER_FMT_YUY2)
     {
         if (!texture)
@@ -1005,7 +918,7 @@ bool D3DPreviewPipeline::render_texture_to_fp16(ID3D11Texture2D *texture,
         sd.Format = DXGI_FORMAT_R8G8B8A8_UINT;
         sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
         sd.Texture2D.MipLevels = 1;
-        if (FAILED(d3d_->CreateShaderResourceView(texture, &sd, &srv0)) || !srv0)
+        if (!srv0 && FAILED(d3d_->CreateShaderResourceView(texture, &sd, &srv0)))
             return false;
         ps = ps_yuy2_.Get();
         if (!ps)
@@ -1019,7 +932,7 @@ bool D3DPreviewPipeline::render_texture_to_fp16(ID3D11Texture2D *texture,
         sd.Format = DXGI_FORMAT_R16G16B16A16_UINT;
         sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
         sd.Texture2D.MipLevels = 1;
-        if (FAILED(d3d_->CreateShaderResourceView(texture, &sd, &srv0)) || !srv0)
+        if (!srv0 && FAILED(d3d_->CreateShaderResourceView(texture, &sd, &srv0)))
             return false;
         ps = ps_y210_.Get();
         if (!ps)
@@ -1059,14 +972,18 @@ bool D3DPreviewPipeline::render_texture_to_fp16(ID3D11Texture2D *texture,
 
     if (cs_params_)
     {
-        D3D11_MAPPED_SUBRESOURCE mapped{};
-        if (SUCCEEDED(ctx_->Map(cs_params_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+        if (params_w_ != frame_w || params_h_ != frame_h)
         {
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            if (FAILED(ctx_->Map(cs_params_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+                return false;
             std::memcpy(mapped.pData, &cb, sizeof(cb));
             ctx_->Unmap(cs_params_.Get(), 0);
-            ID3D11Buffer *cb0[1] = {cs_params_.Get()};
-            ctx_->PSSetConstantBuffers(0, 1, cb0);
+            params_w_ = frame_w;
+            params_h_ = frame_h;
         }
+        ID3D11Buffer *cb0[1] = {cs_params_.Get()};
+        ctx_->PSSetConstantBuffers(0, 1, cb0);
     }
 
     UINT stride = sizeof(float) * 4, offset = 0;
@@ -1088,8 +1005,7 @@ bool D3DPreviewPipeline::render_texture_to_fp16(ID3D11Texture2D *texture,
 
     ID3D11RenderTargetView *rtv = rtv_fp16_.Get();
     ctx_->OMSetRenderTargets(1, &rtv, nullptr);
-    const float clear[4] = {0, 0, 0, 1};
-    ctx_->ClearRenderTargetView(rtv_fp16_.Get(), clear);
+    // The conversion draw covers every pixel of this target.
 
     ID3D11ShaderResourceView *srvs[1] = {srv0.Get()};
     ctx_->PSSetShaderResources(0, 1, srvs);
@@ -1114,6 +1030,8 @@ bool D3DPreviewPipeline::copy_fp16_to_scene()
 
 void D3DPreviewPipeline::release_preview_swapchain()
 {
+    if (ctx_)
+        ctx_->OMSetRenderTargets(0, nullptr, nullptr);
     preview_rtv_.Reset();
     preview_backbuf_.Reset();
     preview_swapchain_.Reset();
@@ -1225,6 +1143,7 @@ bool D3DPreviewPipeline::ensure_preview_swapchain(int w, int h)
     }
     else if (preview_w_ != clientW || preview_h_ != clientH)
     {
+        ctx_->OMSetRenderTargets(0, nullptr, nullptr);
         preview_rtv_.Reset();
         preview_backbuf_.Reset();
 
@@ -1360,7 +1279,14 @@ gvfg_preview_present_result_t D3DPreviewPipeline::present_preview(int src_w, int
     ctx_->VSSetShader(vs_.Get(), nullptr, 0);
 
     ID3D11ShaderResourceView *srv = nullptr;
-    if (preview_swapchain_10bit_)
+    if (preview_only_)
+    {
+        if (!srv_fp16_ || !ps_fp16_to_preview_)
+            return GVFG_PREVIEW_PRESENT_FAILED;
+        ctx_->PSSetShader(ps_fp16_to_preview_.Get(), nullptr, 0);
+        srv = srv_fp16_.Get();
+    }
+    else if (preview_swapchain_10bit_)
     {
         if (!srv_scene_fp16_ || !ps_fp16_to_preview_)
             return GVFG_PREVIEW_PRESENT_FAILED;
@@ -1401,6 +1327,13 @@ gvfg_preview_present_result_t D3DPreviewPipeline::present_preview(int src_w, int
     ID3D11ShaderResourceView *nullSrv[1] = {nullptr};
     ctx_->PSSetShaderResources(0, 1, nullSrv);
 
+    return retry_preview_present();
+}
+
+gvfg_preview_present_result_t D3DPreviewPipeline::retry_preview_present()
+{
+    if (!preview_swapchain_)
+        return GVFG_PREVIEW_PRESENT_FAILED;
     HRESULT hr = preview_swapchain_->Present(0, DXGI_PRESENT_DO_NOT_WAIT);
     if (hr == DXGI_ERROR_WAS_STILL_DRAWING)
     {
