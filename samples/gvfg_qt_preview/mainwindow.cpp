@@ -26,6 +26,11 @@
 #include <utility>
 #include <vector>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 namespace
 {
     constexpr bool kChannel1UiVisible = false;
@@ -791,12 +796,11 @@ void MainWindow::updateSignalStatus(bool queryHardware)
                            .arg(zeroCopy ? QStringLiteral("Zero-copy") : QStringLiteral("Copy"));
         if (channel.audioEnabled)
         {
-            statusLines << QStringLiteral("CH%1 Audio | %2 Hz %3 ch %4-bit | queue_drops=%5")
+            statusLines << QStringLiteral("CH%1 Audio | %2 Hz %3 ch %4-bit")
                                .arg(channelIndex)
                                .arg(channel.audioFormat.sample_rate)
                                .arg(channel.audioFormat.channels)
-                               .arg(channel.audioFormat.bits_per_sample)
-                               .arg(static_cast<qulonglong>(channel.audioQueueDrops.load(std::memory_order_relaxed)));
+                               .arg(channel.audioFormat.bits_per_sample);
         }
         statusLines << QStringLiteral("CH%1 Preview | %2 FPS | %3")
                            .arg(channelIndex)
@@ -1041,38 +1045,22 @@ void MainWindow::logDeliveryStatus(int channelIndex, bool finalSnapshot)
     const bool previewOk = c.previewHandle &&
         gvfg_preview_get_delivery_stats(c.previewHandle, &p) == GVFG_PREVIEW_OK;
     const auto &b = c.previewBaseline;
-    const uint64_t replaced = previewOk ? p.replaced - b.replaced : 0;
-    const uint64_t busy = previewOk ? p.busy - b.busy : 0;
     const uint64_t failed = (previewOk ? p.failed - b.failed : 0) + c.videoFailed.load();
-    const uint64_t videoDrops = replaced + busy + failed;
-    const uint64_t videoIssues = videoDrops + c.videoIdGaps.load() + c.videoIdResets.load();
+    const uint64_t videoIssues = failed + c.videoIdGaps.load() + c.videoIdResets.load();
 
-    uint64_t audioIssues, audioDrops, audioGaps, audioResets, audioFailed, lastDropId;
-    double droppedMs, writeStallMs, readGapMs;
+    uint64_t audioIssues, audioGaps, audioResets, audioFailed;
     bool audioAccounted;
-    qint64 lastDropTime;
     {
         std::lock_guard<std::mutex> lock(c.audioQueueMutex);
-        const double bytesPerSecond = static_cast<double>(c.audioFormat.sample_rate) *
-            c.audioFormat.channels * (c.audioFormat.bits_per_sample / 8);
-        droppedMs = bytesPerSecond > 0 ? c.audioDroppedBytes * 1000.0 / bytesPerSecond : 0;
-        audioDrops = c.audioQueueDrops.load();
         audioGaps = c.audioIdGaps;
         audioResets = c.audioIdResets;
         audioFailed = c.audioFailedBytes;
-        audioIssues = audioDrops + audioGaps + audioResets + c.audioFailedBytes;
-        writeStallMs = c.audioMaxWriteStallMs;
-        readGapMs = c.audioMaxReadGapMs;
-        lastDropId = c.audioLastDropId;
-        lastDropTime = c.audioLastDropTimeMs;
+        audioIssues = audioGaps + audioResets + audioFailed;
         audioAccounted = c.audioQueuedBytes == 0 && c.audioReceivedBytes ==
             c.audioAcceptedBytes + c.audioDroppedBytes + c.audioCancelledBytes + c.audioFailedBytes;
     }
     if (finalSnapshot)
     {
-        appendLog(QStringLiteral("CH%1 Summary | video_received=%2 preview_drops=%3 | audio_drops=%4 (%5 ms)")
-            .arg(channelIndex).arg(count(c.videoReceived.load())).arg(count(videoDrops))
-            .arg(count(audioDrops)).arg(droppedMs, 0, 'f', 1));
         const bool videoAccounted = previewOk && c.videoReceived.load() ==
             c.videoSubmitted.load() + c.videoFailed.load() &&
             c.videoSubmitted.load() == p.submitted - b.submitted;
@@ -1084,27 +1072,15 @@ void MainWindow::logDeliveryStatus(int channelIndex, bool finalSnapshot)
     // Also flush any changes since the last aggregate when stopping.
     if (videoIssues != c.lastLoggedVideoIssues)
     {
-        QString message = QStringLiteral("CH%1 Video issue +%2 | preview_drops=%3 (replaced=%4 busy=%5 failed=%6)")
-            .arg(channelIndex).arg(count(videoIssues - c.lastLoggedVideoIssues)).arg(count(videoDrops))
-            .arg(count(replaced)).arg(count(busy)).arg(count(failed));
-        if (busy)
-            message += QStringLiteral(" | busy_reason: present=%1 slots=%2 last_frame_id=%3")
-                .arg(count(p.present_busy - b.present_busy)).arg(count(p.slots_busy - b.slots_busy))
-                .arg(count(p.last_busy_id));
-        if (c.videoIdGaps.load() || c.videoIdResets.load())
-            message += QStringLiteral(" | id_gaps=%1 reset_or_duplicate=%2")
-                .arg(count(c.videoIdGaps.load())).arg(count(c.videoIdResets.load()));
+        QString message = QStringLiteral("CH%1 ERROR preview delivery | failed=%2 id_gaps=%3 reset_or_duplicate=%4")
+            .arg(channelIndex).arg(count(failed)).arg(count(c.videoIdGaps.load()))
+            .arg(count(c.videoIdResets.load()));
         appendLog(message);
     }
     if (audioIssues != c.lastLoggedAudioIssues)
     {
-        QString message = QStringLiteral("CH%1 Audio issue | drops=%2 (%3 ms) max_write_stall=%4 ms max_read_gap=%5 ms last_drop=%6@%7")
-            .arg(channelIndex).arg(count(audioDrops)).arg(droppedMs, 0, 'f', 1)
-            .arg(writeStallMs, 0, 'f', 1).arg(readGapMs, 0, 'f', 1).arg(count(lastDropId))
-            .arg(lastDropTime ? QDateTime::fromMSecsSinceEpoch(lastDropTime).toString(QStringLiteral("HH:mm:ss.zzz")) : QStringLiteral("--"));
-        if (audioGaps || audioResets || audioFailed)
-            message += QStringLiteral(" | id_gaps=%1 reset_or_duplicate=%2 failed_bytes=%3")
-                .arg(count(audioGaps)).arg(count(audioResets)).arg(count(audioFailed));
+        QString message = QStringLiteral("CH%1 ERROR audio delivery | id_gaps=%2 reset_or_duplicate=%3 failed_bytes=%4")
+            .arg(channelIndex).arg(count(audioGaps)).arg(count(audioResets)).arg(count(audioFailed));
         appendLog(message);
     }
     if (finalSnapshot || videoIssues != c.lastLoggedVideoIssues || audioIssues != c.lastLoggedAudioIssues)
@@ -1327,7 +1303,17 @@ void MainWindow::captureReadLoop(int channelIndex)
 void MainWindow::joinCaptureThread(int channel)
 {
     if (channels_[channel].captureThread.joinable())
+    {
+        // The capture worker can wait behind preview resource updates. Keep
+        // DXGI's synchronous HWND messages flowing while joining it.
+        while (WaitForSingleObject(channels_[channel].captureThread.native_handle(), 0) == WAIT_TIMEOUT)
+        {
+            MsgWaitForMultipleObjectsEx(0, nullptr, 1, QS_SENDMESSAGE, MWMO_INPUTAVAILABLE);
+            MSG message{};
+            PeekMessageW(&message, nullptr, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+        }
         channels_[channel].captureThread.join();
+    }
 }
 
 void MainWindow::audioReadLoop(int channelIndex)

@@ -53,8 +53,6 @@ public:
     bool ensure_preview_swapchain(int w, int h);
     bool preview_swapchain_10bit() const { return preview_swapchain_10bit_; }
     gvfg_preview_present_result_t present_preview(int src_w, int src_h);
-    // Retry a busy Present while the caller retains exclusive context access.
-    gvfg_preview_present_result_t retry_preview_present();
     bool clear_preview_black();
     DXGI_FORMAT preview_backbuffer_format() const;
     DXGI_FORMAT scene_texture_format() const;

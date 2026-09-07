@@ -20,6 +20,30 @@
 
 using Microsoft::WRL::ComPtr;
 
+namespace
+{
+    constexpr size_t kMaxPendingFrames = 3;
+    constexpr size_t kUploadSlotCount = kMaxPendingFrames + 1;
+    constexpr auto kMaxQueueAge = std::chrono::milliseconds(50);
+    // Blocking DXGI calls may send synchronous messages to the HWND owner.
+    // Service only sent messages while waiting; do not dispatch queued input,
+    // timers or application callbacks into Start/Stop recursively.
+    void serviceWindowMessages()
+    {
+        MsgWaitForMultipleObjectsEx(0, nullptr, 1, QS_SENDMESSAGE, MWMO_INPUTAVAILABLE);
+        MSG message{};
+        PeekMessageW(&message, nullptr, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+    }
+
+    std::unique_lock<std::mutex> lockWithWindowMessages(std::mutex &mutex)
+    {
+        std::unique_lock<std::mutex> lock(mutex, std::defer_lock);
+        while (!lock.try_lock())
+            serviceWindowMessages();
+        return lock;
+    }
+}
+
 class PreviewRenderer
 {
 public:
@@ -28,10 +52,9 @@ public:
 
     bool configure(void *hwnd)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::lock_guard<std::mutex> d3dLock(d3dMutex_);
+        auto lock = lockWithWindowMessages(mutex_);
+        auto d3dLock = lockWithWindowMessages(d3dMutex_);
         resetPresentStats();
-        startupPresentRetries_ = 8;
         hwnd_ = hwnd;
         configured_ = hwnd_ != nullptr;
         if (configured_ && ensureDevice())
@@ -58,7 +81,7 @@ public:
 
     bool render(const gvfg_preview_frame_t &frame)
     {
-        std::unique_lock<std::mutex> lock(mutex_);
+        auto lock = lockWithWindowMessages(mutex_);
         if (!configured_ || !hwnd_ || !frame.data || frame.width <= 0 || frame.height <= 0)
             return false;
 
@@ -69,12 +92,15 @@ public:
             !ensureUploadSlotsLocked(frame.width, frame.height, frame.pixel_format))
             return false;
 
+        discardExpiredLocked();
+        size_t pending = 0;
+        for (const auto &slot : slots_)
+            if (slot.state == SlotState::Pending || slot.state == SlotState::Uploading)
+                ++pending;
         size_t slotIndex = slots_.size();
         for (size_t i = 0; i < slots_.size(); ++i)
-            if (slots_[i].state == SlotState::Free) { slotIndex = i; break; }
-        if (slotIndex == slots_.size())
-            for (size_t i = 0; i < slots_.size(); ++i)
-                if (slots_[i].state == SlotState::Pending) { slotIndex = i; break; }
+            if (pending < kMaxPendingFrames && slots_[i].state == SlotState::Free)
+            { slotIndex = i; break; }
         if (slotIndex == slots_.size())
         {
             ++skippedSubmits_;
@@ -86,13 +112,8 @@ public:
         }
 
         UploadSlot &slot = slots_[slotIndex];
-        if (slot.state == SlotState::Pending)
-        {
-            slot.commands.Reset();
-            ++skippedSubmits_;
-            ++delivery_.replaced;
-        }
         slot.state = SlotState::Uploading;
+        slot.generation = clearGeneration_.load(std::memory_order_acquire);
         ID3D11DeviceContext *deferred = slot.deferred.Get();
         ID3D11Texture2D *texture = slot.texture.Get();
         lock.unlock();
@@ -124,14 +145,6 @@ public:
         }
 
         lock.lock();
-        for (UploadSlot &other : slots_)
-            if (&other != &slot && other.state == SlotState::Pending)
-            {
-                other.commands.Reset();
-                other.state = SlotState::Free;
-                ++skippedSubmits_;
-                ++delivery_.replaced;
-            }
         ++delivery_.submitted;
         slot.commands = commands;
         slot.width = frame.width;
@@ -139,7 +152,8 @@ public:
         slot.bitDepth = sourceBitDepth;
         slot.pixelFormat = frame.pixel_format;
         slot.frameId = frame.frame_id;
-        slot.generation = clearGeneration_.load(std::memory_order_acquire);
+        slot.queuedAt = std::chrono::steady_clock::now();
+        slot.queueOrder = ++queueOrder_;
         slot.state = SlotState::Pending;
         workerCv_.notify_one();
         return true;
@@ -147,7 +161,7 @@ public:
 
     bool prepare(int width, int height, int sourceBitDepth)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        auto lock = lockWithWindowMessages(mutex_);
         if (!configured_ || !hwnd_ || width <= 0 || height <= 0)
             return false;
         return ensureDevice() &&
@@ -158,7 +172,7 @@ public:
     {
         clearGeneration_.fetch_add(1, std::memory_order_acq_rel);
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            auto lock = lockWithWindowMessages(mutex_);
             if (!configured_ || !pipeline_)
                 return false;
             for (UploadSlot &slot : slots_)
@@ -172,7 +186,7 @@ public:
             }
         }
 
-        std::lock_guard<std::mutex> d3dLock(d3dMutex_);
+        auto d3dLock = lockWithWindowMessages(d3dMutex_);
         const bool cleared = pipeline_->clear_preview_black();
         if (cleared)
             clearActiveInfo();
@@ -182,14 +196,18 @@ public:
     void shutdown()
     {
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            auto lock = lockWithWindowMessages(mutex_);
             workerStopping_ = true;
             workerCv_.notify_all();
         }
         if (worker_.joinable())
+        {
+            while (WaitForSingleObject(worker_.native_handle(), 0) == WAIT_TIMEOUT)
+                serviceWindowMessages();
             worker_.join();
+        }
 
-        std::lock_guard<std::mutex> lock(mutex_);
+        auto lock = lockWithWindowMessages(mutex_);
         if (pipeline_)
             pipeline_->release_preview_swapchain();
         for (UploadSlot &slot : slots_)
@@ -245,7 +263,7 @@ public:
 
     void getStats(gvfg_preview_stats_t &stats) const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        auto lock = lockWithWindowMessages(mutex_);
         stats.presented_frames = presentedFrames_;
         stats.skipped_presents = skippedPresents_ + skippedSubmits_;
         stats.present_fps = active_.load(std::memory_order_relaxed)
@@ -255,7 +273,7 @@ public:
 
     void getDeliveryStats(gvfg_preview_delivery_stats_t &stats) const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        auto lock = lockWithWindowMessages(mutex_);
         stats = delivery_;
         stats.in_flight = stats.submitted - stats.presented - stats.replaced -
                           stats.busy - stats.failed - stats.cancelled;
@@ -263,13 +281,25 @@ public:
 
     bool waitIdle(uint32_t timeoutMs)
     {
-        std::unique_lock<std::mutex> lock(mutex_);
-        return workerCv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
-            for (const auto &slot : slots_)
-                if (slot.state != SlotState::Free)
-                    return false;
-            return true;
-        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        for (;;)
+        {
+            std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+            bool idle = lock.owns_lock();
+            if (idle)
+            {
+                for (const auto &slot : slots_)
+                    if (slot.state != SlotState::Free)
+                        idle = false;
+            }
+            if (idle)
+                return true;
+            if (lock.owns_lock())
+                lock.unlock();
+            if (std::chrono::steady_clock::now() >= deadline)
+                return false;
+            serviceWindowMessages();
+        }
     }
 
 private:
@@ -288,7 +318,22 @@ private:
         int pixelFormat = -1;
         uint64_t frameId = 0;
         uint64_t generation = 0;
+        std::chrono::steady_clock::time_point queuedAt{};
+        uint64_t queueOrder = 0;
     };
+
+    void discardExpiredLocked()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        for (auto &slot : slots_)
+            if (slot.state == SlotState::Pending && now - slot.queuedAt > kMaxQueueAge)
+            {
+                slot.commands.Reset();
+                slot.state = SlotState::Free;
+                ++skippedSubmits_;
+                ++delivery_.replaced; // Retired queued frame: expired, not latest-frame replacement.
+            }
+    }
 
     struct D3DState
     {
@@ -478,7 +523,7 @@ private:
                                        ? DXGI_FORMAT_R16G16B16A16_UINT
                                        : DXGI_FORMAT_R8G8B8A8_UINT;
         const UINT textureWidth = static_cast<UINT>((width + 1) / 2);
-        std::array<UploadSlot, 3> replacement{};
+        std::array<UploadSlot, kUploadSlotCount> replacement{};
         for (UploadSlot &slot : replacement)
         {
             if (FAILED(d3d_->device->CreateDeferredContext(0, &slot.deferred)))
@@ -515,7 +560,7 @@ private:
             size_t selected = slots_.size();
             UploadSlot work;
             {
-                std::unique_lock<std::mutex> lock(mutex_);
+                auto lock = lockWithWindowMessages(mutex_);
                 workerCv_.wait(lock, [this] {
                     if (workerStopping_)
                         return true;
@@ -526,77 +571,55 @@ private:
                 });
                 if (workerStopping_)
                     break;
+                discardExpiredLocked();
                 for (size_t i = 0; i < slots_.size(); ++i)
                     if (slots_[i].state == SlotState::Pending &&
-                        (selected == slots_.size() || slots_[i].frameId > slots_[selected].frameId))
+                        (selected == slots_.size() || slots_[i].queueOrder < slots_[selected].queueOrder))
                         selected = i;
-                for (size_t i = 0; i < slots_.size(); ++i)
-                    if (i != selected && slots_[i].state == SlotState::Pending)
-                    {
-                        slots_[i].commands.Reset();
-                        slots_[i].state = SlotState::Free;
-                        ++skippedSubmits_;
-                        ++delivery_.replaced;
-                    }
+                if (selected == slots_.size())
+                    continue;
                 slots_[selected].state = SlotState::Presenting;
                 work = slots_[selected];
             }
 
             bool ready = false;
-            unsigned startupRetries = 0;
             {
-                std::lock_guard<std::mutex> lock(mutex_);
+                auto lock = lockWithWindowMessages(mutex_);
                 ready = configured_ && !workerStopping_ &&
                         ensurePipeline(work.width, work.height, work.bitDepth);
-                if (ready)
-                {
-                    startupRetries = startupPresentRetries_;
-                    startupPresentRetries_ = 0;
-                }
             }
             bool rendered = false;
+            bool expired = false;
             gvfg::internal::gvfg_preview_present_result_t presentResult =
                 gvfg::internal::GVFG_PREVIEW_PRESENT_FAILED;
             if (ready)
             {
-                std::lock_guard<std::mutex> d3dLock(d3dMutex_);
+                auto d3dLock = lockWithWindowMessages(d3dMutex_);
                 if (work.generation == clearGeneration_.load(std::memory_order_acquire))
                 {
-                    d3d_->context->ExecuteCommandList(work.commands.Get(), FALSE);
-                    const gvfg::internal::gvfg_render_pixfmt_t renderFmt =
-                        work.pixelFormat == GVFG_PREVIEW_PIXFMT_Y210
-                            ? gvfg::internal::GVFG_RENDER_FMT_Y210
-                            : gvfg::internal::GVFG_RENDER_FMT_YUY2;
-                    rendered = pipeline_->render_texture_to_fp16(work.texture.Get(), renderFmt,
-                                                                  work.width, work.height, work.view.Get());
-                    if (rendered)
+                    expired = std::chrono::steady_clock::now() - work.queuedAt > kMaxQueueAge;
+                    if (!expired)
                     {
-                        presentResult = pipeline_->present_preview(work.width, work.height);
-                        const auto retryDeadline = std::chrono::steady_clock::now() +
-                                                   std::chrono::milliseconds(16);
-                        // Retry the same uploaded image only on the first presentation
-                        // after attach. Keep normal playback non-blocking. These waits
-                        // run on the preview worker, never while holding an SDK frame.
-                        while (presentResult == gvfg::internal::GVFG_PREVIEW_PRESENT_SKIPPED &&
-                               startupRetries > 0 && std::chrono::steady_clock::now() < retryDeadline)
-                        {
-                            --startupRetries;
-                            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                            if (work.generation != clearGeneration_.load(std::memory_order_acquire))
-                            {
-                                presentResult = gvfg::internal::GVFG_PREVIEW_PRESENT_FAILED;
-                                break;
-                            }
-                            if (std::chrono::steady_clock::now() >= retryDeadline)
-                                break;
-                            presentResult = pipeline_->retry_preview_present();
-                        }
+                        d3d_->context->ExecuteCommandList(work.commands.Get(), FALSE);
+                        const gvfg::internal::gvfg_render_pixfmt_t renderFmt =
+                            work.pixelFormat == GVFG_PREVIEW_PIXFMT_Y210
+                                ? gvfg::internal::GVFG_RENDER_FMT_Y210
+                                : gvfg::internal::GVFG_RENDER_FMT_YUY2;
+                        rendered = pipeline_->render_texture_to_fp16(work.texture.Get(), renderFmt,
+                                                                      work.width, work.height, work.view.Get());
+                        if (rendered)
+                            presentResult = pipeline_->present_preview(work.width, work.height);
                     }
                 }
             }
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (ready && rendered &&
+                auto lock = lockWithWindowMessages(mutex_);
+                if (expired)
+                {
+                    ++skippedSubmits_;
+                    ++delivery_.replaced;
+                }
+                else if (ready && rendered &&
                     presentResult != gvfg::internal::GVFG_PREVIEW_PRESENT_FAILED)
                 {
                     recordPresentResult(presentResult);
@@ -634,7 +657,7 @@ private:
 
     bool ensurePipeline(int width, int height, int sourceBitDepth)
     {
-        std::lock_guard<std::mutex> d3dLock(d3dMutex_);
+        auto d3dLock = lockWithWindowMessages(d3dMutex_);
         if (!pipeline_)
             pipeline_ = std::make_unique<gvfg::internal::D3DPreviewPipeline>();
 
@@ -669,8 +692,8 @@ private:
     uint64_t skippedPresents_ = 0;
     uint64_t skippedSubmits_ = 0;
     gvfg_preview_delivery_stats_t delivery_{};
-    unsigned startupPresentRetries_ = 0; // Protected by mutex_; rearmed on attach.
-    std::array<UploadSlot, 3> slots_{};
+    uint64_t queueOrder_ = 0;
+    std::array<UploadSlot, kUploadSlotCount> slots_{};
     std::thread worker_;
     std::condition_variable workerCv_;
     bool workerStarted_ = false;

@@ -1327,28 +1327,8 @@ gvfg_preview_present_result_t D3DPreviewPipeline::present_preview(int src_w, int
     ID3D11ShaderResourceView *nullSrv[1] = {nullptr};
     ctx_->PSSetShaderResources(0, 1, nullSrv);
 
-    return retry_preview_present();
-}
-
-gvfg_preview_present_result_t D3DPreviewPipeline::retry_preview_present()
-{
-    if (!preview_swapchain_)
-        return GVFG_PREVIEW_PRESENT_FAILED;
-    HRESULT hr = preview_swapchain_->Present(0, DXGI_PRESENT_DO_NOT_WAIT);
-    if (hr == DXGI_ERROR_WAS_STILL_DRAWING)
-    {
-        static uint64_t s_presentBusyCount = 0;
-        ++s_presentBusyCount;
-        if (s_presentBusyCount <= 5 || (s_presentBusyCount % 60) == 0)
-        {
-            char warn[256] = {};
-            std::snprintf(warn, sizeof(warn),
-                          "[SharedScene] preview present skipped: swapchain busy count=%llu",
-                          static_cast<unsigned long long>(s_presentBusyCount));
-            ssp_log_text(warn);
-        }
-        return GVFG_PREVIEW_PRESENT_SKIPPED;
-    }
+    // Let DXGI wait for presentation dependencies; no application retry loop.
+    HRESULT hr = preview_swapchain_->Present(0, 0);
     if (FAILED(hr))
     {
         char err[256] = {};

@@ -67,9 +67,9 @@ typedef struct
 /*
  * Preview presentation statistics.
  *
- * present_fps counts only frames accepted by DXGI Present. A frame skipped
- * because the non-blocking swapchain is busy is excluded. The rate uses
- * successful presents from the most recent five seconds.
+ * present_fps counts only frames accepted by DXGI Present, not physical
+ * scanout. The rate uses successful presents from the most recent five
+ * seconds. Pending preview replacements are excluded from this rate.
  */
 typedef struct
 {
@@ -87,7 +87,7 @@ typedef struct
 {
     uint64_t submitted;
     uint64_t presented;
-    uint64_t replaced;
+    uint64_t replaced; /* Queued frames discarded after the 50 ms age limit. */
     uint64_t busy;
     uint64_t failed;
     uint64_t cancelled;
@@ -133,8 +133,10 @@ GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_prepare(
  *
  * The frame memory remains owned by the caller and must remain valid until
  * this function returns. GPU conversion and Present continue on the internal
- * preview worker. If preview falls behind, an older queued preview frame may
- * be replaced; capture ownership and capture-frame delivery are unaffected.
+ * preview worker. Up to three pending frames are retained in FIFO order.
+ * Frames waiting longer than 50 ms are discarded; if the queue is full,
+ * the incoming frame is skipped. No SDK frame is retained for queueing.
+ * The age limit excludes time spent rendering or waiting inside Present.
  */
 GVFG_PREVIEW_API gvfg_preview_status_t gvfg_preview_render_frame(
     gvfg_preview_handle handle,
