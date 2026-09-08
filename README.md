@@ -109,6 +109,10 @@ Application 收到 `GVFG_EVENT_SIGNAL_DISCONNECTED` 後應暫停 video/audio rea
 等待 `GVFG_EVENT_SIGNAL_CONNECTED` 或 stop 再喚醒 worker，不應在已知無訊號時持續
 輪詢 timeout。
 
+每個成功取得的 video/audio frame 都包含 `timestamp_ns`。兩者使用相同的
+monotonic SDK delivery clock，可供 Application 做 soft A/V sync；它不是硬體
+capture timestamp，也不能跨 process 或 session 比較。
+
 每個 channel 預設為 copy mode。指定 channel open 後不可切換該路模式；
 另一條尚未 open 的 channel 仍可獨立選擇。Zero-copy mode 仍使用相同的 `gvfg_read_channel_frame()` /
 `gvfg_release_channel_frame()` ownership contract，每次成功 read 都必須 release。

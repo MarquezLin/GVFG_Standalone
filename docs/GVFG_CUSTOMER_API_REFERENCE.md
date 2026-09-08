@@ -97,6 +97,7 @@ register 與 DMA 實作不屬於本文件。
 | `pixel_format`     | `int`          | `gvfg_pixel_format_t` 值                      |
 | `bit_depth`        | `int`          | 原生 frame 每色彩 channel 的 bit depth             |
 | `frame_id`         | `uint64_t`     | 此次 start/stop run 中單調遞增的 frame ID            |
+| `timestamp_ns`     | `uint64_t`     | SDK 交付時間；與 audio 共用 monotonic clock，單位 ns |
 
 Caller 不得修改任何欄位再 release。SDK 會將完整 token 與目前 held frame 比對。
 
@@ -127,9 +128,13 @@ Driver 一次傳回多少 bytes、buffer capacity 與 block alignment 均由 SDK
 | `channels` | `uint32_t` | interleaved PCM channel 數 |
 | `bits_per_sample` | `uint32_t` | 每個 PCM sample 的 bit 數 |
 | `frame_id` | `uint64_t` | 此次 start/stop run 中單調遞增的 audio frame ID |
+| `timestamp_ns` | `uint64_t` | SDK 交付時間；與 video 共用 monotonic clock，單位 ns |
 
 與 video 相同，每個 channel 同時只能持有一個 audio frame，且 caller 不得修改
 descriptor 後再 release。
+
+Video/audio 的 `timestamp_ns` 可在同一 process/session 內直接比較。它代表 SDK
+delivery timing，不是 driver 或硬體 capture timestamp。
 
 ### 1.9 `gvfg_gpu_output_format_t`
 
@@ -491,7 +496,7 @@ gvfg_status_t gvfg_get_channel_runtime_info(
 const char *gvfg_get_version(void);
 ```
 
-- 回傳目前實際載入的 GVFG runtime DLL 版本，例如 `"0.1.0"`。
+- 回傳目前實際載入的 GVFG runtime DLL 版本，例如 `"0.2.0"`。
 - 回傳值是靜態 null-terminated 字串，caller 不可 free。
 - 可用於 log、問題回報，以及確認 header、LIB、DLL 是否來自同一版本。
 

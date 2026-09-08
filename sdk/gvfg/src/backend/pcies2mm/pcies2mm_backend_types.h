@@ -52,6 +52,7 @@ typedef struct pcies2mm_frame_t
     const void *data; /* Valid until the next PcieS2mmCaptureSession::wait_frame() or close(). */
     size_t data_size_bytes;
     uint64_t frame_id;
+    uint64_t timestamp_ns;
     uint32_t width;
     uint32_t height;
     pcies2mm_pixel_format_t pixel_format;

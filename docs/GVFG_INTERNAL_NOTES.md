@@ -119,7 +119,7 @@ driver pointer，才能再次 read。SDK 不根據 read 間隔推算 frame loss�
 Facade 在 release 時驗證原 token 的 data、size、width、height、stride、format、
 bit depth 與 frame ID。任何欄位遭修改都回傳 `GVFG_EINVAL`。
 
-x64 `gvfg_frame_t` ABI 已在 `gvfg_capture.cpp` 以 static assertions 固定為 48 bytes
+x64 `gvfg_frame_t` ABI 已在 `gvfg_capture.cpp` 以 static assertions 固定為 56 bytes
 及明確欄位 offsets。修改公開 struct 時必須視為 ABI 變更，不能只重新編譯 DLL。
 新增 metadata 優先考慮新 query API 或帶 size/version 的新 struct。
 

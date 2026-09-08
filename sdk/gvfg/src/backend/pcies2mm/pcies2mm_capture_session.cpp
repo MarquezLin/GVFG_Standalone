@@ -761,6 +761,9 @@ namespace gvfg::internal
             out.data = zero_copy_enabled_ ? data : copy_buffer_.data();
             out.data_size_bytes = bytes;
             out.frame_id = delivered_sequence_;
+            out.timestamp_ns = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
             out.width = stream_desc_.width;
             out.height = stream_desc_.height;
             out.pixel_format = stream_desc_.pixel_format;

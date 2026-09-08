@@ -41,7 +41,7 @@
 版本只有一個來源：根目錄 `CMakeLists.txt` 的 `project()`：
 
 ```cmake
-project(gvfg_standalone VERSION 0.1.0 LANGUAGES CXX)
+project(gvfg_standalone VERSION 0.2.0 LANGUAGES CXX)
 ```
 
 例如準備 `0.2.0` 時改成：

@@ -35,14 +35,15 @@ namespace
 #if INTPTR_MAX == INT64_MAX
     static_assert(sizeof(gvfg_audio_format_t) == 12, "gvfg_audio_format_t ABI must remain frozen");
     static_assert(std::is_standard_layout_v<gvfg_audio_frame_t>);
-    static_assert(sizeof(gvfg_audio_frame_t) == 40, "gvfg_audio_frame_t x64 ABI must remain frozen");
+    static_assert(sizeof(gvfg_audio_frame_t) == 48, "gvfg_audio_frame_t x64 ABI must remain frozen");
     static_assert(offsetof(gvfg_audio_frame_t, data) == 0);
     static_assert(offsetof(gvfg_audio_frame_t, data_size) == 8);
     static_assert(offsetof(gvfg_audio_frame_t, sample_rate) == 16);
     static_assert(offsetof(gvfg_audio_frame_t, frame_id) == 32);
+    static_assert(offsetof(gvfg_audio_frame_t, timestamp_ns) == 40);
     static_assert(sizeof(gvfg_runtime_info_t) == 56, "gvfg_runtime_info_t x64 ABI must remain frozen");
     static_assert(std::is_standard_layout_v<gvfg_frame_t>);
-    static_assert(sizeof(gvfg_frame_t) == 48, "gvfg_frame_t x64 ABI must remain frozen");
+    static_assert(sizeof(gvfg_frame_t) == 56, "gvfg_frame_t x64 ABI must remain frozen");
     static_assert(offsetof(gvfg_frame_t, data) == 0);
     static_assert(offsetof(gvfg_frame_t, data_size) == 8);
     static_assert(offsetof(gvfg_frame_t, width) == 16);
@@ -51,6 +52,7 @@ namespace
     static_assert(offsetof(gvfg_frame_t, pixel_format) == 28);
     static_assert(offsetof(gvfg_frame_t, bit_depth) == 32);
     static_assert(offsetof(gvfg_frame_t, frame_id) == 40);
+    static_assert(offsetof(gvfg_frame_t, timestamp_ns) == 48);
 #endif
 
     void copy_cstr(char *dst, size_t dstSize, const char *src)
@@ -504,6 +506,7 @@ struct gvfg_channel_session_t
         out.pixel_format = to_gvfg_pixel_format(frame.pixel_format);
         out.bit_depth = static_cast<int>(frame.bit_depth);
         out.frame_id = frame.frame_id;
+        out.timestamp_ns = frame.timestamp_ns;
         noteDeliveredFrame(out.width, out.height, out.bit_depth, out.pixel_format);
 
         return GVFG_OK;
@@ -532,7 +535,8 @@ struct gvfg_channel_session_t
                 frameToken.row_stride_bytes != expectedStride ||
                 frameToken.pixel_format != to_gvfg_pixel_format(heldBackendFrame.pixel_format) ||
                 frameToken.bit_depth != static_cast<int>(heldBackendFrame.bit_depth) ||
-                frameToken.frame_id != heldBackendFrame.frame_id)
+                frameToken.frame_id != heldBackendFrame.frame_id ||
+                frameToken.timestamp_ns != heldBackendFrame.timestamp_ns)
                 return reject(GVFG_EINVAL, "gvfg_release_channel_frame rejected: frame token does not match the held frame");
 
             const pcies2mm_status_t st = backend->release_frame(heldBackendFrame);
@@ -756,6 +760,7 @@ struct gvfg_channel_session_t
             out.channels = format.channels;
             out.bits_per_sample = format.bits_per_sample;
             out.frame_id = audioFrameId;
+            out.timestamp_ns = now_ns();
             heldAudioFrame = out;
         }
         return GVFG_OK;
@@ -769,7 +774,8 @@ struct gvfg_channel_session_t
         if (token.data != heldAudioFrame.data || token.data_size != heldAudioFrame.data_size ||
             token.sample_rate != heldAudioFrame.sample_rate || token.channels != heldAudioFrame.channels ||
             token.bits_per_sample != heldAudioFrame.bits_per_sample ||
-            token.reserved != heldAudioFrame.reserved || token.frame_id != heldAudioFrame.frame_id)
+            token.reserved != heldAudioFrame.reserved || token.frame_id != heldAudioFrame.frame_id ||
+            token.timestamp_ns != heldAudioFrame.timestamp_ns)
             return reject(GVFG_EINVAL, "gvfg_release_channel_audio_frame rejected: frame token does not match the held audio frame");
         heldAudioFrame = {};
         audioFrameHeld = false;

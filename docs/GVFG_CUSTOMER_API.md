@@ -144,7 +144,7 @@ Audio 採用相同的 pull 與 ownership 模型：
 可用 `gvfg_strerror()` 取得靜態英文說明字串；呼叫端不可釋放該字串。
 
 可用 `gvfg_get_version()` 查詢目前實際載入的 `gvfg.dll` 版本。回傳值為
-靜態字串，例如 `"0.1.0"`，呼叫端不可釋放。
+靜態字串，例如 `"0.2.0"`，呼叫端不可釋放。
 需要記錄最近一次失敗的詳細原因時，可在 API 失敗後立即呼叫
 `gvfg_get_channel_last_error_detail()`；driver/register 等內部診斷仍保留在 debug API。
 
@@ -168,6 +168,7 @@ Audio 採用相同的 pull 與 ownership 模型：
 - `row_stride_bytes`：相鄰兩列起點的 byte 距離。
 - `pixel_format`、`bit_depth`：原生 payload 格式。
 - `frame_id`：同一次 start/stop session 中單調遞增的識別值。
+- `timestamp_ns`：SDK monotonic delivery timestamp，與 audio 使用相同 clock domain。
 
 ### PCM audio
 
@@ -180,6 +181,10 @@ Audio 採用相同的 pull 與 ownership 模型：
 - `data`、`data_size`：SDK-owned PCM 與本次有效 byte 數。
 - `sample_rate`、`channels`、`bits_per_sample`：此 frame 的 PCM 格式。
 - `frame_id`：同一次 start/stop session 中單調遞增的 audio frame ID。
+- `timestamp_ns`：SDK monotonic delivery timestamp，與 video 使用相同 clock domain。
+
+`timestamp_ns` 用於比較同一 process/session 內的 video/audio delivery timing；它
+不是 driver 或硬體 capture timestamp。
 
 目前 audio 僅支援 CH0，且必須與 video 一起啟動；不支援 audio-only。公開
 audio API 不是 zero-copy，但上層仍使用和 video 相同的 read/release contract。

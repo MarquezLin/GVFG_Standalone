@@ -155,6 +155,7 @@ extern "C"
         int pixel_format;     /* gvfg_pixel_format_t value. */
         int bit_depth;        /* Bits per color channel of the native frame. */
         uint64_t frame_id;    /* Monotonic identifier within the current channel start/stop run. */
+        uint64_t timestamp_ns; /* Monotonic SDK delivery time; same clock domain as audio. */
     } gvfg_frame_t;
 
     typedef struct
@@ -166,6 +167,7 @@ extern "C"
         uint32_t bits_per_sample;  /* Bits in each native PCM sample. */
         uint32_t reserved;
         uint64_t frame_id;         /* Monotonic identifier within the current start/stop run. */
+        uint64_t timestamp_ns;     /* Monotonic SDK delivery time; same clock domain as video. */
     } gvfg_audio_frame_t;
 
     /* Formats produced by gvfg_gpu_convert_to_buffer(). */
@@ -574,7 +576,7 @@ extern "C"
         _In_ int channel_index,
         _Out_ gvfg_runtime_info_t *out_info);
 
-    /* Return the loaded GVFG runtime DLL version, for example "0.1.0". */
+    /* Return the loaded GVFG runtime DLL version, for example "0.2.0". */
     GVFG_API const char *gvfg_get_version(void);
 
     /* Convert a gvfg_pixel_format_t value to a static English format name. */
