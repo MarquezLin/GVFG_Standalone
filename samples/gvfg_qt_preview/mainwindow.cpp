@@ -1499,98 +1499,141 @@ void MainWindow::audioPlaybackLoop(int channelIndex)
         return;
     }
 
-    const QAudioDevice outputDevice = QMediaDevices::defaultAudioOutput();
-    if (outputDevice.isNull() || !outputDevice.isFormatSupported(outputFormat))
+    bool recovering = false;
+    while (!channel.stopRequested.load(std::memory_order_acquire))
     {
-        QMetaObject::invokeMethod(this, [this, channelIndex, format]()
-                                  {
-                                      appendLog(QStringLiteral("CH%1 Audio output does not support %2 Hz %3 ch %4-bit PCM")
-                                                  .arg(channelIndex)
-                                                  .arg(format.sample_rate)
-                                                  .arg(format.channels)
-                                                  .arg(format.bits_per_sample));
-                                      stopCapture(channelIndex); }, Qt::QueuedConnection);
-        return;
-    }
-
-    QAudioSink audioSink(outputDevice, outputFormat);
-    QIODevice *audioOutput = audioSink.start();
-    if (!audioOutput)
-    {
-        QMetaObject::invokeMethod(this, [this, channelIndex]()
-                                  {
-                                      appendLog(QStringLiteral("CH%1 Audio output failed to start").arg(channelIndex));
-                                      stopCapture(channelIndex); }, Qt::QueuedConnection);
-        return;
-    }
-
-    for (;;)
-    {
-        std::vector<uint8_t> pcm;
+        const QAudioDevice outputDevice = QMediaDevices::defaultAudioOutput();
+        if (outputDevice.isNull() || !outputDevice.isFormatSupported(outputFormat))
         {
+            if (!recovering)
+                QMetaObject::invokeMethod(this, [this, channelIndex]() {
+                    appendLog(QStringLiteral("CH%1 Audio output unavailable; monitoring playback will retry").arg(channelIndex));
+                }, Qt::QueuedConnection);
+            recovering = true;
             std::unique_lock<std::mutex> lock(channel.audioQueueMutex);
-            channel.audioQueueReady.wait(lock, [&channel]() {
-                return channel.stopRequested.load(std::memory_order_acquire) ||
-                       !channel.audioQueue.empty();
+            while (!channel.audioQueue.empty())
+            {
+                channel.audioDroppedBytes += channel.audioQueue.front().pcm.size();
+                channel.audioQueuedBytes -= channel.audioQueue.front().pcm.size();
+                channel.audioQueue.pop_front();
+                channel.audioQueueDrops.fetch_add(1, std::memory_order_relaxed);
+            }
+            channel.audioQueueReady.wait_for(lock, std::chrono::milliseconds(500), [&channel]() {
+                return channel.stopRequested.load(std::memory_order_acquire);
             });
-            if (channel.stopRequested.load(std::memory_order_acquire))
-                break;
-            pcm = std::move(channel.audioQueue.front().pcm);
-            channel.audioQueue.pop_front();
-            channel.audioQueuedBytes -= pcm.size();
+            continue;
         }
 
-        qint64 written = 0;
-        auto lastProgress = std::chrono::steady_clock::now();
-        while (written < static_cast<qint64>(pcm.size()) &&
-               !channel.stopRequested.load(std::memory_order_acquire))
+        QAudioSink audioSink(outputDevice, outputFormat);
+        QIODevice *audioOutput = audioSink.start();
+        if (!audioOutput)
         {
-            const qint64 result = audioOutput->write(
-                reinterpret_cast<const char *>(pcm.data()) + written,
-                static_cast<qint64>(pcm.size()) - written);
-            const auto writeEnd = std::chrono::steady_clock::now();
-            const bool stalled = result == 0 && writeEnd - lastProgress >= std::chrono::seconds(2);
+            if (!recovering)
+                QMetaObject::invokeMethod(this, [this, channelIndex]() {
+                    appendLog(QStringLiteral("CH%1 Audio output failed to start; monitoring playback will retry").arg(channelIndex));
+                }, Qt::QueuedConnection);
+            recovering = true;
+            std::unique_lock<std::mutex> lock(channel.audioQueueMutex);
+            while (!channel.audioQueue.empty())
+            {
+                channel.audioDroppedBytes += channel.audioQueue.front().pcm.size();
+                channel.audioQueuedBytes -= channel.audioQueue.front().pcm.size();
+                channel.audioQueue.pop_front();
+                channel.audioQueueDrops.fetch_add(1, std::memory_order_relaxed);
+            }
+            channel.audioQueueReady.wait_for(lock, std::chrono::milliseconds(500), [&channel]() {
+                return channel.stopRequested.load(std::memory_order_acquire);
+            });
+            continue;
+        }
+
+        if (recovering)
+            QMetaObject::invokeMethod(this, [this, channelIndex]() {
+                appendLog(QStringLiteral("CH%1 Audio monitoring playback recovered").arg(channelIndex));
+            }, Qt::QueuedConnection);
+        recovering = false;
+        bool restartPlayback = false;
+        while (!channel.stopRequested.load(std::memory_order_acquire) && !restartPlayback)
+        {
+            std::vector<uint8_t> pcm;
+            {
+                std::unique_lock<std::mutex> lock(channel.audioQueueMutex);
+                channel.audioQueueReady.wait(lock, [&channel]() {
+                    return channel.stopRequested.load(std::memory_order_acquire) ||
+                           !channel.audioQueue.empty();
+                });
+                if (channel.stopRequested.load(std::memory_order_acquire))
+                    break;
+                pcm = std::move(channel.audioQueue.front().pcm);
+                channel.audioQueue.pop_front();
+                channel.audioQueuedBytes -= pcm.size();
+            }
+
+            qint64 written = 0;
+            auto lastProgress = std::chrono::steady_clock::now();
+            while (written < static_cast<qint64>(pcm.size()) &&
+                   !channel.stopRequested.load(std::memory_order_acquire))
+            {
+                const qint64 result = audioOutput->write(
+                    reinterpret_cast<const char *>(pcm.data()) + written,
+                    static_cast<qint64>(pcm.size()) - written);
+                const auto now = std::chrono::steady_clock::now();
+                const bool stalled = result == 0 && now - lastProgress >= std::chrono::seconds(2);
+                {
+                    std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
+                    channel.audioMaxWriteStallMs = (std::max)(channel.audioMaxWriteStallMs,
+                        std::chrono::duration<double, std::milli>(now - lastProgress).count());
+                    if (result > 0)
+                        channel.audioAcceptedBytes += static_cast<uint64_t>(result);
+                    else if (result < 0 || stalled)
+                        channel.audioFailedBytes += pcm.size() - static_cast<uint64_t>(written);
+                }
+                if (result > 0)
+                {
+                    written += result;
+                    lastProgress = now;
+                    continue;
+                }
+                if (result < 0 || stalled)
+                {
+                    QMetaObject::invokeMethod(this, [this, channelIndex, stalled]() {
+                        appendLog(stalled
+                            ? QStringLiteral("CH%1 Audio output made no progress for 2 seconds; rebuilding monitoring playback").arg(channelIndex)
+                            : QStringLiteral("CH%1 Audio output write failed; rebuilding monitoring playback").arg(channelIndex));
+                    }, Qt::QueuedConnection);
+                    restartPlayback = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (written == static_cast<qint64>(pcm.size()))
+            {
+                channel.audioFrames.fetch_add(1, std::memory_order_relaxed);
+                channel.audioBytes.fetch_add(pcm.size(), std::memory_order_relaxed);
+            }
+            else if (!restartPlayback)
             {
                 std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
-                channel.audioMaxWriteStallMs = (std::max)(channel.audioMaxWriteStallMs,
-                    std::chrono::duration<double, std::milli>(writeEnd - lastProgress).count());
-                if (result > 0)
-                    channel.audioAcceptedBytes += static_cast<uint64_t>(result);
-                else if (result < 0 || stalled)
-                    channel.audioFailedBytes += pcm.size() - static_cast<uint64_t>(written);
+                channel.audioCancelledBytes += pcm.size() - static_cast<uint64_t>(written);
             }
-            if (result > 0)
-                lastProgress = writeEnd;
-            if (result < 0 || stalled)
-            {
-                QMetaObject::invokeMethod(this, [this, channelIndex, stalled]()
-                                          {
-                                              appendLog(stalled
-                                                  ? QStringLiteral("CH%1 Audio output made no write progress for 2 seconds; stopping. Check the playback device, then Start again.").arg(channelIndex)
-                                                  : QStringLiteral("CH%1 Audio output write failed").arg(channelIndex));
-                                              stopCapture(channelIndex); }, Qt::QueuedConnection);
-                audioSink.stop();
-                return;
-            }
-            if (result == 0)
-            {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            written += result;
         }
-        if (written == static_cast<qint64>(pcm.size()))
+        audioSink.stop();
+        if (restartPlayback)
         {
-            channel.audioFrames.fetch_add(1, std::memory_order_relaxed);
-            channel.audioBytes.fetch_add(pcm.size(), std::memory_order_relaxed);
-        }
-        else
-        {
-            std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
-            channel.audioCancelledBytes += pcm.size() - static_cast<uint64_t>(written);
+            recovering = true;
+            std::unique_lock<std::mutex> lock(channel.audioQueueMutex);
+            while (!channel.audioQueue.empty())
+            {
+                channel.audioDroppedBytes += channel.audioQueue.front().pcm.size();
+                channel.audioQueuedBytes -= channel.audioQueue.front().pcm.size();
+                channel.audioQueue.pop_front();
+                channel.audioQueueDrops.fetch_add(1, std::memory_order_relaxed);
+            }
+            channel.audioQueueReady.wait_for(lock, std::chrono::milliseconds(500), [&channel]() {
+                return channel.stopRequested.load(std::memory_order_acquire);
+            });
         }
     }
-    audioSink.stop();
 }
 
 void MainWindow::joinAudioThread(int channel)

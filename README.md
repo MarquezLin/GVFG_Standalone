@@ -139,6 +139,11 @@ SDK-owned frame buffer，再以和 video 相同的 read/release ownership 交付
 SDK 不建立 audio ring buffer。Audio zero-copy
 尚未納入，CH1 audio 也尚未正式支援。
 
+Qt sample 的 monitoring playback 與 capture reader 分開。若 `QAudioSink` write
+失敗或連續兩秒沒有寫入進度，只會清除過期的播放 queue 並在 audio thread 重新取得
+預設 output device、重建 sink；video/audio capture 不會因此停止。Playback recovery
+不影響 SDK frame release contract。
+
 ### 同一裝置雙 channel
 
 同一個 `gvfg_handle` 可對同一個 device index 開啟 CH0、CH1。SDK 只建立一個

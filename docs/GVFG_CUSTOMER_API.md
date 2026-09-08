@@ -121,6 +121,10 @@ Audio 採用相同的 pull 與 ownership 模型：
 - 若播放或錄音需要在 release 後繼續使用 PCM，Application 必須先複製。
 - SDK 只保有單一交付 buffer，不建立 audio ring；播放排程與 buffering 屬於
   Application／Qt／WASAPI。
+- Monitoring playback 不應反向阻塞 capture 或 recording。`QAudioSink` 暫時回傳
+  zero bytes 時可短暫重試；若持續沒有進度，Application 應丟棄過期播放資料並只
+  重建 output sink，保留 capture 與 recording。音訊 output device 恢復後從最新
+  PCM 繼續播放。
 
 `timeout_ms` 的共同規則：`0` 表示不等待；`GVFG_TIMEOUT_INFINITE` 表示無限等待；
 其他值的單位為毫秒。
