@@ -10,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -45,7 +46,11 @@ private:
         gvfg_preview_handle previewHandle = nullptr;
         std::atomic<bool> running{false};
         std::atomic<bool> stopRequested{false};
+        std::atomic<bool> signalConnected{false};
+        std::mutex signalMutex;
+        std::condition_variable signalReady;
         std::atomic<bool> frameAvailable{false};
+        std::atomic<bool> previewVisible{false};
         std::thread captureThread;
         std::thread audioThread;
         std::thread audioPlaybackThread;
@@ -73,10 +78,12 @@ private:
         qint64 audioLastDropTimeMs = 0;
         double audioMaxWriteStallMs = 0;
         double audioMaxReadGapMs = 0;
-        std::atomic<uint64_t> videoReceived{0}, videoSubmitted{0}, videoFailed{0};
+        std::atomic<uint64_t> videoReceived{0}, videoSubmitted{0}, videoSkipped{0}, videoFailed{0};
         std::atomic<uint64_t> videoIdGaps{0}, videoIdResets{0};
         std::atomic<uint64_t> videoLastId{0};
         gvfg_preview_delivery_stats_t previewBaseline{};
+        std::chrono::steady_clock::time_point startupStartTime{};
+        double startupStartCallMs = 0.0;
         uint64_t lastLoggedVideoIssues = 0, lastLoggedAudioIssues = 0;
         qint64 lastDeliveryLogMs = 0;
         std::atomic<double> getFrameAverageMs{0.0};

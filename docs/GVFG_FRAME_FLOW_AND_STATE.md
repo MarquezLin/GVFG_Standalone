@@ -270,7 +270,12 @@ Release 不是只看 `data` pointer。程式會比對：
 
 這可避免 caller 把 CH0 token 用於 CH1、使用舊 frame、修改 descriptor，或重複 release。
 
-重要規則：驗證失敗或 zero-copy release IOCTL 失敗時，不可先清除 held state。
+重要規則：token 驗證失敗或一般 zero-copy release IOCTL 失敗時，不可先清除
+held state。唯一例外是 backend 已經收到 plug-out、確認 signal disconnected，且
+driver 對該 outstanding frame 回傳 `ERROR_BAD_COMMAND (22)`；此時 driver 已因拔線
+撤銷 ownership，SDK 會清除相符的本地 held token，避免 unplug handler 與後續
+replug 永久卡住。Application 仍必須對每次成功 read 呼叫一次 release，不應自行
+特判 error 22。
 
 ## 11. Signal 與 format-change 狀態
 

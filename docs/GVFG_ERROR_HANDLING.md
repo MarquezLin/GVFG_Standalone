@@ -202,7 +202,8 @@ if (status != GVFG_OK && status != GVFG_ETIMEOUT)
 | `GVFG_EIO` 且沒有成功 frame | 否 | caller 沒有取得 ownership token |
 | 第二次 read 被 `frameHeld` 拒絕 | 否 | 應先 release 原本成功取得的 frame |
 | release token 不符 | 不可清除 held state | 正確 token 仍需重試 release |
-| zero-copy release IOCTL 失敗 | 不可清除 held state | driver frame 可能仍被占用，必須保留 token 供 retry |
+| zero-copy release IOCTL 一般失敗 | 不可清除 held state | driver frame 可能仍被占用，必須保留 token 供 retry |
+| 已確認 unplug 後 release 回 `ERROR_BAD_COMMAND (22)` | 清除相符 held state | driver 已撤銷該 ownership；保留 token 會阻塞 unplug/replug lifecycle |
 
 ## 9. Transient retry 規則
 
@@ -243,7 +244,11 @@ facade running = false
     -> 停 event monitoring/thread
 ```
 
-若 zero-copy release 失敗，backend 不應假裝已經釋放；錯誤必須回傳並保留足以重試的狀態。這是 teardown 正確性的核心。
+一般 zero-copy release 失敗時，backend 不應假裝已經釋放；錯誤必須回傳並保留
+足以重試的狀態。若已確認 signal disconnected，且 release 回
+`ERROR_BAD_COMMAND (22)`，則表示 driver 已在拔線流程撤銷 ownership；backend 會
+清除相符的本地 held state 並完成 release，避免 event-monitor thread 永久等待。
+這個例外不可套用到 connected 狀態或其他錯誤碼。
 
 正常 `stop()` 為了結束 blocking read/event poll 而喚醒 waiter 時，只回傳 `GVFG_ESTATE`，不寫入
 永久錯誤；application 應以自己的 stop flag 判斷這是不是預期的結束流程。

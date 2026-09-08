@@ -59,6 +59,23 @@ namespace
         return out;
     }
 
+    static std::wstring utf8_to_wide(const char *s)
+    {
+        if (!s || !*s)
+            return std::wstring();
+        const int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                               s, -1, nullptr, 0);
+        if (needed <= 0)
+            return std::wstring();
+        std::wstring out(static_cast<size_t>(needed), L'\0');
+        if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                s, -1, &out[0], needed) <= 0)
+            return std::wstring();
+        if (!out.empty() && out.back() == L'\0')
+            out.pop_back();
+        return out;
+    }
+
     static std::string win32_error(DWORD err)
     {
         wchar_t *msg = nullptr;
@@ -110,11 +127,16 @@ namespace
                       "[GVFG][PCIES2MM]%s %s\n",
                       tag ? tag : "",
                       msg);
-        OutputDebugStringA(line);
+        const std::wstring wideLine = utf8_to_wide(line);
+        if (!wideLine.empty())
+            OutputDebugStringW(wideLine.c_str());
+        else
+            OutputDebugStringA(line);
     }
 
 #define PCIES2MM_LOG(...) trace_log(false, "", __VA_ARGS__)
 #define PCIES2MM_ERROR_LOG(...) trace_log(true, "[error]", __VA_ARGS__)
+#define PCIES2MM_TIMING_LOG(...) trace_log(true, "[timing]", __VA_ARGS__)
 
     static uint32_t event_mask_for_type(pcies2mm_event_type_t type)
     {
@@ -514,6 +536,7 @@ namespace gvfg::internal
                                     stream_desc_.pixel_format != PCIES2MM_PIXFMT_UNKNOWN;
         running_ = true;
         capture_active_ = false;
+        signal_transition_active_ = false;
         reader_ready_ = false;
         signal_probe_active_ = probeAvailable;
         stream_ready_pending_ = false;
@@ -536,6 +559,7 @@ namespace gvfg::internal
 
         running_ = false;
         capture_active_ = false;
+        signal_transition_active_ = false;
         reader_ready_ = false;
         signal_probe_active_ = false;
         stream_ready_pending_ = false;
@@ -574,22 +598,26 @@ namespace gvfg::internal
         if (capture_active_.load(std::memory_order_acquire))
             return PCIES2MM_OK;
         if (!signal_presence_known_.load(std::memory_order_acquire) ||
-            !signal_present_.load(std::memory_order_acquire))
+            !signal_present_.load(std::memory_order_acquire) ||
+            signal_transition_active_.load(std::memory_order_acquire))
             return PCIES2MM_ETIMEOUT;
         if (!ResetEvent(dma_event_) || !ResetEvent(extra_video_event_) ||
             (audio_enabled_ &&
              (!ResetEvent(audio_event_) || !ResetEvent(extra_audio_event_))))
             return fail(PCIES2MM_EIO, "reset capture event");
+
         if (!start_capture(active_channel()))
             return fail(PCIES2MM_EIO, "enable reader capture");
         capture_active_.store(true, std::memory_order_release);
         stream_ready_pending_.store(true, std::memory_order_release);
+        first_video_timing_pending_ = true;
         return PCIES2MM_OK;
     }
 
     pcies2mm_status_t PcieS2mmCaptureSession::wait_frame(uint32_t timeoutMs, pcies2mm_frame_t &out)
     {
         constexpr uint64_t kTimingWarmupFrames = 30;
+        bool logFirstVideoTiming = false;
         reader_ready_.store(true, std::memory_order_release);
         std::memset(&out, 0, sizeof(out));
         {
@@ -599,6 +627,7 @@ namespace gvfg::internal
             const pcies2mm_status_t startStatus = ensure_capture_started();
             if (startStatus != PCIES2MM_OK)
                 return startStatus;
+            logFirstVideoTiming = first_video_timing_pending_;
             read_in_progress_ = true;
         }
 
@@ -614,7 +643,9 @@ namespace gvfg::internal
                                   : std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
         const DWORD bytes = static_cast<DWORD>(frame_size_bytes());
         const uint8_t *data = nullptr;
+        double videoEventWaitMs = 0.0;
         double getFrameUs = 0.0;
+        DWORD successfulWaitResult = WAIT_FAILED;
         for (;;)
         {
             DWORD waitMs = INFINITE;
@@ -631,7 +662,11 @@ namespace gvfg::internal
             }
 
             HANDLE videoReadyEvents[] = {dma_event_, extra_video_event_};
+            const auto waitStarted = std::chrono::steady_clock::now();
             const DWORD waitResult = WaitForMultipleObjects(2, videoReadyEvents, FALSE, waitMs);
+            const auto waitReturned = std::chrono::steady_clock::now();
+            videoEventWaitMs += std::chrono::duration<double, std::milli>(
+                                    waitReturned - waitStarted).count();
             if (waitResult == WAIT_TIMEOUT)
             {
                 {
@@ -657,7 +692,6 @@ namespace gvfg::internal
                 finishRead();
                 return PCIES2MM_ETIMEOUT;
             }
-
             const auto getFrameStarted = std::chrono::steady_clock::now();
             int ret = -1;
             DWORD frameError = ERROR_SUCCESS;
@@ -680,7 +714,10 @@ namespace gvfg::internal
             getFrameUs += std::chrono::duration<double, std::micro>(
                               std::chrono::steady_clock::now() - getFrameStarted).count();
             if (ret >= 0 && static_cast<DWORD>(ret) == bytes)
+            {
+                successfulWaitResult = waitResult;
                 break;
+            }
 
             if (!is_transient_frame_not_ready_error(frameError))
             {
@@ -730,6 +767,20 @@ namespace gvfg::internal
             out.bit_depth = stream_bit_depth_;
             held_frame_ = out;
             frame_held_ = true;
+            if (logFirstVideoTiming)
+                first_video_timing_pending_ = false;
+        }
+        if (logFirstVideoTiming)
+        {
+            const char *eventName = successfulWaitResult == WAIT_OBJECT_0
+                                        ? "dma_event"
+                                        : "extra_video_event";
+            PCIES2MM_TIMING_LOG("CH%u | video wait=%.3f ms | wake=%s | acquire/get_frame=%.3f ms | mode=%s",
+                                active_channel(),
+                                videoEventWaitMs,
+                                eventName,
+                                getFrameUs / 1000.0,
+                                zero_copy_enabled_ ? "zero-copy" : "copy");
         }
         if (stream_ready_pending_.exchange(false, std::memory_order_acq_rel))
             emit_event(PCIES2MM_EVENT_STREAM_READY);
@@ -856,8 +907,23 @@ namespace gvfg::internal
         if (zero_copy_enabled_ && !release_zero_copy_frame(active_channel()))
         {
             const DWORD err = GetLastError();
-            lock.unlock();
-            return fail(PCIES2MM_EIO, "release zero-copy frame", err);
+            // The driver invalidates its zero-copy release list as soon as the
+            // input is unplugged. A frame that was valid when delivered can
+            // therefore report ERROR_BAD_COMMAND when the application releases
+            // it after the unplug interrupt. In that exact state, ownership has
+            // already been revoked by the driver; clear the matching SDK token
+            // so unplug handling and subsequent capture can make progress.
+            const bool revokedByUnplug =
+                err == ERROR_BAD_COMMAND &&
+                signal_presence_known_.load(std::memory_order_acquire) &&
+                !signal_present_.load(std::memory_order_acquire);
+            if (!revokedByUnplug)
+            {
+                lock.unlock();
+                return fail(PCIES2MM_EIO, "release zero-copy frame", err);
+            }
+            PCIES2MM_LOG("zero-copy frame ownership revoked by unplug: frame=%llu",
+                         static_cast<unsigned long long>(frame.frame_id));
         }
         const double heldMs = active_delivery_started_.time_since_epoch().count() != 0
                                   ? std::chrono::duration<double, std::milli>(
@@ -964,8 +1030,17 @@ namespace gvfg::internal
         if (zero_copy_enabled_ && held_frame_.data && !release_zero_copy_frame(active_channel()))
         {
             const DWORD err = GetLastError();
-            lock.unlock();
-            return fail(PCIES2MM_EIO, "release pending zero-copy frame", err);
+            const bool revokedByUnplug =
+                err == ERROR_BAD_COMMAND &&
+                signal_presence_known_.load(std::memory_order_acquire) &&
+                !signal_present_.load(std::memory_order_acquire);
+            if (!revokedByUnplug)
+            {
+                lock.unlock();
+                return fail(PCIES2MM_EIO, "release pending zero-copy frame", err);
+            }
+            PCIES2MM_LOG("pending zero-copy frame ownership already revoked by unplug: frame=%llu",
+                         static_cast<unsigned long long>(held_frame_.frame_id));
         }
         held_frame_ = {};
         frame_held_ = false;
@@ -1137,6 +1212,7 @@ namespace gvfg::internal
             SetEvent(extra_audio_event_);
         if (monitor_stop_event_)
             SetEvent(monitor_stop_event_);
+        read_finished_cv_.notify_all();
         if (capture_thread_.joinable())
             capture_thread_.join();
 
@@ -1224,12 +1300,12 @@ namespace gvfg::internal
 
     void PcieS2mmCaptureSession::handle_format_change_event(uint32_t channel)
     {
+        signal_transition_active_.store(true, std::memory_order_release);
         {
             std::lock_guard<std::mutex> lock(mutex_);
             signal_metadata_valid_ = false;
         }
         emit_event(PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN);
-        stop_capture(channel);
         capture_active_ = false;
         stream_ready_pending_ = false;
         if (dma_event_)
@@ -1239,11 +1315,16 @@ namespace gvfg::internal
         {
             std::unique_lock<std::mutex> lock(mutex_);
             read_finished_cv_.wait(lock, [this] {
-                return !read_in_progress_ && !audio_read_in_progress_ && !frame_held_;
+                return !monitoring_.load(std::memory_order_acquire) ||
+                       (!read_in_progress_ && !audio_read_in_progress_ && !frame_held_);
             });
         }
+        if (!monitoring_.load(std::memory_order_acquire))
+            return;
+        stop_capture(channel);
         if (running_.load(std::memory_order_acquire))
             refresh_stream_from_registers(true);
+        signal_transition_active_.store(false, std::memory_order_release);
     }
 
     void PcieS2mmCaptureSession::handle_plugin_event(uint32_t channel)
@@ -1252,10 +1333,8 @@ namespace gvfg::internal
             signal_present_.load(std::memory_order_acquire))
             return;
 
-        if (capture_active_.exchange(false, std::memory_order_acq_rel))
-        {
-            stop_capture(channel);
-        }
+        signal_transition_active_.store(true, std::memory_order_release);
+        capture_active_.store(false, std::memory_order_release);
         if (dma_event_)
             SetEvent(dma_event_);
         if (audio_event_)
@@ -1267,30 +1346,46 @@ namespace gvfg::internal
             std::lock_guard<std::mutex> lock(mutex_);
             signal_metadata_valid_ = false;
         }
-        emit_event(PCIES2MM_EVENT_PLUG_IN);
         {
             std::unique_lock<std::mutex> lock(mutex_);
             read_finished_cv_.wait(lock, [this] {
-                return !read_in_progress_ && !audio_read_in_progress_ && !frame_held_;
+                return !monitoring_.load(std::memory_order_acquire) ||
+                       (!read_in_progress_ && !audio_read_in_progress_ && !frame_held_);
             });
         }
+        if (!monitoring_.load(std::memory_order_acquire))
+            return;
+        stop_capture(channel);
         if (running_.load(std::memory_order_acquire))
             refresh_stream_from_registers(true);
+        signal_transition_active_.store(false, std::memory_order_release);
+        emit_event(PCIES2MM_EVENT_PLUG_IN);
     }
 
     void PcieS2mmCaptureSession::handle_unplug_event(uint32_t channel)
     {
+        signal_transition_active_.store(true, std::memory_order_release);
         signal_probe_active_.store(false, std::memory_order_release);
         stream_ready_pending_.store(false, std::memory_order_release);
         signal_present_.store(false, std::memory_order_release);
         signal_presence_known_.store(true, std::memory_order_release);
-        stop_capture(channel);
         capture_active_ = false;
         if (dma_event_)
             SetEvent(dma_event_);
         if (audio_event_)
             SetEvent(audio_event_);
         emit_event(PCIES2MM_EVENT_PLUG_OUT);
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            read_finished_cv_.wait(lock, [this] {
+                return !monitoring_.load(std::memory_order_acquire) ||
+                       (!read_in_progress_ && !audio_read_in_progress_ && !frame_held_);
+            });
+        }
+        if (!monitoring_.load(std::memory_order_acquire))
+            return;
+        stop_capture(channel);
+        signal_transition_active_.store(false, std::memory_order_release);
 
         {
             std::lock_guard<std::mutex> lock(mutex_);

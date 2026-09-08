@@ -28,6 +28,9 @@ public slots:
     void showPreview(int sourceWidth = 0, int sourceHeight = 0);
     void showFullscreenPreview(int sourceWidth = 0, int sourceHeight = 0);
 
+signals:
+    void previewVisibilityChanged(bool visible);
+
 protected:
     void closeEvent(QCloseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;

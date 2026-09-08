@@ -291,7 +291,12 @@ DXGI 成功接受的 Present；swapchain busy 而略過者記在 `skipped_presen
 
 ## 9. 錯誤處理建議
 
-- `GVFG_ETIMEOUT`：通常可重試，並檢查 signal status/event。
+- `GVFG_ETIMEOUT`：連線期間通常可重試，並檢查 signal status/event。收到
+  `GVFG_EVENT_SIGNAL_DISCONNECTED` 後，不應高速輪詢 read API；應等待
+  `GVFG_EVENT_SIGNAL_CONNECTED`（或 application stop）再恢復 video/audio read。
+- 每次成功取得的 frame 仍必須恰好 release 一次。若 release 與實體拔線競爭，
+  SDK 會處理 driver 已撤銷 zero-copy ownership 的情況，application 不應特判
+  `ERROR_BAD_COMMAND (22)`。
 - `GVFG_EVENT_FORMAT_CHANGE_BEGIN`：先停用舊格式資源；等 stream ready 後重建。
 - `GVFG_ESTATE`：檢查 lifecycle、是否重複 read、或是否已 stop。
 - `GVFG_EIO`／`GVFG_ENODEV`：停止 session，記錄 `gvfg_strerror()`，再由應用程式

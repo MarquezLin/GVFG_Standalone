@@ -68,23 +68,28 @@ void PreviewWindow::setSourceSize(int sourceWidth, int sourceHeight)
 void PreviewWindow::closePreview()
 {
     closeAllowed_ = true;
+    emit previewVisibilityChanged(false);
     close();
 }
 
 void PreviewWindow::showPreview(int sourceWidth, int sourceHeight)
 {
+    closeAllowed_ = false;
     setSourceSize(sourceWidth, sourceHeight);
     if (isFullScreen())
         showNormal();
     show();
+    emit previewVisibilityChanged(true);
     raise();
     activateWindow();
 }
 
 void PreviewWindow::showFullscreenPreview(int sourceWidth, int sourceHeight)
 {
+    closeAllowed_ = false;
     setSourceSize(sourceWidth, sourceHeight);
     enterFullscreen();
+    emit previewVisibilityChanged(true);
 }
 
 void PreviewWindow::enterFullscreen()
@@ -113,6 +118,7 @@ void PreviewWindow::closeEvent(QCloseEvent *event)
     }
 
     hide();
+    emit previewVisibilityChanged(false);
     event->ignore();
 }
 

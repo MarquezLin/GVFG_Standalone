@@ -349,6 +349,10 @@ gvfg_status_t gvfg_release_channel_frame(gvfg_handle handle,
 - `handle`：取得該 frame 的同一個 handle。
 - `frame`：`gvfg_read_channel_frame()` 原封不動回傳的完整 descriptor。
 - `GVFG_OK`：成功歸還 frame；copy buffer 可再次使用，或 zero-copy frame 已歸還 driver。
+- 若 frame 原本合法取得，但 release 與 plug-out 競爭，driver 可能已先撤銷
+  zero-copy ownership。SDK 僅在已確認 disconnected 且 driver 回
+  `ERROR_BAD_COMMAND (22)` 時清除相符的 held token，並將 release 視為完成；
+  application 仍照常呼叫一次 release，不需處理 driver error 22。
 - `GVFG_EINVAL`：NULL 或 token 內容與 held frame 不符。
 - `GVFG_ESTATE`：沒有 backend、目前沒有 held frame，或 backend release 狀態不正確。
 

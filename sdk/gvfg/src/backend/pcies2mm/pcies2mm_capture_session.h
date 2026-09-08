@@ -128,6 +128,7 @@ namespace gvfg::internal
         std::atomic<bool> reader_ready_{false};
         std::atomic<bool> signal_probe_active_{false};
         std::atomic<bool> stream_ready_pending_{false};
+        std::atomic<bool> signal_transition_active_{false};
         mutable std::atomic<bool> signal_presence_known_{false};
         mutable std::atomic<bool> signal_present_{false};
         mutable bool signal_metadata_valid_ = false;
@@ -154,6 +155,7 @@ namespace gvfg::internal
         bool frame_held_ = false;
         bool read_in_progress_ = false;
         bool audio_read_in_progress_ = false;
+        bool first_video_timing_pending_ = false;
         std::chrono::steady_clock::time_point active_delivery_started_{};
         bool stream_error_ = false;
         pcies2mm_stream_stats_t stats_{};
