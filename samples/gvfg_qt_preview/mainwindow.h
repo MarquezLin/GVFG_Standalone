@@ -56,15 +56,13 @@ private:
         std::thread audioPlaybackThread;
         std::mutex audioQueueMutex;
         std::condition_variable audioQueueReady;
-        struct AudioPacket { std::vector<uint8_t> pcm; uint64_t id; };
+        struct AudioPacket { std::vector<uint8_t> pcm; };
         std::deque<AudioPacket> audioQueue;
         bool audioEnabled = false;
         gvfg_audio_format_t audioFormat{};
-        std::atomic<uint64_t> audioFrames{0};
-        std::atomic<uint64_t> audioBytes{0};
-        std::atomic<uint64_t> audioQueueDrops{0};
         // Audio accounting is protected by audioQueueMutex. Accepted means
         // written to QAudioSink, not physically played by the device.
+        uint64_t audioReceivedFrames = 0;
         uint64_t audioReceivedBytes = 0;
         uint64_t audioAcceptedBytes = 0;
         uint64_t audioQueuedBytes = 0;
@@ -74,10 +72,6 @@ private:
         uint64_t audioIdGaps = 0;
         uint64_t audioIdResets = 0;
         uint64_t audioLastId = 0;
-        uint64_t audioLastDropId = 0;
-        qint64 audioLastDropTimeMs = 0;
-        double audioMaxWriteStallMs = 0;
-        double audioMaxReadGapMs = 0;
         std::atomic<uint64_t> videoReceived{0}, videoSubmitted{0}, videoSkipped{0}, videoFailed{0};
         std::atomic<uint64_t> videoIdGaps{0}, videoIdResets{0};
         std::atomic<uint64_t> videoLastId{0};
@@ -91,15 +85,10 @@ private:
         std::atomic<double> getFrameWindowMaximumMs{0.0};
         std::atomic<uint64_t> getFrameSamples{0};
         uint64_t previewFailureCount = 0;
-        std::atomic<double> previewCallAverageMs{0.0};
-        std::atomic<double> previewCallMaximumMs{0.0};
-        std::atomic<double> previewCallWindowMaximumMs{0.0};
-        std::atomic<uint64_t> previewCallSamples{0};
         gvfg_signal_status_t cachedSignalStatus{};
         bool haveCachedSignalStatus = false;
         QString lastLoggedInputStatus;
 #if GVFG_INTERNAL_DIAGNOSTICS
-        uint64_t audioReceivedFrames = 0;
         uint64_t lastDebugDmaErrors = 0;
         bool haveDebugBaseline = false;
 #endif
