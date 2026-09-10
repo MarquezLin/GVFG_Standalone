@@ -144,7 +144,7 @@ Audio 採用相同的 pull 與 ownership 模型：
 可用 `gvfg_strerror()` 取得靜態英文說明字串；呼叫端不可釋放該字串。
 
 可用 `gvfg_get_version()` 查詢目前實際載入的 `gvfg.dll` 版本。回傳值為
-靜態字串，例如 `"0.2.0"`，呼叫端不可釋放。
+靜態字串，例如 `"0.2.1"`，呼叫端不可釋放。
 需要記錄最近一次失敗的詳細原因時，可在 API 失敗後立即呼叫
 `gvfg_get_channel_last_error_detail()`；driver/register 等內部診斷仍保留在 debug API。
 

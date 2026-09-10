@@ -99,6 +99,7 @@ private:
         bool haveCachedSignalStatus = false;
         QString lastLoggedInputStatus;
 #if GVFG_INTERNAL_DIAGNOSTICS
+        uint64_t audioReceivedFrames = 0;
         uint64_t lastDebugDmaErrors = 0;
         bool haveDebugBaseline = false;
 #endif

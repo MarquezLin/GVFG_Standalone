@@ -41,13 +41,13 @@
 版本只有一個來源：根目錄 `CMakeLists.txt` 的 `project()`：
 
 ```cmake
-project(gvfg_standalone VERSION 0.2.0 LANGUAGES CXX)
+project(gvfg_standalone VERSION 0.2.1 LANGUAGES CXX)
 ```
 
-例如準備 `0.2.0` 時改成：
+例如準備 `0.2.1` 時改成：
 
 ```cmake
-project(gvfg_standalone VERSION 0.2.0 LANGUAGES CXX)
+project(gvfg_standalone VERSION 0.2.1 LANGUAGES CXX)
 ```
 
 `sdk/gvfg` 會直接繼承根 project version，並將它編入 `gvfg.dll`。不再存在 `GVFG_SDK_VERSION` cache option，也不應使用 `-DGVFG_SDK_VERSION=...` 覆寫。修改版本後要重新 configure，再重新建置 DLL。

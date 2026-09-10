@@ -16,6 +16,7 @@ namespace
     constexpr uint32_t kMaxChannels = 2;
     constexpr uint32_t kDefaultWidth = 1920;
     constexpr uint32_t kDefaultHeight = 1080;
+    constexpr auto kZeroCopyUnplugGracePeriod = std::chrono::milliseconds(100);
 
     static bool is_write_only_register(uint32_t offset)
     {
@@ -510,6 +511,10 @@ namespace gvfg::internal
             latest_sequence_ = 0;
             delivered_sequence_ = 0;
             wait_timeout_count_ = 0;
+            audio_dma_event_wakes_.store(0, std::memory_order_relaxed);
+            extra_audio_event_wakes_.store(0, std::memory_order_relaxed);
+            audio_frames_from_driver_.store(0, std::memory_order_relaxed);
+            audio_bytes_from_driver_.store(0, std::memory_order_relaxed);
             get_frame_timing_samples_ = 0;
             get_frame_timing_window_samples_ = 0;
             get_frame_timing_total_us_ = 0.0;
@@ -854,6 +859,10 @@ namespace gvfg::internal
                 finishRead();
                 return fail(PCIES2MM_EIO, "wait audio event", err);
             }
+            if (waitResult == WAIT_OBJECT_0)
+                audio_dma_event_wakes_.fetch_add(1, std::memory_order_relaxed);
+            else
+                extra_audio_event_wakes_.fetch_add(1, std::memory_order_relaxed);
             if (!running_.load(std::memory_order_acquire))
             {
                 finishRead();
@@ -880,6 +889,8 @@ namespace gvfg::internal
                     PCIES2MM_LOG("audio frame size mismatch: expected=%u returned=%d",
                                  format.frame_bytes, ret);
                 outBytes = static_cast<uint32_t>(ret);
+                audio_frames_from_driver_.fetch_add(1, std::memory_order_relaxed);
+                audio_bytes_from_driver_.fetch_add(outBytes, std::memory_order_relaxed);
                 finishRead();
                 return PCIES2MM_OK;
             }
@@ -916,10 +927,7 @@ namespace gvfg::internal
             // it after the unplug interrupt. In that exact state, ownership has
             // already been revoked by the driver; clear the matching SDK token
             // so unplug handling and subsequent capture can make progress.
-            const bool revokedByUnplug =
-                err == ERROR_BAD_COMMAND &&
-                signal_presence_known_.load(std::memory_order_acquire) &&
-                !signal_present_.load(std::memory_order_acquire);
+            const bool revokedByUnplug = zero_copy_release_revoked_by_unplug(err, lock);
             if (!revokedByUnplug)
             {
                 lock.unlock();
@@ -954,6 +962,14 @@ namespace gvfg::internal
         outDebugState.capture_active = capture_active_.load(std::memory_order_relaxed) ? 1 : 0;
         outDebugState.latest_sequence = latest_sequence_;
         outDebugState.delivered_sequence = delivered_sequence_;
+        outDebugState.audio_dma_event_wakes =
+            audio_dma_event_wakes_.load(std::memory_order_relaxed);
+        outDebugState.extra_audio_event_wakes =
+            extra_audio_event_wakes_.load(std::memory_order_relaxed);
+        outDebugState.audio_frames_from_driver =
+            audio_frames_from_driver_.load(std::memory_order_relaxed);
+        outDebugState.audio_bytes_from_driver =
+            audio_bytes_from_driver_.load(std::memory_order_relaxed);
         outDebugState.get_frame_zero_copy = zero_copy_enabled_ ? 1 : 0;
         outDebugState.get_frame_timing_samples = get_frame_timing_samples_;
         outDebugState.get_frame_timing_average_us =
@@ -1025,6 +1041,24 @@ namespace gvfg::internal
         return giga_ioctl_release_video_frame(device_handle(), channelIndex) != FALSE;
     }
 
+    bool PcieS2mmCaptureSession::zero_copy_release_revoked_by_unplug(
+        DWORD error, std::unique_lock<std::mutex> &lock)
+    {
+        if (error != ERROR_BAD_COMMAND)
+            return false;
+
+        // The driver can reject release before its unplug event reaches this
+        // thread. Wait only on this error path and accept it only if the event
+        // monitor confirms that the signal disappeared within the grace period.
+        const auto signalDisconnected = [this] {
+            return signal_presence_known_.load(std::memory_order_acquire) &&
+                   !signal_present_.load(std::memory_order_acquire);
+        };
+        return signalDisconnected() ||
+               signal_presence_cv_.wait_for(lock, kZeroCopyUnplugGracePeriod,
+                                            signalDisconnected);
+    }
+
     pcies2mm_status_t PcieS2mmCaptureSession::release_all_zero_copy_frames(bool includeInUse)
     {
         std::unique_lock<std::mutex> lock(mutex_);
@@ -1033,10 +1067,7 @@ namespace gvfg::internal
         if (zero_copy_enabled_ && held_frame_.data && !release_zero_copy_frame(active_channel()))
         {
             const DWORD err = GetLastError();
-            const bool revokedByUnplug =
-                err == ERROR_BAD_COMMAND &&
-                signal_presence_known_.load(std::memory_order_acquire) &&
-                !signal_present_.load(std::memory_order_acquire);
+            const bool revokedByUnplug = zero_copy_release_revoked_by_unplug(err, lock);
             if (!revokedByUnplug)
             {
                 lock.unlock();
@@ -1372,6 +1403,7 @@ namespace gvfg::internal
         stream_ready_pending_.store(false, std::memory_order_release);
         signal_present_.store(false, std::memory_order_release);
         signal_presence_known_.store(true, std::memory_order_release);
+        signal_presence_cv_.notify_all();
         capture_active_ = false;
         if (dma_event_)
             SetEvent(dma_event_);

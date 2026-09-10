@@ -74,6 +74,8 @@ namespace gvfg::internal
         bool stop_capture(uint32_t channelIndex) const;
         bool acquire_zero_copy_frame(uint32_t channelIndex, const uint8_t *&outData) const;
         bool release_zero_copy_frame(uint32_t channelIndex) const;
+        bool zero_copy_release_revoked_by_unplug(
+            DWORD error, std::unique_lock<std::mutex> &lock);
         pcies2mm_status_t release_all_zero_copy_frames(bool includeInUse);
         bool register_event(uint32_t channelIndex, uint32_t eventType, HANDLE eventHandle);
         void unregister_event(uint32_t channelIndex, uint32_t eventType);
@@ -137,6 +139,7 @@ namespace gvfg::internal
 
         mutable std::mutex mutex_;
         std::condition_variable read_finished_cv_;
+        std::condition_variable signal_presence_cv_;
         mutable std::mutex event_callback_mutex_;
         pcies2mm_event_callback_t event_callback_ = nullptr;
         void *event_callback_user_ = nullptr;
@@ -144,6 +147,10 @@ namespace gvfg::internal
         uint64_t latest_sequence_ = 0;
         uint64_t delivered_sequence_ = 0;
         uint64_t wait_timeout_count_ = 0;
+        std::atomic<uint64_t> audio_dma_event_wakes_{0};
+        std::atomic<uint64_t> extra_audio_event_wakes_{0};
+        std::atomic<uint64_t> audio_frames_from_driver_{0};
+        std::atomic<uint64_t> audio_bytes_from_driver_{0};
         uint64_t get_frame_timing_samples_ = 0;
         uint32_t get_frame_timing_window_samples_ = 0;
         double get_frame_timing_total_us_ = 0.0;

@@ -656,6 +656,10 @@ struct gvfg_channel_session_t
             out.backend_capture_active = debugState.capture_active;
             out.backend_latest_sequence = debugState.latest_sequence;
             out.backend_delivered_sequence = debugState.delivered_sequence;
+            out.audio_dma_event_wakes = debugState.audio_dma_event_wakes;
+            out.extra_audio_event_wakes = debugState.extra_audio_event_wakes;
+            out.audio_frames_from_driver = debugState.audio_frames_from_driver;
+            out.audio_bytes_from_driver = debugState.audio_bytes_from_driver;
             out.get_frame_zero_copy = debugState.get_frame_zero_copy;
             out.get_frame_timing_samples = debugState.get_frame_timing_samples;
             out.get_frame_timing_average_us = debugState.get_frame_timing_average_us;

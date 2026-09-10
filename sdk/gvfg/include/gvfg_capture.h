@@ -576,7 +576,7 @@ extern "C"
         _In_ int channel_index,
         _Out_ gvfg_runtime_info_t *out_info);
 
-    /* Return the loaded GVFG runtime DLL version, for example "0.2.0". */
+    /* Return the loaded GVFG runtime DLL version, for example "0.2.1". */
     GVFG_API const char *gvfg_get_version(void);
 
     /* Convert a gvfg_pixel_format_t value to a static English format name. */

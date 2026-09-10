@@ -612,6 +612,7 @@ void MainWindow::startCapture(int channelIndex)
         channel.audioMaxReadGapMs = 0;
     }
 #if GVFG_INTERNAL_DIAGNOSTICS
+    channel.audioReceivedFrames = 0;
     channel.haveDebugBaseline = false;
     channel.lastDebugDmaErrors = 0;
 #endif
@@ -828,6 +829,30 @@ void MainWindow::updateSignalStatus(bool queryHardware)
                                .arg(channel.audioFormat.sample_rate)
                                .arg(channel.audioFormat.channels)
                                .arg(channel.audioFormat.bits_per_sample);
+#if GVFG_INTERNAL_DIAGNOSTICS
+            uint64_t sdkFrames = 0;
+            uint64_t sdkBytes = 0;
+            uint64_t appOutputBytes = 0;
+            {
+                std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
+                sdkFrames = channel.audioReceivedFrames;
+                sdkBytes = channel.audioReceivedBytes;
+                appOutputBytes = channel.audioAcceptedBytes;
+            }
+            gvfg_debug_backend_stats_t audioStats{};
+            if (gvfg_debug_get_channel_backend_stats(handle_, channelIndex, &audioStats) == GVFG_OK)
+            {
+                statusLines << QStringLiteral("CH%1 Audio Debug | Events DMA=%2 Extra=%3 | Driver->SDK %4 frames/%5 bytes | SDK->APP %6 frames/%7 bytes | APP->Output %8 bytes")
+                                   .arg(channelIndex)
+                                   .arg(static_cast<qulonglong>(audioStats.audio_dma_event_wakes))
+                                   .arg(static_cast<qulonglong>(audioStats.extra_audio_event_wakes))
+                                   .arg(static_cast<qulonglong>(audioStats.audio_frames_from_driver))
+                                   .arg(static_cast<qulonglong>(audioStats.audio_bytes_from_driver))
+                                   .arg(static_cast<qulonglong>(sdkFrames))
+                                   .arg(static_cast<qulonglong>(sdkBytes))
+                                   .arg(static_cast<qulonglong>(appOutputBytes));
+            }
+#endif
         }
         statusLines << QStringLiteral("CH%1 Preview | %2 FPS | %3")
                            .arg(channelIndex)
@@ -1430,6 +1455,9 @@ void MainWindow::audioReadLoop(int channelIndex)
             }
             channel.audioLastId = audioId;
             channel.audioReceivedBytes += frame.data_size;
+#if GVFG_INTERNAL_DIAGNOSTICS
+            ++channel.audioReceivedFrames;
+#endif
         }
         lastArrival = arrival;
         std::vector<uint8_t> pcm(frame.data_size);

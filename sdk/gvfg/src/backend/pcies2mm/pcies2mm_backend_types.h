@@ -84,6 +84,10 @@ typedef struct pcies2mm_debug_state_t
     int capture_active;
     uint64_t latest_sequence;
     uint64_t delivered_sequence;
+    uint64_t audio_dma_event_wakes;
+    uint64_t extra_audio_event_wakes;
+    uint64_t audio_frames_from_driver;
+    uint64_t audio_bytes_from_driver;
     int get_frame_zero_copy;
     uint64_t get_frame_timing_samples;
     double get_frame_timing_average_us;

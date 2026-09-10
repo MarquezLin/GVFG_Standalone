@@ -14,9 +14,15 @@ if "%~1"=="" (
     set "OUTPUT_DIR=%~1"
 )
 
-for /f %%I in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Date -Format yyyyMMdd_HHmmss"') do set "STAMP=%%I"
+for /f %%I in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Date -Format yyyyMMdd_HHmm"') do set "STAMP=%%I"
+for /f "tokens=3" %%I in ('findstr /C:"project(gvfg_standalone VERSION" "%PROJECT_DIR%\CMakeLists.txt"') do set "PACKAGE_VERSION=%%I"
 
-set "PACKAGE_NAME=GVFG_Qt_Preview_Debug_%STAMP%"
+if not defined PACKAGE_VERSION (
+    echo [package] ERROR: Project version not found in CMakeLists.txt.
+    goto fail
+)
+
+set "PACKAGE_NAME=GVFG_Sample_Debug_%STAMP%_%PACKAGE_VERSION%"
 set "ZIP_PATH=%OUTPUT_DIR%\%PACKAGE_NAME%.zip"
 set "STAGE_ROOT=%TEMP%\%PACKAGE_NAME%_%RANDOM%"
 set "STAGE_DIR=%STAGE_ROOT%\%PACKAGE_NAME%"
