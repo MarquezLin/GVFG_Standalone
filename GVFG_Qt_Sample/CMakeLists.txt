@@ -19,8 +19,14 @@ endif()
 
 set(GVFG_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../GVFG_SDK"
     CACHE PATH "GVFG SDK source root containing public headers")
-set(GVFG_SDK_BUILD_DIR "${GVFG_SDK_ROOT}/build"
-    CACHE PATH "Prebuilt GVFG SDK directory containing bin and lib")
+set(_GVFG_DEFAULT_RELEASE_DIR
+    "${GVFG_SDK_ROOT}/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release")
+set(GVFG_SDK_RELEASE_DIR "${_GVFG_DEFAULT_RELEASE_DIR}"
+    CACHE PATH "One fixed Release GVFG SDK build directory containing bin and lib")
+if (GVFG_SDK_RELEASE_DIR STREQUAL "${GVFG_SDK_ROOT}/build-release")
+  set(GVFG_SDK_RELEASE_DIR "${_GVFG_DEFAULT_RELEASE_DIR}"
+      CACHE PATH "One fixed Release GVFG SDK build directory containing bin and lib" FORCE)
+endif()
 
 set(_GVFG_INCLUDE_DIR "${GVFG_SDK_ROOT}/sdk/gvfg/include")
 set(_GVFG_PREVIEW_INCLUDE_DIR "${GVFG_SDK_ROOT}/helpers/gvfg_preview/include")
@@ -35,31 +41,12 @@ else()
   message(FATAL_ERROR "Unsupported compiler. Use MSVC or MinGW on Windows x64.")
 endif()
 
-# Accept either one exact SDK build directory or the parent `build` directory
-# created by Qt Creator. In the latter case, select the current configuration's
-# child only when it contains this compiler's import libraries.
-set(_GVFG_RESOLVED_BUILD_DIR "${GVFG_SDK_BUILD_DIR}")
-if (NOT EXISTS "${_GVFG_RESOLVED_BUILD_DIR}/lib/${_GVFG_IMPLIB_NAME}")
-  if (CMAKE_BUILD_TYPE)
-    file(GLOB _GVFG_BUILD_CANDIDATES LIST_DIRECTORIES true
-      "${GVFG_SDK_BUILD_DIR}/*-${CMAKE_BUILD_TYPE}")
-    foreach(_candidate IN LISTS _GVFG_BUILD_CANDIDATES)
-      if (EXISTS "${_candidate}/bin/gvfg.dll" AND
-          EXISTS "${_candidate}/lib/${_GVFG_IMPLIB_NAME}" AND
-          EXISTS "${_candidate}/lib/${_GVFG_PREVIEW_IMPLIB_NAME}")
-        set(_GVFG_RESOLVED_BUILD_DIR "${_candidate}")
-        break()
-      endif()
-    endforeach()
-  endif()
-endif()
-
-set(_GVFG_BIN_DIR "${_GVFG_RESOLVED_BUILD_DIR}/bin")
-set(_GVFG_LIB_DIR "${_GVFG_RESOLVED_BUILD_DIR}/lib")
+set(_GVFG_BIN_DIR "${GVFG_SDK_RELEASE_DIR}/bin")
+set(_GVFG_LIB_DIR "${GVFG_SDK_RELEASE_DIR}/lib")
 set(_GVFG_IMPLIB "${_GVFG_LIB_DIR}/${_GVFG_IMPLIB_NAME}")
 set(_GVFG_PREVIEW_IMPLIB "${_GVFG_LIB_DIR}/${_GVFG_PREVIEW_IMPLIB_NAME}")
 
-message(STATUS "GVFG SDK build: ${_GVFG_RESOLVED_BUILD_DIR}")
+message(STATUS "GVFG SDK Release build: ${GVFG_SDK_RELEASE_DIR}")
 
 foreach(_required_file
     "${_GVFG_INCLUDE_DIR}/gvfg_capture.h"
@@ -72,7 +59,7 @@ foreach(_required_file
   if (NOT EXISTS "${_required_file}")
     message(FATAL_ERROR
       "Required prebuilt GVFG SDK file was not found: ${_required_file}\n"
-      "Build/install GVFG_SDK first or set GVFG_SDK_BUILD_DIR.")
+      "Build GVFG_SDK Release first or set GVFG_SDK_RELEASE_DIR.")
   endif()
 endforeach()
 

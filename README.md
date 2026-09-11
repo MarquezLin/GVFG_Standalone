@@ -36,44 +36,40 @@ DLL export 清單同步產生 MinGW `.dll.a`；兩種上層共用同一組 MSVC 
 範例：
 
 ```bat
-cmake -S GVFG_SDK -B GVFG_SDK/build
-cmake --build GVFG_SDK/build --config Release
+cmake -S GVFG_SDK -B GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release
+cmake --build GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release --config Release
 
-cmake -S GVFG_Qt_Sample -B GVFG_Qt_Sample/build ^
+cmake -S GVFG_Qt_Sample -B GVFG_Qt_Sample/build-release ^
   -DCMAKE_PREFIX_PATH=C:\Qt\6.10.2\msvc2022_64 ^
-  -DGVFG_SDK_BUILD_DIR=%CD%\GVFG_SDK\build
-cmake --build GVFG_Qt_Sample/build --config Release
+  -DGVFG_SDK_RELEASE_DIR=%CD%\GVFG_SDK\build\Desktop_Qt_6_10_2_MSVC2022_64bit-Release
+cmake --build GVFG_Qt_Sample/build-release --config Release
 ```
 
-Qt Sample 必須從 `GVFG_SDK_BUILD_DIR` 找到已建立的 DLL 與對應 compiler
-的 import library。它不會使用 `add_subdirectory()` 將 SDK source 編入 APP。
+Qt Sample 只從一個固定的 `GVFG_SDK_RELEASE_DIR` 找 DLL 與對應 compiler
+的 import library，不再依 Sample configuration 搜尋不同 SDK build。
+它不會使用 `add_subdirectory()` 將 SDK source 編入 APP。
 
 ```text
 GVFG_SDK_ROOT=<path-to-GVFG_SDK>
-GVFG_SDK_BUILD_DIR=<path-to-prebuilt-SDK-build>
+GVFG_SDK_RELEASE_DIR=<path-to-one-Release-SDK-build>
 ```
 
-公司內部 diagnostic build 使用：
-
-```bat
-cmake -S GVFG_Qt_Sample -B GVFG_Qt_Sample/build_internal ^
-  -DCMAKE_PREFIX_PATH=C:\Qt\6.10.2\msvc2022_64 ^
-  -DGVFG_SDK_BUILD_DIR=%CD%\GVFG_SDK\build
-cmake --build GVFG_Qt_Sample/build_internal --config Debug
-```
+目前內部開發也統一使用上述 Release 流程，不另外維護 SDK/Sample 的
+Debug 配對。內部 header、診斷程式碼與 source 仍保留在 repository；等正式
+發布客戶套件時，再整理實際交付的 public header、LIB、DLL 與文件。
 
 Build 產物：
 
 ```text
-GVFG_SDK/build/bin/gvfg.dll
-GVFG_SDK/build/bin/giga_ioctl.dll
-GVFG_SDK/build/bin/gvfg_preview.dll
-GVFG_SDK/build/lib/gvfg.lib
-GVFG_SDK/build/lib/giga_ioctl.lib
-GVFG_SDK/build/lib/gvfg_preview.lib
-GVFG_SDK/build/lib/libgvfg.dll.a
-GVFG_SDK/build/lib/libgvfg_preview.dll.a
-GVFG_Qt_Sample/build/bin/gvfg_qt_preview.exe
+GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/bin/gvfg.dll
+GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/bin/giga_ioctl.dll
+GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/bin/gvfg_preview.dll
+GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/gvfg.lib
+GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/giga_ioctl.lib
+GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/gvfg_preview.lib
+GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/libgvfg.dll.a
+GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/libgvfg_preview.dll.a
+GVFG_Qt_Sample/build-release/bin/gvfg_qt_preview.exe
 ```
 
 MSVC 上層連結 `gvfg.lib` 與 `gvfg_preview.lib`；MinGW 上層連結
