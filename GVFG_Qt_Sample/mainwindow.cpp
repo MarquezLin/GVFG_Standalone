@@ -76,7 +76,10 @@ MainWindow::MainWindow(QWidget *parent)
                 if (width > 0 && height > 0) previewWindows_[channel]->setSourceSize(width, height);
             });
     connect(controller_, &CaptureController::previewShowRequested, this,
-            [this](int channel) { previewWindows_[channel]->showPreview(); });
+            [this](int channel) {
+                previewWindows_[channel]->showPreview();
+                controller_->setPreviewTarget(channel, previewWindows_[channel]->nativePreviewHandle());
+            });
     connect(controller_, &CaptureController::previewCloseRequested, this,
             [this](int channel) { previewWindows_[channel]->closePreview(); });
 
@@ -159,6 +162,7 @@ void MainWindow::showPreviewWindow(int channel, bool fullscreen)
         previewWindows_[channel]->setSourceSize(signal.width, signal.height);
     if (fullscreen) previewWindows_[channel]->showFullscreenPreview();
     else previewWindows_[channel]->showPreview();
+    controller_->setPreviewTarget(channel, previewWindows_[channel]->nativePreviewHandle());
     if (!controller_->applyPreview(channel))
         controller_->logUiMessage(
             fullscreen
