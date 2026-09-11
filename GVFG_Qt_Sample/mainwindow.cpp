@@ -610,6 +610,7 @@ void MainWindow::startCapture(int channelIndex)
                                   std::memory_order_release);
     channel.stopRequested.store(false, std::memory_order_release);
     channel.running.store(true, std::memory_order_release);
+    channel.captureThreadExited.store(false, std::memory_order_release);
     channel.captureThread = std::thread([this, channelIndex]()
                                         { captureReadLoop(channelIndex); });
     if (audioEnabled)
@@ -1355,6 +1356,7 @@ void MainWindow::captureReadLoop(int channelIndex)
                                   { showError(QStringLiteral("gvfg_read_channel_frame"), st, channelIndex); }, Qt::QueuedConnection);
         break;
     }
+    channel.captureThreadExited.store(true, std::memory_order_release);
 }
 
 void MainWindow::joinCaptureThread(int channel)
@@ -1363,7 +1365,7 @@ void MainWindow::joinCaptureThread(int channel)
     {
         // The capture worker can wait behind preview resource updates. Keep
         // DXGI's synchronous HWND messages flowing while joining it.
-        while (WaitForSingleObject(channels_[channel].captureThread.native_handle(), 0) == WAIT_TIMEOUT)
+        while (!channels_[channel].captureThreadExited.load(std::memory_order_acquire))
         {
             MsgWaitForMultipleObjectsEx(0, nullptr, 1, QS_SENDMESSAGE, MWMO_INPUTAVAILABLE);
             MSG message{};

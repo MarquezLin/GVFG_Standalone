@@ -4,6 +4,7 @@ set(_GVFG_VERSION "${PROJECT_VERSION}")
 project(gvfg VERSION ${_GVFG_VERSION} LANGUAGES CXX)
 
 add_library(gvfg SHARED
+    gvfg.def
     include/gvfg_capture.h
     include/gvfg_debug.h
     src/backend/pcies2mm/pcies2mm_backend_types.h
@@ -58,6 +59,18 @@ if (MSVC)
   target_compile_options(gvfg PRIVATE /utf-8 /EHsc)
 endif()
 
+if (MSVC AND GVFG_MINGW_DLLTOOL)
+  add_custom_command(TARGET gvfg POST_BUILD
+    COMMAND "${GVFG_MINGW_DLLTOOL}"
+      -d "${CMAKE_CURRENT_SOURCE_DIR}/gvfg.def"
+      -D gvfg.dll
+      -l libgvfg.dll.a
+    WORKING_DIRECTORY "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}"
+    COMMENT "Generating MinGW import library for gvfg.dll"
+    VERBATIM
+  )
+endif()
+
 install(TARGETS gvfg
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -66,3 +79,9 @@ install(TARGETS gvfg
 install(FILES include/gvfg_capture.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+
+if (MSVC AND GVFG_MINGW_DLLTOOL)
+  install(FILES "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/libgvfg.dll.a"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  )
+endif()

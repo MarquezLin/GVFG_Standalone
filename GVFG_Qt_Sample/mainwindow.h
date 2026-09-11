@@ -51,6 +51,7 @@ private:
         std::condition_variable signalReady;
         std::atomic<bool> frameAvailable{false};
         std::atomic<bool> previewVisible{false};
+        std::atomic<bool> captureThreadExited{true};
         std::thread captureThread;
         std::thread audioThread;
         std::thread audioPlaybackThread;

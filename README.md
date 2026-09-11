@@ -24,6 +24,8 @@ done-index 與舊 SDK frame-ring 流程不在相容範圍內。
 
 先使用 MSVC 建立 SDK，再使用需要的 Qt kit 建立 Sample。兩個 project
 使用不同 build directory，切換 Qt compiler 不會重新編譯 SDK source。
+SDK build 會保留 MSVC `.lib`，並在找到 MinGW `dlltool` 時從固定的
+DLL export 清單同步產生 MinGW `.dll.a`；兩種上層共用同一組 MSVC DLL。
 
 範例：
 
@@ -63,8 +65,14 @@ GVFG_SDK/build/bin/gvfg_preview.dll
 GVFG_SDK/build/lib/gvfg.lib
 GVFG_SDK/build/lib/giga_ioctl.lib
 GVFG_SDK/build/lib/gvfg_preview.lib
+GVFG_SDK/build/lib/libgvfg.dll.a
+GVFG_SDK/build/lib/libgvfg_preview.dll.a
 GVFG_Qt_Sample/build/bin/gvfg_qt_preview.exe
 ```
+
+MSVC 上層連結 `gvfg.lib` 與 `gvfg_preview.lib`；MinGW 上層連結
+`libgvfg.dll.a` 與 `libgvfg_preview.dll.a`。如果 CMake 找不到 `dlltool`，
+可在 SDK configure 時指定 `-DGVFG_MINGW_DLLTOOL=<path-to-dlltool.exe>`。
 
 ## Driver compatibility
 

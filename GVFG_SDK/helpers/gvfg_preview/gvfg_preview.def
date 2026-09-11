@@ -1,0 +1,15 @@
+LIBRARY gvfg_preview
+
+EXPORTS
+    gvfg_preview_get_delivery_stats
+    gvfg_preview_wait_idle
+    gvfg_preview_create
+    gvfg_preview_destroy
+    gvfg_preview_attach_window
+    gvfg_preview_prepare
+    gvfg_preview_render_frame
+    gvfg_preview_clear
+    gvfg_preview_get_info
+    gvfg_preview_get_stats
+    gvfg_preview_shutdown
+    gvfg_preview_strerror

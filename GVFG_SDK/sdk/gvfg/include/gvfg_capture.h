@@ -43,8 +43,11 @@
  *   a separate worker thread when reading video and audio concurrently.
  */
 
-#ifdef _WIN32
+#if defined(_WIN32) && defined(_MSC_VER)
 #include <sal.h>
+#endif
+
+#ifdef _WIN32
 #ifdef GVFG_BUILD
 #define GVFG_API __declspec(dllexport)
 #else
@@ -52,6 +55,9 @@
 #endif
 #else
 #define GVFG_API
+#endif
+
+#if !defined(_MSC_VER)
 #ifndef _In_
 #define _In_
 #endif
@@ -69,6 +75,9 @@
 #endif
 #ifndef _Out_writes_to_opt_
 #define _Out_writes_to_opt_(size, count)
+#endif
+#ifndef _Out_writes_bytes_
+#define _Out_writes_bytes_(size)
 #endif
 #endif
 
