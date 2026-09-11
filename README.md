@@ -1,6 +1,6 @@
 # GVFG Standalone SDK
 
-這是 GVFG capture SDK 的 standalone source tree。
+這個 repository 將 GVFG SDK 與 Qt Sample 分成兩個獨立 CMake project。
 
 這個 repo 以 GVFG 為 source of truth。其他專案應該透過 public header、
 import library、runtime DLL 來使用 GVFG，不要直接把 GVFG source 編進去。
@@ -12,9 +12,8 @@ done-index 與舊 SDK frame-ring 流程不在相容範圍內。
 
 ## 內容
 
-- `sdk/gvfg`：GVFG customer C API、internal debug API、PCIES2MM backend。
-- `helpers/gvfg_preview`：可選的 preview helper DLL，在 `gvfg_read_channel_frame()` 後使用。
-- `samples/gvfg_qt_preview`：Qt preview sample；診斷功能由 build option 控制。
+- `GVFG_SDK`：獨立 SDK project，負責建立 `gvfg.dll`、`giga_ioctl.dll` 與選用的 `gvfg_preview.dll`。
+- `GVFG_Qt_Sample`：獨立 Qt APP project，只連結預先建好的 SDK，不會編譯 SDK source。
 - `docs`：API 與整合說明。
 
 客戶使用指南在 `docs/GVFG_CUSTOMER_API.md`，完整函式與結構參考在
@@ -23,40 +22,48 @@ done-index 與舊 SDK frame-ring 流程不在相容範圍內。
 
 ## Build
 
-可以用 Windows MSVC Qt kit 在 Qt Creator 打開此資料夾的 `CMakeLists.txt`，
-或在 Visual Studio developer shell 裡 configure。
+先使用 MSVC 建立 SDK，再使用需要的 Qt kit 建立 Sample。兩個 project
+使用不同 build directory，切換 Qt compiler 不會重新編譯 SDK source。
 
 範例：
 
 ```bat
-cmake -S . -B build -DBUILD_GVFG_SAMPLES=ON -DCMAKE_PREFIX_PATH=C:\Qt\6.10.2\msvc2022_64
-cmake --build build --target gvfg_qt_preview --config Release
+cmake -S GVFG_SDK -B GVFG_SDK/build
+cmake --build GVFG_SDK/build --config Release
+
+cmake -S GVFG_Qt_Sample -B GVFG_Qt_Sample/build ^
+  -DCMAKE_PREFIX_PATH=C:\Qt\6.10.2\msvc2022_64 ^
+  -DGVFG_SDK_BUILD_DIR=%CD%\GVFG_SDK\build
+cmake --build GVFG_Qt_Sample/build --config Release
 ```
 
-常用 CMake options：
+Qt Sample 必須從 `GVFG_SDK_BUILD_DIR` 找到已建立的 DLL 與對應 compiler
+的 import library。它不會使用 `add_subdirectory()` 將 SDK source 編入 APP。
 
 ```text
-BUILD_GVFG_SAMPLES=ON
+GVFG_SDK_ROOT=<path-to-GVFG_SDK>
+GVFG_SDK_BUILD_DIR=<path-to-prebuilt-SDK-build>
 ```
 
 公司內部 diagnostic build 使用：
 
 ```bat
-cmake -S . -B build_internal ^
-  -DCMAKE_PREFIX_PATH=C:\Qt\6.10.2\msvc2022_64
-cmake --build build_internal --target gvfg_qt_preview --config Debug
+cmake -S GVFG_Qt_Sample -B GVFG_Qt_Sample/build_internal ^
+  -DCMAKE_PREFIX_PATH=C:\Qt\6.10.2\msvc2022_64 ^
+  -DGVFG_SDK_BUILD_DIR=%CD%\GVFG_SDK\build
+cmake --build GVFG_Qt_Sample/build_internal --config Debug
 ```
 
 Build 產物：
 
 ```text
-build/.../bin/gvfg.dll
-build/.../bin/giga_ioctl.dll
-build/.../bin/gvfg_preview.dll
-build/.../lib/gvfg.lib
-build/.../lib/giga_ioctl.lib
-build/.../lib/gvfg_preview.lib
-build/.../bin/gvfg_qt_preview.exe
+GVFG_SDK/build/bin/gvfg.dll
+GVFG_SDK/build/bin/giga_ioctl.dll
+GVFG_SDK/build/bin/gvfg_preview.dll
+GVFG_SDK/build/lib/gvfg.lib
+GVFG_SDK/build/lib/giga_ioctl.lib
+GVFG_SDK/build/lib/gvfg_preview.lib
+GVFG_Qt_Sample/build/bin/gvfg_qt_preview.exe
 ```
 
 ## Driver compatibility
