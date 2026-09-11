@@ -1,6 +1,5 @@
 #include "mainwindow.h"
 #include "capture_controller.h"
-#include "gvfg_api.h"
 #include "previewwindow.h"
 #include "ui_mainwindow.h"
 
@@ -61,6 +60,7 @@ MainWindow::MainWindow(QWidget *parent)
         connect(previewWindows_[channel], &PreviewWindow::previewVisibilityChanged,
                 this, [this, channel](bool visible) { controller_->setPreviewVisible(channel, visible); });
     }
+    controller_->setChannelStatusVisible(GVFG_CHANNEL_1, kChannel1UiVisible);
 
     connect(controller_, &CaptureController::devicesChanged, this, [this](const QStringList &names) {
         ui_->deviceCombo->clear();
@@ -71,7 +71,6 @@ MainWindow::MainWindow(QWidget *parent)
     connect(controller_, &CaptureController::stateChanged, this, &MainWindow::updateUiState);
     connect(controller_, &CaptureController::statusChanged, ui_->statusLabel, &QLabel::setText);
     connect(controller_, &CaptureController::logMessage, this, &MainWindow::appendLogLine);
-    connect(controller_, &CaptureController::errorOccurred, this, &MainWindow::showError);
     connect(controller_, &CaptureController::previewSourceSizeChanged, this,
             [this](int channel, int width, int height) {
                 if (width > 0 && height > 0) previewWindows_[channel]->setSourceSize(width, height);
@@ -84,7 +83,12 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui_->refreshButton, &QPushButton::clicked, controller_, &CaptureController::refreshDevices);
     connect(ui_->openButton, &QPushButton::clicked, this, [this] {
         if (controller_->deviceOpen()) controller_->closeDevice();
-        else { controller_->setSelectedDeviceIndex(ui_->deviceCombo->currentData().toInt()); controller_->openDevice(); }
+        else {
+            syncControllerOptions(GVFG_CHANNEL_0);
+            syncControllerOptions(GVFG_CHANNEL_1);
+            controller_->setSelectedDeviceIndex(ui_->deviceCombo->currentData().toInt());
+            controller_->openDevice();
+        }
     });
     connect(ui_->ch0StartButton, &QPushButton::clicked, this, [this] { syncControllerOptions(0); controller_->startCapture(0); });
     connect(ui_->ch1StartButton, &QPushButton::clicked, this, [this] { syncControllerOptions(1); controller_->startCapture(1); });
@@ -103,16 +107,27 @@ MainWindow::MainWindow(QWidget *parent)
     };
     connect(ui_->ch0OutputFormatCombo, &QComboBox::currentIndexChanged, this, [formatChanged](int) { formatChanged(0); });
     connect(ui_->ch1OutputFormatCombo, &QComboBox::currentIndexChanged, this, [formatChanged](int) { formatChanged(1); });
+    connect(ui_->ch0ZeroCopyCheckBox, &QCheckBox::toggled, this, [this](bool) {
+        syncControllerOptions(GVFG_CHANNEL_0);
+        if (controller_->deviceOpen()) controller_->updateSignalStatus(false);
+    });
+    connect(ui_->ch1ZeroCopyCheckBox, &QCheckBox::toggled, this, [this](bool) {
+        syncControllerOptions(GVFG_CHANNEL_1);
+        if (controller_->deviceOpen()) controller_->updateSignalStatus(false);
+    });
 
     updateOutputFormatOptions();
     updateUiState();
-    appendLogLine(QStringLiteral("GVFG SDK version | %1").arg(controller_->sdkVersion()));
+    controller_->logStartupInfo();
     controller_->refreshDevices();
 }
 
 MainWindow::~MainWindow()
 {
     controller_->closeDevice();
+    QObject::disconnect(controller_, nullptr, nullptr, nullptr);
+    delete controller_;
+    controller_ = nullptr;
     delete previewWindows_[0];
     delete previewWindows_[1];
     delete ui_;
@@ -144,7 +159,11 @@ void MainWindow::showPreviewWindow(int channel, bool fullscreen)
         previewWindows_[channel]->setSourceSize(signal.width, signal.height);
     if (fullscreen) previewWindows_[channel]->showFullscreenPreview();
     else previewWindows_[channel]->showPreview();
-    controller_->applyPreview(channel);
+    if (!controller_->applyPreview(channel))
+        controller_->logUiMessage(
+            fullscreen
+                ? QStringLiteral("CH%1 Fullscreen Preview failed: unable to update preview window").arg(channel)
+                : QStringLiteral("CH%1 Show Preview failed: unable to update preview window").arg(channel));
 }
 
 void MainWindow::updateOutputFormatOptions(int changedChannel)
@@ -161,6 +180,10 @@ void MainWindow::updateOutputFormatOptions(int changedChannel)
     {
         auto *model = qobject_cast<QStandardItemModel *>(combos[channel]->model());
         if (model && model->item(y210)) model->item(y210)->setEnabled(enabled[channel]);
+        combos[channel]->setToolTip(
+            enabled[channel]
+                ? QStringLiteral("Requested CH%1 capture output format").arg(channel)
+                : QStringLiteral("Y210 is already selected by the other channel"));
     }
 }
 
@@ -184,14 +207,6 @@ void MainWindow::updateUiState()
     ui_->ch1ZeroCopyCheckBox->setEnabled(!controller_->channelOpened(1));
     ui_->ch0AudioCheckBox->setEnabled(!running[0]);
     ui_->channel1GroupBox->setVisible(kChannel1UiVisible);
-}
-
-void MainWindow::showError(const QString &apiName, gvfg_status_t status, int channel, const QString &detail)
-{
-    QString message = QStringLiteral("%1 failed: %2").arg(apiName, QString::fromUtf8(gvfg_api::statusText(status)));
-    if (channel == 0 || channel == 1) message.prepend(QStringLiteral("CH%1 ").arg(channel));
-    if (!detail.isEmpty()) message += QStringLiteral(" | %1").arg(detail);
-    appendLogLine(message);
 }
 
 void MainWindow::appendLogLine(const QString &line) { ui_->logEdit->appendPlainText(line); }

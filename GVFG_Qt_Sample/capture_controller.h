@@ -1,7 +1,7 @@
 #pragma once
 
-#include "gvfg_api.h"
 #include <gvfg_capture.h>
+#include <gvfg_debug.h>
 #include <gvfg_preview.h>
 
 #include <QFile>
@@ -30,15 +30,18 @@ public:
 
     void setSelectedDeviceIndex(int index) { selectedDeviceIndex_ = index; }
     void setChannelOptions(int channel, bool zeroCopy, gvfg_pixel_format_t format, bool audioEnabled);
+    void setChannelStatusVisible(int channel, bool visible);
     void setPreviewTarget(int channel, void *nativeWindow);
     void setPreviewVisible(int channel, bool visible);
 
-    bool deviceOpen() const { return client_.valid(); }
+    bool deviceOpen() const { return handle_ != nullptr; }
     bool channelOpened(int channel) const;
     bool channelRunning(int channel) const;
     bool frameAvailable(int channel) const;
     bool cachedSignalStatus(int channel, gvfg_signal_status_t *status) const;
     QString sdkVersion() const;
+    void logStartupInfo();
+    void logUiMessage(const QString &message);
 
 public slots:
     void refreshDevices();
@@ -57,7 +60,6 @@ signals:
     void stateChanged();
     void statusChanged(const QString &text);
     void logMessage(const QString &message);
-    void errorOccurred(const QString &apiName, gvfg_status_t status, int channel, const QString &detail);
     void previewSourceSizeChanged(int channel, int width, int height);
     void previewShowRequested(int channel);
     void previewCloseRequested(int channel);
@@ -124,9 +126,10 @@ private:
     static constexpr qint64 kMaxLogFileBytes = 20ll * 1024ll * 1024ll;
     std::array<gvfg_device_info_t, GVFG_MAX_DEVICES> devices_{};
     int deviceCount_ = 0;
-    GvfgClient client_;
+    gvfg_handle handle_ = nullptr;
     int selectedDeviceIndex_ = -1;
     std::array<ChannelRuntime, 2> channels_{};
+    std::array<bool, 2> channelStatusVisible_{{true, true}};
     QTimer *runtimeStatusTimer_ = nullptr;
     QString lastSignalStatusText_;
     QFile logFile_;

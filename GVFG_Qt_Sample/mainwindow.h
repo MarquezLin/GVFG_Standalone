@@ -29,8 +29,6 @@ private:
     void showPreviewWindow(int channel, bool fullscreen);
     void updateOutputFormatOptions(int changedChannel = -1);
     void updateUiState();
-    void showError(const QString &apiName, gvfg_status_t status, int channel,
-                   const QString &detail);
     void appendLogLine(const QString &line);
 
     Ui::MainWindow *ui_ = nullptr;

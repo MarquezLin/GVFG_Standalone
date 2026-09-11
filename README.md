@@ -20,7 +20,7 @@ Qt Sample 的 source boundary：
 
 - `mainwindow.cpp`：Widget 建立、signal/slot、畫面狀態與使用者操作。
 - `capture_controller.cpp/.h`：不依賴 UI widget 的裝置/channel lifecycle、video/audio worker、preview submission、狀態與 log 資料流。
-- `gvfg_api.cpp/.h`：唯一直接呼叫 `gvfg_*` 與 `gvfg_preview_*` C API 的 application adapter；`GvfgClient` 以 RAII 管理 capture handle。
+- `capture_controller.cpp/.h` 直接示範公開的 GVFG C API，並明確管理 `gvfg_create()`／停止流程／`gvfg_destroy()`，不建立重複轉呼叫層。
 
 客戶使用指南在 `docs/GVFG_CUSTOMER_API.md`，完整函式與結構參考在
 `docs/GVFG_CUSTOMER_API_REFERENCE.md`。內部架構、package
