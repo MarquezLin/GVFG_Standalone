@@ -1097,6 +1097,14 @@ extern "C"
                               sizeof(out_devices[i].name));
             if (!out_devices[i].name[0])
                 copy_cstr(out_devices[i].name, sizeof(out_devices[i].name), "GVFG Capture");
+
+            const std::string suffix = " #" + std::to_string(i + 1);
+            std::string displayName = out_devices[i].name;
+            const size_t maxNameLength = sizeof(out_devices[i].name) - 1;
+            if (displayName.size() + suffix.size() > maxNameLength)
+                displayName.resize(maxNameLength - suffix.size());
+            displayName += suffix;
+            copy_cstr(out_devices[i].name, sizeof(out_devices[i].name), displayName.c_str());
         }
         return written;
     }
