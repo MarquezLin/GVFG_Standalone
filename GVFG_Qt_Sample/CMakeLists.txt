@@ -95,6 +95,10 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Multimedia)
 
 set(GVFG_QT_PREVIEW_SOURCES
   main.cpp
+  capture_controller.cpp
+  capture_controller.h
+  gvfg_api.cpp
+  gvfg_api.h
   mainwindow.cpp
   mainwindow.h
   mainwindow.ui
