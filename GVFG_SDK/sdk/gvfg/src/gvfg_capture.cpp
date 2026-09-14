@@ -593,7 +593,7 @@ struct gvfg_channel_session_t
         return GVFG_OK;
     }
 
-    gvfg_status_t getDebugStats(gvfg_debug_channel_stats_t &out)
+    gvfg_status_t getDebugStats(gvfg_debug_backend_stats_t &out)
     {
         std::memset(&out, 0, sizeof(out));
         out.sdk_running = running.load(std::memory_order_relaxed) ? 1 : 0;
@@ -623,16 +623,16 @@ struct gvfg_channel_session_t
             gigabyte_debug_state_t debugState{};
             uint64_t waitTimeouts = 0;
             session->get_debug_stats(stats, waitTimeouts, debugState);
-            out.session_state = static_cast<int>(stats.state);
-            out.session_frames_captured = stats.frames_captured;
-            out.session_frames_delivered = stats.frames_delivered;
-            out.session_dma_errors = stats.dma_errors;
-            out.session_interrupt_count = stats.interrupt_count;
-            out.session_wait_timeouts = waitTimeouts;
-            out.session_running = debugState.running;
-            out.session_capture_active = debugState.capture_active;
-            out.session_latest_sequence = debugState.latest_sequence;
-            out.session_delivered_sequence = debugState.delivered_sequence;
+            out.backend_state = static_cast<int>(stats.state);
+            out.backend_frames_captured = stats.frames_captured;
+            out.backend_frames_delivered = stats.frames_delivered;
+            out.backend_dma_errors = stats.dma_errors;
+            out.backend_interrupt_count = stats.interrupt_count;
+            out.backend_wait_timeouts = waitTimeouts;
+            out.backend_running = debugState.running;
+            out.backend_capture_active = debugState.capture_active;
+            out.backend_latest_sequence = debugState.latest_sequence;
+            out.backend_delivered_sequence = debugState.delivered_sequence;
             out.audio_dma_event_wakes = debugState.audio_dma_event_wakes;
             out.extra_audio_event_wakes = debugState.extra_audio_event_wakes;
             out.audio_frames_from_driver = debugState.audio_frames_from_driver;
@@ -647,6 +647,28 @@ struct gvfg_channel_session_t
         return GVFG_OK;
     }
 
+    gvfg_status_t debugReadRegister(uint32_t offset, uint32_t &outValue)
+    {
+        if (!session)
+            return reject(GVFG_ESTATE, "debug register read rejected: channel is not open");
+        return map_status(session->debug_read_register(offset, outValue));
+    }
+
+    gvfg_status_t setVideoFormat(gvfg_pixel_format_t format)
+    {
+        if (!session)
+            return reject(GVFG_ESTATE, "gvfg_set_channel_video_format rejected: channel is not open");
+
+        gigabyte_pixel_format_t nativeFormat = GIGABYTE_PIXFMT_UNKNOWN;
+        if (format == GVFG_PIXFMT_YUY2)
+            nativeFormat = GIGABYTE_PIXFMT_YUY2;
+        else if (format == GVFG_PIXFMT_Y210)
+            nativeFormat = GIGABYTE_PIXFMT_Y210;
+        else
+            return reject(GVFG_EINVAL, "gvfg_set_channel_video_format rejected: pixel format is invalid");
+        return map_status(session->set_video_format(nativeFormat));
+    }
+
     gvfg_status_t setAudioEnabled(bool enabled)
     {
         if (!session)
@@ -658,6 +680,13 @@ struct gvfg_channel_session_t
             return map_status(status);
         audioEnabled = enabled;
         return GVFG_OK;
+    }
+
+    gvfg_status_t debugWriteRegister(uint32_t offset, uint32_t value)
+    {
+        if (!session)
+            return reject(GVFG_ESTATE, "debug register write rejected: channel is not open");
+        return map_status(session->debug_write_register(offset, value));
     }
 
     gvfg_status_t getAudioFormat(gvfg_audio_format_t &out)
@@ -846,6 +875,13 @@ struct gvfg_handle_t
         return status;
     }
 
+    gvfg_status_t rejectAllChannels(gvfg_status_t status, const char *message)
+    {
+        for (ChannelErrorState &error : channelErrors)
+            error.set(message ? message : "GVFG operation rejected");
+        return status;
+    }
+
     gvfg_status_t copyChannelError(int channelIndex,
                                    char *outMessage,
                                    uint32_t outMessageSize) const
@@ -864,6 +900,13 @@ struct gvfg_handle_t
         if (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1)
             return nullptr;
         return channels[static_cast<size_t>(channelIndex)].get();
+    }
+
+    gvfg_channel_session_t *findOpenChannel()
+    {
+        if (channels[GVFG_CHANNEL_0])
+            return channels[GVFG_CHANNEL_0].get();
+        return channels[GVFG_CHANNEL_1].get();
     }
 
     gvfg_status_t openChannel(int index, int channelIndex)
@@ -940,6 +983,28 @@ struct gvfg_handle_t
         return GVFG_OK;
     }
 
+    gvfg_status_t setChannelVideoFormat(int channelIndex, gvfg_pixel_format_t format)
+    {
+        gvfg_channel_session_t *channel = findChannel(channelIndex);
+        if (!channel)
+            return rejectChannel(channelIndex, GVFG_ESTATE,
+                                 "gvfg_set_channel_video_format rejected: channel is not open");
+        if (format != GVFG_PIXFMT_YUY2 && format != GVFG_PIXFMT_Y210)
+            return rejectChannel(channelIndex, GVFG_EINVAL,
+                                 "gvfg_set_channel_video_format rejected: pixel format is invalid");
+
+        const int other = channelIndex == GVFG_CHANNEL_0 ? GVFG_CHANNEL_1 : GVFG_CHANNEL_0;
+        if (format == GVFG_PIXFMT_Y210 &&
+            requestedFormats[static_cast<size_t>(other)] == GVFG_PIXFMT_Y210)
+            return rejectChannel(channelIndex, GVFG_ENOTSUP,
+                                 "both channels cannot use Y210 at the same time");
+
+        const gvfg_status_t status = channel->setVideoFormat(format);
+        if (status == GVFG_OK)
+            requestedFormats[static_cast<size_t>(channelIndex)] = format;
+        return status;
+    }
+
     gvfg_status_t stopAll()
     {
         gvfg_status_t result = GVFG_OK;
@@ -954,12 +1019,29 @@ struct gvfg_handle_t
         return result;
     }
 
+    gvfg_status_t debugReadRegister(uint32_t offset, uint32_t &outValue)
+    {
+        gvfg_channel_session_t *channel = findOpenChannel();
+        return channel ? channel->debugReadRegister(offset, outValue)
+                       : rejectAllChannels(GVFG_ESTATE,
+                                           "debug register read rejected: no channel is open");
+    }
+
+    gvfg_status_t debugWriteRegister(uint32_t offset, uint32_t value)
+    {
+        gvfg_channel_session_t *channel = findOpenChannel();
+        return channel ? channel->debugWriteRegister(offset, value)
+                       : rejectAllChannels(GVFG_ESTATE,
+                                           "debug register write rejected: no channel is open");
+    }
+
     std::array<ChannelErrorState, 2> channelErrors;
     std::shared_ptr<gvfg::internal::GigabyteDeviceConnection> deviceConnection;
     std::array<std::unique_ptr<gvfg_channel_session_t>, 2> channels;
     std::array<uint32_t, 2> eventMasks{GVFG_EVENT_MASK_ALL, GVFG_EVENT_MASK_ALL};
     int currentIndex = -1;
     std::array<bool, 2> zeroCopyRequested{false, false};
+    std::array<gvfg_pixel_format_t, 2> requestedFormats{GVFG_PIXFMT_YUY2, GVFG_PIXFMT_YUY2};
 };
 
 extern "C"
@@ -1078,6 +1160,15 @@ extern "C"
                        : handle->rejectChannel(channel_index,
                                                GVFG_ESTATE,
                                                "gvfg_start_channel rejected: channel is not open");
+    }
+
+    gvfg_status_t gvfg_set_channel_video_format(gvfg_handle handle,
+                                                 int channel_index,
+                                                 gvfg_pixel_format_t format)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        return handle->setChannelVideoFormat(channel_index, format);
     }
 
     gvfg_status_t gvfg_set_channel_audio_enabled(gvfg_handle handle,
@@ -1297,9 +1388,9 @@ extern "C"
         return handle->copyChannelError(channel_index, out_message, out_message_size);
     }
 
-    gvfg_status_t gvfg_debug_get_channel_stats(gvfg_handle handle,
-                                                       int channel_index,
-                                                       gvfg_debug_channel_stats_t *out_stats)
+    gvfg_status_t gvfg_debug_get_channel_backend_stats(gvfg_handle handle,
+                                                int channel_index,
+                                                gvfg_debug_backend_stats_t *out_stats)
     {
         if (!handle || !out_stats)
             return GVFG_EINVAL;
@@ -1307,13 +1398,31 @@ extern "C"
         gvfg_channel_session_t *channel = handle->findChannel(channel_index);
         if (!channel)
             return GVFG_ESTATE;
-        gvfg_debug_channel_stats_t stats{};
+        gvfg_debug_backend_stats_t stats{};
         const gvfg_status_t status = channel->getDebugStats(stats);
         if (status != GVFG_OK)
             return status;
 
         *out_stats = stats;
         return GVFG_OK;
+    }
+
+    gvfg_status_t gvfg_debug_read_register(gvfg_handle handle,
+                                           uint32_t offset,
+                                           uint32_t *out_value)
+    {
+        if (!handle || !out_value || (offset & 0x3u) != 0)
+            return GVFG_EINVAL;
+        return handle->debugReadRegister(offset, *out_value);
+    }
+
+    gvfg_status_t gvfg_debug_write_register(gvfg_handle handle,
+                                            uint32_t offset,
+                                            uint32_t value)
+    {
+        if (!handle || (offset & 0x3u) != 0)
+            return GVFG_EINVAL;
+        return handle->debugWriteRegister(offset, value);
     }
 
 }

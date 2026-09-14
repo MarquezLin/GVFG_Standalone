@@ -341,6 +341,16 @@ extern "C"
         _Out_ int *out_enabled);
 
     /*
+     * Select the hardware output format before capture starts. This capability
+     * currently uses an isolated driver extension because GvfgSdk.lib 1.0.0
+     * does not expose an equivalent API.
+     */
+    GVFG_API gvfg_status_t gvfg_set_channel_video_format(
+        _In_ gvfg_handle handle,
+        _In_ int channel_index,
+        _In_ gvfg_pixel_format_t format);
+
+    /*
      * Enable or disable audio for the next channel start. Video remains
      * enabled; applications do not need to construct stream flag masks.
      */

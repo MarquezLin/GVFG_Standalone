@@ -25,6 +25,7 @@ Qt Sample 的 source boundary：
 客戶使用指南在 `docs/GVFG_CUSTOMER_API.md`，完整函式與結構參考在
 `docs/GVFG_CUSTOMER_API_REFERENCE.md`。內部架構、package
 切分、threading、frame ownership 說明在 `docs/GVFG_INTERNAL_NOTES.md`。
+主管 library 尚缺少的 API 與目前暫時補法整理在 `docs/GIGABYTELIB_GAPS.md`。
 
 ## Build
 

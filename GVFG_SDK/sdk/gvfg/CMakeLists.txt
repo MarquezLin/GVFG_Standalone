@@ -10,6 +10,8 @@ add_library(gvfg SHARED
     src/gigabyte/gigabyte_types.h
     src/gigabyte/gigabyte_capture_session.cpp
     src/gigabyte/gigabyte_capture_session.h
+    src/gigabyte/gigabyte_driver_extensions.cpp
+    src/gigabyte/gigabyte_driver_extensions.h
     src/gigabyte/gigabyte_device.cpp
     src/gigabyte/gigabyte_device.h
     src/gpu/d3d_conversion_pipeline.cpp

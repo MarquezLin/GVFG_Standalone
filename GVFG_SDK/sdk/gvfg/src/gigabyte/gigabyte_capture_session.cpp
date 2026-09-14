@@ -1,4 +1,5 @@
 #include "gigabyte_capture_session.h"
+#include "gigabyte_driver_extensions.h"
 
 #include <algorithm>
 #include <array>
@@ -181,6 +182,24 @@ gigabyte_status_t GigabyteCaptureSession::set_audio_enabled(bool enabled)
     if (channel_open_ && audio_enabled_ != enabled)
         close_vendor_channel();
     audio_enabled_ = enabled;
+    return GIGABYTE_OK;
+}
+
+gigabyte_status_t GigabyteCaptureSession::set_video_format(gigabyte_pixel_format_t format)
+{
+    if (format != GIGABYTE_PIXFMT_YUY2 && format != GIGABYTE_PIXFMT_Y210)
+        return reject(GIGABYTE_EINVAL, "video format is invalid");
+    if (running_)
+        return reject(GIGABYTE_ESTATE, "video format cannot change while capture is running");
+    const gigabyte_status_t openStatus = ensure_vendor_channel_open();
+    if (openStatus != GIGABYTE_OK)
+        return openStatus;
+
+    constexpr uint32_t kVideoOutputFormatRegister = 0x080;
+    if (!gigabyte_write_register(device_handle_, kVideoOutputFormatRegister,
+                                  format == GIGABYTE_PIXFMT_Y210 ? 1u : 0u))
+        return reject(GIGABYTE_EIO,
+                      "GigabyteLib gap: driver extension failed to set the output format register");
     return GIGABYTE_OK;
 }
 
@@ -569,6 +588,28 @@ void GigabyteCaptureSession::get_debug_stats(
         ? get_frame_timing_total_us_ / static_cast<double>(get_frame_timing_samples_) : 0.0;
     outDebugState.get_frame_timing_max300_us = get_frame_timing_last_max300_us_;
     outDebugState.get_frame_timing_max_us = get_frame_timing_lifetime_max_us_;
+}
+
+gigabyte_status_t GigabyteCaptureSession::debug_read_register(uint32_t offset, uint32_t &outValue) const
+{
+    const gigabyte_status_t openStatus = ensure_vendor_channel_open();
+    if (openStatus != GIGABYTE_OK)
+        return openStatus;
+    if (!gigabyte_read_register(device_handle_, offset, outValue))
+        return reject(GIGABYTE_EIO,
+                      "GigabyteLib gap: driver extension register read failed");
+    return GIGABYTE_OK;
+}
+
+gigabyte_status_t GigabyteCaptureSession::debug_write_register(uint32_t offset, uint32_t value) const
+{
+    const gigabyte_status_t openStatus = ensure_vendor_channel_open();
+    if (openStatus != GIGABYTE_OK)
+        return openStatus;
+    if (!gigabyte_write_register(device_handle_, offset, value))
+        return reject(GIGABYTE_EIO,
+                      "GigabyteLib gap: driver extension register write failed");
+    return GIGABYTE_OK;
 }
 
 gigabyte_status_t GigabyteCaptureSession::from_vendor(GVFG_HRESULT result, const char *operation) const

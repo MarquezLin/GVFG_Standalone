@@ -122,8 +122,10 @@ x64 `gvfg_frame_t` ABI 已在 `gvfg_capture.cpp` 以 static assertions 固定為
 
 ## GigabyteLib requirement
 
-GVFG 不再保存或操作 private IOCTL、register offset 或 DMA request layout。
-Driver ABI 相容性由主管提供的 `GvfgSdk.lib` 負責。
+Capture、audio、event 與 frame ownership 的 driver ABI 由主管提供的
+`GvfgSdk.lib` 負責。例外只有 library 1.0.0 尚未提供的 output-format selection
+與 diagnostic register R/W；它們集中在 `gigabyte_driver_extensions.*`，不得擴大
+成第二套 capture backend。待主管補上正式 `Gvfg*` API 後應刪除此 extension。
 
 目前原生格式：
 
@@ -159,7 +161,7 @@ non-blocking、有限 timeout 與 infinite wait；stop 透過 `eventCv` 喚醒 w
 
 `gvfg_debug.h` 僅供內部工具，包含：
 
-- `gvfg_debug_get_channel_stats()`：指定 channel 的 facade/backend state、
+- `gvfg_debug_get_channel_backend_stats()`：指定 channel 的 facade/backend state、
   captured/delivered frame、DMA error、IRQ、timeout、sequence 與 GetFrame timing。
 
 客戶診斷使用 `gvfg_get_channel_signal_status()`、`gvfg_get_channel_runtime_info()`、event、

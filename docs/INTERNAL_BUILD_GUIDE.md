@@ -125,7 +125,7 @@ Debug 診斷會增加 log 與檢查成本，不應拿來判斷正式版本效能
 - signal status、runtime FPS 與 channel event。
 - GPU conversion：BGRA8、RGB10A2、NV12。
 - 公開詳細錯誤 API：`gvfg_get_channel_last_error_detail()`。
-- 內部 debug API：session stats、register read/write。
+- 內部 debug API：backend stats、register read/write。
 
 目前 FPGA 的 8-bit format register 仍可能回報舊 `YVYU` 值；SDK 只把它當作 legacy register identifier，對外格式與實際 DMA layout一律是 YUY2（`Y0 U0 Y1 V0`）。
 

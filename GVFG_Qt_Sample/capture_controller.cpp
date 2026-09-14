@@ -39,11 +39,11 @@ namespace
     QString boolText(int value) { return value ? QStringLiteral("yes") : QStringLiteral("no"); }
     QString valueOrDash(uint64_t value) { return QString::number(static_cast<qulonglong>(value)); }
 
-    QString captureStatusText(const gvfg_debug_channel_stats_t &stats, bool signalConnected)
+    QString captureStatusText(const gvfg_debug_backend_stats_t &stats, bool signalConnected)
     {
-        if (!stats.session_running) return QStringLiteral("stopped");
+        if (!stats.backend_running) return QStringLiteral("stopped");
         if (!signalConnected) return QStringLiteral("waiting_signal");
-        if (!stats.session_capture_active) return QStringLiteral("paused");
+        if (!stats.backend_capture_active) return QStringLiteral("paused");
         return QStringLiteral("streaming");
     }
 #endif
@@ -98,11 +98,13 @@ CaptureController::~CaptureController()
     closeDevice();
 }
 
-void CaptureController::setChannelOptions(int channel, bool zeroCopy, bool audioEnabled)
+void CaptureController::setChannelOptions(int channel, bool zeroCopy,
+                                          gvfg_pixel_format_t format, bool audioEnabled)
 {
     if (channel < GVFG_CHANNEL_0 || channel > GVFG_CHANNEL_1)
         return;
     channels_[channel].zeroCopy = zeroCopy;
+    channels_[channel].requestedFormat = format;
     channels_[channel].requestedAudio = channel == GVFG_CHANNEL_0 && audioEnabled;
 }
 
@@ -229,7 +231,7 @@ bool CaptureController::openChannel(int channel)
 {
     ChannelRuntime &runtime = channels_[channel];
     if (runtime.opened)
-        return true;
+        return applyOutputFormat(channel);
     if (handle_ == nullptr && !openDevice())
         return false;
 
@@ -247,12 +249,33 @@ bool CaptureController::openChannel(int channel)
         return false;
     }
     runtime.opened = true;
+    if (!applyOutputFormat(channel))
+        return false;
 
     appendLog(QStringLiteral("Opened device index %1 CH%2 | mode=%3")
                   .arg(selectedDeviceIndex_)
                   .arg(channel)
                   .arg(zeroCopyEnabled ? QStringLiteral("zero-copy") : QStringLiteral("copy")));
     updateSignalStatus();
+    return true;
+}
+
+bool CaptureController::applyOutputFormat(int channel)
+{
+    if (handle_ == nullptr || !channels_[channel].opened ||
+        channels_[channel].running.load(std::memory_order_acquire))
+        return false;
+
+    const gvfg_pixel_format_t format = channels_[channel].requestedFormat;
+    const gvfg_status_t status = gvfg_set_channel_video_format(handle_, channel, format);
+    if (status != GVFG_OK)
+    {
+        reportError(QStringLiteral("gvfg_set_channel_video_format"), status, channel);
+        return false;
+    }
+    appendLog(QStringLiteral("CH%1 Output format | %2 (GigabyteLib extension)")
+                  .arg(channel)
+                  .arg(format == GVFG_PIXFMT_Y210 ? QStringLiteral("Y210") : QStringLiteral("YUY2")));
     return true;
 }
 
@@ -633,8 +656,8 @@ void CaptureController::updateSignalStatus(bool queryHardware)
                 sdkBytes = channel.audioReceivedBytes;
                 appOutputBytes = channel.audioAcceptedBytes;
             }
-            gvfg_debug_channel_stats_t audioStats{};
-            if (gvfg_debug_get_channel_stats(handle_, channelIndex, &audioStats) == GVFG_OK)
+            gvfg_debug_backend_stats_t audioStats{};
+            if (gvfg_debug_get_channel_backend_stats(handle_, channelIndex, &audioStats) == GVFG_OK)
             {
                 statusLines << QStringLiteral("CH%1 Audio Debug | Events DMA=%2 Extra=%3 | Driver->SDK %4 frames/%5 bytes | SDK->APP %6 frames/%7 bytes | APP->Output %8 bytes")
                                    .arg(channelIndex)
@@ -679,23 +702,23 @@ void CaptureController::updateSignalStatus(bool queryHardware)
         }
 
 #if GVFG_INTERNAL_DIAGNOSTICS
-        gvfg_debug_channel_stats_t channelStats{};
-        if (gvfg_debug_get_channel_stats(handle_, channelIndex, &channelStats) == GVFG_OK)
+        gvfg_debug_backend_stats_t channelStats{};
+        if (gvfg_debug_get_channel_backend_stats(handle_, channelIndex, &channelStats) == GVFG_OK)
         {
             statusLines << QStringLiteral("CH%1 Capture | status=%2 dma_errors=%3 no_frame_waits=%4")
                                .arg(channelIndex)
                                .arg(captureStatusText(channelStats, signal.connected != 0))
-                               .arg(static_cast<qulonglong>(channelStats.session_dma_errors))
-                               .arg(static_cast<qulonglong>(channelStats.session_wait_timeouts));
-            if (channel.haveDebugBaseline && channelStats.session_dma_errors > channel.lastDebugDmaErrors)
+                               .arg(static_cast<qulonglong>(channelStats.backend_dma_errors))
+                               .arg(static_cast<qulonglong>(channelStats.backend_wait_timeouts));
+            if (channel.haveDebugBaseline && channelStats.backend_dma_errors > channel.lastDebugDmaErrors)
             {
                 appendLog(QStringLiteral("CH%1 ERROR DMA failures +%2, total=%3")
                               .arg(channelIndex)
-                              .arg(valueOrDash(channelStats.session_dma_errors - channel.lastDebugDmaErrors),
-                                   valueOrDash(channelStats.session_dma_errors)));
+                              .arg(valueOrDash(channelStats.backend_dma_errors - channel.lastDebugDmaErrors),
+                                   valueOrDash(channelStats.backend_dma_errors)));
                 diagnosticProblemDetected = true;
             }
-            channel.lastDebugDmaErrors = channelStats.session_dma_errors;
+            channel.lastDebugDmaErrors = channelStats.backend_dma_errors;
             channel.haveDebugBaseline = true;
         }
 #endif

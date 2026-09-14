@@ -39,6 +39,7 @@ namespace gvfg::internal
         gigabyte_status_t set_zero_copy_enabled(bool enabled);
         bool zero_copy_enabled() const { return zero_copy_enabled_; }
         gigabyte_status_t set_audio_enabled(bool enabled);
+        gigabyte_status_t set_video_format(gigabyte_pixel_format_t format);
         gigabyte_status_t get_signal_status(gigabyte_signal_status_t &out) const;
         gigabyte_status_t get_audio_format(gigabyte_audio_format_t &out) const;
         gigabyte_status_t set_event_callback(gigabyte_event_callback_t callback, void *user, uint32_t eventMask);
@@ -51,6 +52,8 @@ namespace gvfg::internal
         gigabyte_status_t release_frame(const gigabyte_frame_t &frame);
         void get_debug_stats(gigabyte_stream_stats_t &outStats, uint64_t &outWaitTimeouts,
                              gigabyte_debug_state_t &outDebugState) const;
+        gigabyte_status_t debug_read_register(uint32_t offset, uint32_t &outValue) const;
+        gigabyte_status_t debug_write_register(uint32_t offset, uint32_t value) const;
 
     private:
         gigabyte_status_t open_device(const GigabyteDevice &device);

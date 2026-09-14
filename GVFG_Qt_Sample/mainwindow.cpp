@@ -4,6 +4,7 @@
 #include "ui_mainwindow.h"
 
 #include <QCloseEvent>
+#include <QStandardItemModel>
 #include <QSyntaxHighlighter>
 #include <QTextCharFormat>
 
@@ -101,6 +102,15 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui_->ch0FullscreenButton, &QPushButton::clicked, this, [this] { showPreviewWindow(0, true); });
     connect(ui_->ch1FullscreenButton, &QPushButton::clicked, this, [this] { showPreviewWindow(1, true); });
 
+    auto formatChanged = [this](int channel) {
+        updateOutputFormatOptions(channel);
+        syncControllerOptions(channel);
+        if (controller_->channelOpened(channel) && !controller_->channelRunning(channel))
+        { controller_->applyOutputFormat(channel); controller_->updateSignalStatus(); }
+    };
+    connect(ui_->ch0OutputFormatCombo, &QComboBox::currentIndexChanged, this, [formatChanged](int) { formatChanged(0); });
+    connect(ui_->ch1OutputFormatCombo, &QComboBox::currentIndexChanged, this, [formatChanged](int) { formatChanged(1); });
+
     connect(ui_->ch0ZeroCopyCheckBox, &QCheckBox::toggled, this, [this](bool) {
         syncControllerOptions(GVFG_CHANNEL_0);
         if (controller_->deviceOpen()) controller_->updateSignalStatus(false);
@@ -110,6 +120,7 @@ MainWindow::MainWindow(QWidget *parent)
         if (controller_->deviceOpen()) controller_->updateSignalStatus(false);
     });
 
+    updateOutputFormatOptions();
     updateUiState();
     controller_->logStartupInfo();
     controller_->refreshDevices();
@@ -138,8 +149,10 @@ void MainWindow::closeEvent(QCloseEvent *event)
 void MainWindow::syncControllerOptions(int channel)
 {
     const bool zeroCopy = channel == 0 ? ui_->ch0ZeroCopyCheckBox->isChecked() : ui_->ch1ZeroCopyCheckBox->isChecked();
+    const int formatIndex = channel == 0 ? ui_->ch0OutputFormatCombo->currentIndex() : ui_->ch1OutputFormatCombo->currentIndex();
     const bool audio = channel == 0 && ui_->ch0AudioCheckBox->isChecked();
-    controller_->setChannelOptions(channel, zeroCopy, audio);
+    controller_->setChannelOptions(channel, zeroCopy,
+                                   formatIndex == 1 ? GVFG_PIXFMT_Y210 : GVFG_PIXFMT_YUY2, audio);
 }
 
 void MainWindow::showPreviewWindow(int channel, bool fullscreen)
@@ -158,6 +171,27 @@ void MainWindow::showPreviewWindow(int channel, bool fullscreen)
                 : QStringLiteral("CH%1 Show Preview failed: unable to update preview window").arg(channel));
 }
 
+void MainWindow::updateOutputFormatOptions(int changedChannel)
+{
+    QComboBox *combos[] = {ui_->ch0OutputFormatCombo, ui_->ch1OutputFormatCombo};
+    constexpr int y210 = 1;
+    if ((changedChannel == 0 || changedChannel == 1) && combos[changedChannel]->currentIndex() == y210)
+    {
+        const int other = changedChannel == 0 ? 1 : 0;
+        if (combos[other]->currentIndex() == y210) combos[other]->setCurrentIndex(0);
+    }
+    const bool enabled[] = {combos[1]->currentIndex() != y210, combos[0]->currentIndex() != y210};
+    for (int channel = 0; channel < 2; ++channel)
+    {
+        auto *model = qobject_cast<QStandardItemModel *>(combos[channel]->model());
+        if (model && model->item(y210)) model->item(y210)->setEnabled(enabled[channel]);
+        combos[channel]->setToolTip(
+            enabled[channel]
+                ? QStringLiteral("Requested CH%1 capture output format (GigabyteLib extension)").arg(channel)
+                : QStringLiteral("Y210 is already selected by the other channel"));
+    }
+}
+
 void MainWindow::updateUiState()
 {
     const bool open = controller_->deviceOpen();
@@ -173,6 +207,7 @@ void MainWindow::updateUiState()
     ui_->ch1PreviewButton->setEnabled(running[1] && controller_->frameAvailable(1));
     ui_->ch0FullscreenButton->setEnabled(ui_->ch0PreviewButton->isEnabled());
     ui_->ch1FullscreenButton->setEnabled(ui_->ch1PreviewButton->isEnabled());
+    ui_->ch0OutputFormatCombo->setEnabled(!running[0]); ui_->ch1OutputFormatCombo->setEnabled(!running[1]);
     ui_->ch0ZeroCopyCheckBox->setEnabled(!controller_->channelOpened(0));
     ui_->ch1ZeroCopyCheckBox->setEnabled(!controller_->channelOpened(1));
     ui_->ch0AudioCheckBox->setEnabled(!running[0]);
