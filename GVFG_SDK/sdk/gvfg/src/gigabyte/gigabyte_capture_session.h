@@ -2,9 +2,9 @@
 
 #include "gigabyte_device.h"
 #include "gvfg_error_state.h"
+#include "gvfgsdkapi.h"
 #include "gvfg_capture.h"
 #include "gvfg_debug.h"
-#include "gvfgsdkapi.h"
 
 #include <windows.h>
 #include <atomic>

@@ -43,10 +43,6 @@
  *   a separate worker thread when reading video and audio concurrently.
  */
 
-#if defined(_WIN32) && defined(_MSC_VER)
-#include <sal.h>
-#endif
-
 #ifdef _WIN32
 #ifdef GVFG_BUILD
 #define GVFG_API __declspec(dllexport)
@@ -57,28 +53,14 @@
 #define GVFG_API
 #endif
 
-#if !defined(_MSC_VER)
-#ifndef _In_
-#define _In_
+#ifndef GVFG_PARAM_IN
+#define GVFG_PARAM_IN
 #endif
-#ifndef _In_opt_
-#define _In_opt_
+#ifndef GVFG_PARAM_OUT
+#define GVFG_PARAM_OUT
 #endif
-#ifndef _Inout_
-#define _Inout_
-#endif
-#ifndef _Out_
-#define _Out_
-#endif
-#ifndef _Outptr_
-#define _Outptr_
-#endif
-#ifndef _Out_writes_to_opt_
-#define _Out_writes_to_opt_(size, count)
-#endif
-#ifndef _Out_writes_bytes_
-#define _Out_writes_bytes_(size)
-#endif
+#ifndef GVFG_PARAM_INOUT
+#define GVFG_PARAM_INOUT
 #endif
 
 #include <stdint.h>
@@ -258,8 +240,8 @@ extern "C"
      * - Returns <= 0 when no device is available.
      */
     GVFG_API int gvfg_enumerate_devices(
-        _Out_writes_to_opt_(max_devices, return) gvfg_device_info_t *out_devices,
-        _In_ int max_devices);
+        GVFG_PARAM_OUT gvfg_device_info_t *out_devices,
+        GVFG_PARAM_IN int max_devices);
 
     /*
      * Create a GVFG capture session.
@@ -275,7 +257,7 @@ extern "C"
      * gvfg_destroy().
      */
     GVFG_API gvfg_status_t gvfg_create(
-        _Outptr_ gvfg_handle *out_handle);
+        GVFG_PARAM_OUT gvfg_handle *out_handle);
 
     /*
      * Destroy a GVFG capture session.
@@ -290,7 +272,7 @@ extern "C"
      * must not be used again.
      */
     GVFG_API gvfg_status_t gvfg_destroy(
-        _In_opt_ gvfg_handle handle);
+        GVFG_PARAM_IN gvfg_handle handle);
 
     /*
      * Open a device and select its capture channel.
@@ -307,9 +289,9 @@ extern "C"
      * - GVFG_EIO for driver/backend failures.
      */
     GVFG_API gvfg_status_t gvfg_open_channel(
-        _In_ gvfg_handle handle,
-        _In_ int device_index,
-        _In_ int channel_index);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int device_index,
+        GVFG_PARAM_IN int channel_index);
 
     /*
      * A handle may open both channels of the same device. The first call opens
@@ -327,14 +309,14 @@ extern "C"
      * successful read must be paired with gvfg_release_channel_frame().
      */
     GVFG_API gvfg_status_t gvfg_set_channel_zero_copy_enabled(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _In_ int enabled);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_IN int enabled);
 
     GVFG_API gvfg_status_t gvfg_get_channel_zero_copy_enabled(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _Out_ int *out_enabled);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_OUT int *out_enabled);
 
     /*
      * Select the hardware output format before capture starts. This capability
@@ -342,23 +324,23 @@ extern "C"
      * does not expose an equivalent API.
      */
     GVFG_API gvfg_status_t gvfg_set_channel_video_format(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _In_ gvfg_pixel_format_t format);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_IN gvfg_pixel_format_t format);
 
     /*
      * Enable or disable audio for the next channel start. Video remains
      * enabled; applications do not need to construct stream flag masks.
      */
     GVFG_API gvfg_status_t gvfg_set_channel_audio_enabled(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _In_ int enabled);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_IN int enabled);
 
     GVFG_API gvfg_status_t gvfg_get_channel_audio_format(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _Out_ gvfg_audio_format_t *out_format);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_OUT gvfg_audio_format_t *out_format);
 
     /*
      * Configure and start capture on an opened device.
@@ -379,8 +361,8 @@ extern "C"
      * starts automatically after a signal-connected event.
      */
     GVFG_API gvfg_status_t gvfg_start_channel(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index);
 
     /*
      * Read one captured frame.
@@ -405,10 +387,10 @@ extern "C"
      * only one frame.
      */
     GVFG_API gvfg_status_t gvfg_read_channel_frame(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _Out_ gvfg_frame_t *out_frame,
-        _In_ uint32_t timeout_ms);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_OUT gvfg_frame_t *out_frame,
+        GVFG_PARAM_IN uint32_t timeout_ms);
 
     /*
      * Release a frame returned by gvfg_read_channel_frame().
@@ -424,9 +406,9 @@ extern "C"
      * - GVFG_ESTATE if no frame is currently held.
      */
     GVFG_API gvfg_status_t gvfg_release_channel_frame(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _In_ const gvfg_frame_t *frame);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_IN const gvfg_frame_t *frame);
 
     /*
      * Acquire one PCM frame. The channel must have audio enabled before start.
@@ -434,16 +416,16 @@ extern "C"
      * Each channel may hold only one audio frame at a time.
      */
     GVFG_API gvfg_status_t gvfg_read_channel_audio_frame(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _Out_ gvfg_audio_frame_t *out_frame,
-        _In_ uint32_t timeout_ms);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_OUT gvfg_audio_frame_t *out_frame,
+        GVFG_PARAM_IN uint32_t timeout_ms);
 
     /* Release the unchanged token returned by gvfg_read_channel_audio_frame(). */
     GVFG_API gvfg_status_t gvfg_release_channel_audio_frame(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _In_ const gvfg_audio_frame_t *frame);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_IN const gvfg_audio_frame_t *frame);
 
     /*
      * Convert a captured YUY2 or Y210 frame with the GPU and copy the result
@@ -461,8 +443,8 @@ extern "C"
      * layout is height rows of Y followed by height / 2 rows of interleaved UV.
      */
     GVFG_API gvfg_status_t gvfg_gpu_convert_to_buffer(
-        _In_ const gvfg_frame_t *source,
-        _In_ const gvfg_gpu_output_buffer_t *output);
+        GVFG_PARAM_IN const gvfg_frame_t *source,
+        GVFG_PARAM_IN const gvfg_gpu_output_buffer_t *output);
 
     /*
      * Convenience wrappers for the corresponding gvfg_gpu_output_format_t.
@@ -473,16 +455,16 @@ extern "C"
      * destination_size >= row_bytes * source->height.
      */
     GVFG_API gvfg_status_t gvfg_gpu_convert_to_bgra8(
-        _In_ const gvfg_frame_t *source,
-        _Out_writes_bytes_(destination_size) void *destination,
-        _In_ uint64_t destination_size,
-        _In_ int row_bytes);
+        GVFG_PARAM_IN const gvfg_frame_t *source,
+        GVFG_PARAM_OUT void *destination,
+        GVFG_PARAM_IN uint64_t destination_size,
+        GVFG_PARAM_IN int row_bytes);
 
     GVFG_API gvfg_status_t gvfg_gpu_convert_to_rgb10a2(
-        _In_ const gvfg_frame_t *source,
-        _Out_writes_bytes_(destination_size) void *destination,
-        _In_ uint64_t destination_size,
-        _In_ int row_bytes);
+        GVFG_PARAM_IN const gvfg_frame_t *source,
+        GVFG_PARAM_OUT void *destination,
+        GVFG_PARAM_IN uint64_t destination_size,
+        GVFG_PARAM_IN int row_bytes);
 
     /*
      * Convert to BT.709 limited-range NV12. Width and height must be even.
@@ -490,10 +472,10 @@ extern "C"
      * destination_size must be at least row_bytes * (height + height / 2).
      */
     GVFG_API gvfg_status_t gvfg_gpu_convert_to_nv12(
-        _In_ const gvfg_frame_t *source,
-        _Out_writes_bytes_(destination_size) void *destination,
-        _In_ uint64_t destination_size,
-        _In_ int row_bytes);
+        GVFG_PARAM_IN const gvfg_frame_t *source,
+        GVFG_PARAM_OUT void *destination,
+        GVFG_PARAM_IN uint64_t destination_size,
+        GVFG_PARAM_IN int row_bytes);
 
     /*
      * Poll one capture event.
@@ -512,10 +494,10 @@ extern "C"
      * - GVFG_ETIMEOUT if no event is available before timeout_ms expires.
      */
     GVFG_API gvfg_status_t gvfg_poll_channel_event(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _Inout_ gvfg_event_t *out_event,
-        _In_ uint32_t timeout_ms);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_INOUT gvfg_event_t *out_event,
+        GVFG_PARAM_IN uint32_t timeout_ms);
 
     /*
      * Stop capture.
@@ -531,12 +513,12 @@ extern "C"
      * any unreleased frames, and wakes blocking gvfg_poll_channel_event() calls.
      */
     GVFG_API gvfg_status_t gvfg_stop(
-        _In_ gvfg_handle handle);
+        GVFG_PARAM_IN gvfg_handle handle);
 
     /* gvfg_stop() stops every opened channel; this function stops only one. */
     GVFG_API gvfg_status_t gvfg_stop_channel(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index);
 
     /*
      * Query current signal information and delivered buffer format.
@@ -554,19 +536,19 @@ extern "C"
      * out_status->connected set to 0.
      */
     GVFG_API gvfg_status_t gvfg_get_channel_signal_status(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _Out_ gvfg_signal_status_t *out_status);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_OUT gvfg_signal_status_t *out_status);
 
     /* Optional vendor-backed device and SDI detail queries. */
     GVFG_API gvfg_status_t gvfg_get_device_capabilities(
-        _In_ gvfg_handle handle,
-        _Out_ gvfg_device_capabilities_t *out_capabilities);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_OUT gvfg_device_capabilities_t *out_capabilities);
 
     GVFG_API gvfg_status_t gvfg_get_channel_sdi_info(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _Out_ gvfg_sdi_info_t *out_info);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_OUT gvfg_sdi_info_t *out_info);
 
     /*
      * Query runtime frame-delivery diagnostics.
@@ -584,16 +566,16 @@ extern "C"
      * gvfg_get_channel_signal_status().
      */
     GVFG_API gvfg_status_t gvfg_get_channel_runtime_info(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _Out_ gvfg_runtime_info_t *out_info);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_OUT gvfg_runtime_info_t *out_info);
 
     /* Return the loaded GVFG runtime DLL version, for example "0.2.1". */
     GVFG_API const char *gvfg_get_version(void);
 
     /* Convert a gvfg_pixel_format_t value to a static English format name. */
     GVFG_API const char *gvfg_pixel_format_name(
-        _In_ int pixel_format);
+        GVFG_PARAM_IN int pixel_format);
 
     /*
      * Convert a GVFG status code to a static English error string.
@@ -605,7 +587,7 @@ extern "C"
      * - Static null-terminated English string. The caller must not free it.
      */
     GVFG_API const char *gvfg_strerror(
-        _In_ gvfg_status_t status);
+        GVFG_PARAM_IN gvfg_status_t status);
 
     /*
      * Copy the most recent detailed fault or rejected API call for one
@@ -614,10 +596,10 @@ extern "C"
      * begins a new diagnostic lifetime.
      */
     GVFG_API gvfg_status_t gvfg_get_channel_last_error_detail(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _Out_ char *out_message,
-        _In_ uint32_t out_message_size);
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_OUT char *out_message,
+        GVFG_PARAM_IN uint32_t out_message_size);
 
 #ifdef __cplusplus
 }

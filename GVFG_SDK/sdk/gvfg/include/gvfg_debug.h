@@ -64,20 +64,20 @@ typedef struct
  * applications should use gvfg_get_channel_runtime_info() instead.
  */
 GVFG_API gvfg_status_t gvfg_debug_get_channel_backend_stats(
-    _In_ gvfg_handle handle,
-    _In_ int channel_index,
-    _Out_ gvfg_debug_backend_stats_t *out_stats);
+    GVFG_PARAM_IN gvfg_handle handle,
+    GVFG_PARAM_IN int channel_index,
+    GVFG_PARAM_OUT gvfg_debug_backend_stats_t *out_stats);
 
 /* GIGABYTELIB GAP: GvfgSdk.lib 1.0.0 has no register-access API. */
 GVFG_API gvfg_status_t gvfg_debug_read_register(
-    _In_ gvfg_handle handle,
-    _In_ uint32_t offset,
-    _Out_ uint32_t *out_value);
+    GVFG_PARAM_IN gvfg_handle handle,
+    GVFG_PARAM_IN uint32_t offset,
+    GVFG_PARAM_OUT uint32_t *out_value);
 
 GVFG_API gvfg_status_t gvfg_debug_write_register(
-    _In_ gvfg_handle handle,
-    _In_ uint32_t offset,
-    _In_ uint32_t value);
+    GVFG_PARAM_IN gvfg_handle handle,
+    GVFG_PARAM_IN uint32_t offset,
+    GVFG_PARAM_IN uint32_t value);
 
 #ifdef __cplusplus
 }
