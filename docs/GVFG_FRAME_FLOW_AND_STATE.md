@@ -9,16 +9,16 @@ flowchart LR
     APP[Application]
     API[GVFG C API]
     CH[gvfg_channel_session_t]
-    BE[PcieS2mmCaptureSession]
-    IO[giga_ioctl.dll]
+    BE[GigabyteLib backend adapter]
+    IO[GvfgSdk.lib]
     DRV[vfg100.sys]
     DMA[FPGA / DMA memory]
 
     APP -->|read_channel_frame| API
     API --> CH
     CH -->|wait_frame| BE
-    BE -->|Acquire or GetFrame| IO
-    IO -->|DeviceIoControl| DRV
+    BE -->|GvfgGetVideoFrame or ZeroCopy| IO
+    IO -->|private driver ABI| DRV
     DMA --> DRV
     DRV --> IO
     IO --> BE
@@ -26,10 +26,11 @@ flowchart LR
     CH -->|gvfg_frame_t| APP
     APP -->|release_channel_frame| CH
     CH --> BE
-    BE -->|zero-copy release when enabled| IO
+    BE -->|GvfgReleaseVideoFrameZeroCopy| IO
 ```
 
-`giga_ioctl.dll` 是薄的 driver ABI wrapper；它不持有 capture state 或 frame lifetime。
+`GvfgSdk.lib` 是主管提供的靜態 library。GVFG adapter 保留公開 API 的
+frame ownership 與 timeout 契約，不再直接操作 driver IOCTL 或 FPGA register。
 
 ## 2. 三層狀態
 
@@ -183,9 +184,9 @@ copy_buffer_.clear();
 
 ```text
 DMA event
-    -> giga_ioctl_get_frame(
+    -> GvfgGetVideoFrame(
+           context,
            channel,
-           frameIndex = 0xFFFFFFFF,
            copy_buffer_.data(),
            frameBytes)
     -> driver 將資料複製到 SDK copy_buffer_
@@ -210,7 +211,7 @@ release 前 pointer 有效
 
 ```text
 DMA event
-    -> giga_ioctl_acquire_video_frame_zerocopy(channel)
+    -> GvfgGetVideoFrameZeroCopy(context, channel)
     -> driver 回傳 DMA memory pointer
     -> held_frame_.data = driver pointer
     -> backend frame_held_ = true
@@ -224,7 +225,7 @@ Application 使用完成後：
 gvfg_release_channel_frame
     -> facade 驗證完整 token
     -> backend 驗證完整 token
-    -> giga_ioctl_release_video_frame(channel)
+    -> GvfgReleaseVideoFrameZeroCopy(context, channel)
     -> release 成功後才清除 held state
 ```
 

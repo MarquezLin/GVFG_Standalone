@@ -52,7 +52,6 @@ foreach(_required_file
     "${_GVFG_INCLUDE_DIR}/gvfg_capture.h"
     "${_GVFG_PREVIEW_INCLUDE_DIR}/gvfg_preview.h"
     "${_GVFG_BIN_DIR}/gvfg.dll"
-    "${_GVFG_BIN_DIR}/giga_ioctl.dll"
     "${_GVFG_BIN_DIR}/gvfg_preview.dll"
     "${_GVFG_IMPLIB}"
     "${_GVFG_PREVIEW_IMPLIB}")
@@ -116,7 +115,6 @@ endif()
 add_custom_command(TARGET gvfg_qt_preview POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${_GVFG_BIN_DIR}/gvfg.dll"
-    "${_GVFG_BIN_DIR}/giga_ioctl.dll"
     "${_GVFG_BIN_DIR}/gvfg_preview.dll"
     $<TARGET_FILE_DIR:gvfg_qt_preview>
 )

@@ -42,7 +42,6 @@ if (NOT WIN32)
   message(FATAL_ERROR "GVFG SDK currently supports Windows only.")
 endif()
 
-add_subdirectory(sdk/giga_ioctl)
 add_subdirectory(sdk/gvfg)
 add_subdirectory(helpers/gvfg_preview)
 

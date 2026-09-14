@@ -107,11 +107,9 @@ Debug 診斷會增加 log 與檢查成本，不應拿來判斷正式版本效能
 
 ```text
 <build>/bin/gvfg.dll
-<build>/bin/giga_ioctl.dll
 <build>/bin/gvfg_preview.dll
 <build>/bin/gvfg_qt_preview.exe
 <build>/lib/gvfg.lib
-<build>/lib/giga_ioctl.lib
 <build>/lib/gvfg_preview.lib
 ```
 

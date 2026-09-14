@@ -1,4 +1,4 @@
-#include "pcies2mm_device.h"
+#include "gigabyte_device.h"
 
 #include <windows.h>
 #include <setupapi.h>
@@ -31,9 +31,9 @@ namespace
 
 namespace gvfg::internal
 {
-    std::vector<PcieS2mmDevice> enumerate_pcies2mm_devices()
+    std::vector<GigabyteDevice> enumerate_gigabyte_devices()
     {
-        std::vector<PcieS2mmDevice> devices;
+        std::vector<GigabyteDevice> devices;
         HDEVINFO info = SetupDiGetClassDevsW(&kPcieS2mmDeviceInterfaceGuid, nullptr, nullptr,
                                              DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
         if (info == INVALID_HANDLE_VALUE)
@@ -56,13 +56,13 @@ namespace gvfg::internal
             if (!SetupDiGetDeviceInterfaceDetailW(info, &iface, detail, required, nullptr, &deviceInfo))
                 continue;
 
-            PcieS2mmDevice device;
+            GigabyteDevice device;
             device.interface_path = detail->DevicePath;
             device.friendly_name = device_property(info, deviceInfo, SPDRP_FRIENDLYNAME);
             if (device.friendly_name.empty())
                 device.friendly_name = device_property(info, deviceInfo, SPDRP_DEVICEDESC);
             if (device.friendly_name.empty())
-                device.friendly_name = L"PcieS2mm Capture Device " + std::to_wstring(devices.size());
+                device.friendly_name = L"GVFG Capture Device " + std::to_wstring(devices.size());
             devices.push_back(device);
         }
 

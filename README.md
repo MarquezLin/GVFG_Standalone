@@ -12,7 +12,7 @@ done-index 與舊 SDK frame-ring 流程不在相容範圍內。
 
 ## 內容
 
-- `GVFG_SDK`：獨立 SDK project，負責建立 `gvfg.dll`、`giga_ioctl.dll` 與選用的 `gvfg_preview.dll`。
+- `GVFG_SDK`：獨立 SDK project，使用內嵌的 `GvfgSdk.lib` 建立 `gvfg.dll` 與選用的 `gvfg_preview.dll`。
 - `GVFG_Qt_Sample`：獨立 Qt APP project，只連結預先建好的 SDK，不會編譯 SDK source。
 - `docs`：API 與整合說明。
 
@@ -62,10 +62,8 @@ Build 產物：
 
 ```text
 GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/bin/gvfg.dll
-GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/bin/giga_ioctl.dll
 GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/bin/gvfg_preview.dll
 GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/gvfg.lib
-GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/giga_ioctl.lib
 GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/gvfg_preview.lib
 GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/libgvfg.dll.a
 GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/libgvfg_preview.dll.a
@@ -204,11 +202,10 @@ IRQ、DMA 等資訊只存在 internal diagnostic tool。
 include/gvfg_capture.h
 lib/gvfg.lib
 bin/gvfg.dll
-bin/giga_ioctl.dll
 ```
 
-Application 不直接 link `giga_ioctl.lib`，但 `gvfg.dll` 會在 runtime 載入
-`giga_ioctl.dll`，因此部署時兩個 DLL 必須一起提供。
+`GvfgSdk.lib` 已靜態連結進 `gvfg.dll`，Application 不需另外部署
+`giga_ioctl.dll` 或主管 library 的額外 runtime DLL。
 
 需要 optional display helper 時，再加：
 

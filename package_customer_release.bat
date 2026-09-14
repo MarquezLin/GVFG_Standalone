@@ -41,10 +41,6 @@ if not exist "%SDK_SOURCE_BIN%\gvfg.dll" (
     echo [package] ERROR: gvfg.dll not found.
     goto fail
 )
-if not exist "%SDK_SOURCE_BIN%\giga_ioctl.dll" (
-    echo [package] ERROR: giga_ioctl.dll not found.
-    goto fail
-)
 if not exist "%SDK_SOURCE_BIN%\gvfg_preview.dll" (
     echo [package] ERROR: gvfg_preview.dll not found.
     goto fail
@@ -61,7 +57,6 @@ mkdir "%STAGE_DIR%" || goto fail
 echo [package] Copy application files...
 copy /Y "%SAMPLE_SOURCE_BIN%\gvfg_qt_preview.exe" "%STAGE_DIR%\" >nul || goto fail
 copy /Y "%SDK_SOURCE_BIN%\gvfg.dll" "%STAGE_DIR%\" >nul || goto fail
-copy /Y "%SDK_SOURCE_BIN%\giga_ioctl.dll" "%STAGE_DIR%\" >nul || goto fail
 copy /Y "%SDK_SOURCE_BIN%\gvfg_preview.dll" "%STAGE_DIR%\" >nul || goto fail
 
 echo [package] Deploy Qt runtime...

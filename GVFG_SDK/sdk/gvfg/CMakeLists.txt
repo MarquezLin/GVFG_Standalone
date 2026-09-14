@@ -7,14 +7,11 @@ add_library(gvfg SHARED
     gvfg.def
     include/gvfg_capture.h
     include/gvfg_debug.h
-    src/backend/pcies2mm/pcies2mm_backend_types.h
-    src/backend/pcies2mm/pcies2mm_capture_session.cpp
-    src/backend/pcies2mm/pcies2mm_capture_session.h
-    src/backend/pcies2mm/pcies2mm_device.cpp
-    src/backend/pcies2mm/pcies2mm_device.h
-    src/backend/pcies2mm/pcies2mm_reg.h
-    src/backend/pcies2mm/pcies2mm_video_format.cpp
-    src/backend/pcies2mm/pcies2mm_video_format.h
+    src/backend/gigabyte/gigabyte_backend_types.h
+    src/backend/gigabyte/gigabyte_capture_session.cpp
+    src/backend/gigabyte/gigabyte_capture_session.h
+    src/backend/gigabyte/gigabyte_device.cpp
+    src/backend/gigabyte/gigabyte_device.h
     src/gpu/d3d_conversion_pipeline.cpp
     src/gpu/d3d_conversion_pipeline.h
     src/gpu/gvfg_gpu_convert.cpp
@@ -33,8 +30,9 @@ target_include_directories(gvfg
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/pcies2mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/gigabyte
         ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/GigabyteLib
 )
 
 target_compile_definitions(gvfg PRIVATE
@@ -47,7 +45,7 @@ target_compile_definitions(gvfg PRIVATE
 )
 
 target_link_libraries(gvfg PRIVATE
-    giga_ioctl
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/GigabyteLib/GvfgSdk.lib"
     setupapi
     user32
     dxgi

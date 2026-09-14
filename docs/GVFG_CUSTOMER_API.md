@@ -15,11 +15,10 @@ register、IRQ 或 DMA ring 實作細節。
 include/gvfg_capture.h
 lib/gvfg.lib
 bin/gvfg.dll
-bin/giga_ioctl.dll
 ```
 
-Application 只 link `gvfg.lib`；`giga_ioctl.dll` 是 `gvfg.dll` 的 runtime
-相依，必須隨 `gvfg.dll` 一起部署，不需要把 private `giga_ioctl.h` 交給客戶。
+Application 只 link `gvfg.lib`。內部 Gigabyte library 已靜態連結進
+`gvfg.dll`，不需要部署 `giga_ioctl.dll` 或額外公開 private header。
 
 選用預覽：
 

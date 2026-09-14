@@ -1,12 +1,11 @@
 # GVFG 內部設計與維護說明
 
-## Driver IOCTL DLL 邊界
+## GigabyteLib backend 邊界
 
-`gvfg.dll` 保留裝置列舉、`CreateFile`/`CloseHandle`、雙 channel session、event、
-event thread 與每 channel 的單一 frame buffer。Driver IOCTL code、request layout 及所有
-`DeviceIoControl` 呼叫集中在獨立維護的內部 `giga_ioctl.dll`；GVFG 僅呼叫其具名 C API，
-失敗時沿用 `GetLastError()`。此 DLL 只負責 driver IOCTL code、request layout 與薄封裝，
-不持有 capture state。`giga_ioctl.h` 是內部相依，不屬於客戶公開 API。
+`gvfg.dll` 保留公開 API facade、裝置列舉、雙 channel session、frame ownership 與
+事件轉換。底層 capture lifecycle、video/audio frame access 及 zero-copy release
+全部透過主管提供的 `GvfgSdk.lib` API；舊 `giga_ioctl.dll` 與直接 register/IOCTL
+backend 已移除。`GvfgSdk.lib` 靜態連結進 `gvfg.dll`，不是客戶 runtime 相依。
 
 本文件只供 GVFG SDK、driver、FPGA 與內部診斷工具維護者使用。客戶行為與公開
 契約請以 `GVFG_CUSTOMER_API.md`、`GVFG_CUSTOMER_API_REFERENCE.md` 和
@@ -23,8 +22,8 @@ register、ring、counter 與執行緒模型都不是公開 ABI。
 | 資訊 | lifecycle、frame、event、signal、runtime FPS | IOCTL、IRQ、register、DMA/ring、debug counters |
 
 CMake install 會安裝公開的 `gvfg_capture.h`、選用的 `gvfg_preview.h`、客戶文件，
-以及 `gvfg.dll`、`giga_ioctl.dll`、`gvfg_preview.dll` 等 target 產物；不得把
-`gvfg_debug.h`、private `giga_ioctl.h` 或 `sdk/gvfg/src` 加入 customer package。
+以及 `gvfg.dll`、`gvfg_preview.dll` 等 target 產物；不得把
+`gvfg_debug.h`、GigabyteLib private header/lib 或 `sdk/gvfg/src` 加入 customer package。
 
 ## 2. 元件責任
 
@@ -32,8 +31,8 @@ CMake install 會安裝公開的 `gvfg_capture.h`、選用的 `gvfg_preview.h`�
 customer/sample
   -> gvfg_capture.h
   -> gvfg.dll facade (sdk/gvfg/src/gvfg_capture.cpp)
-  -> PcieS2mmCaptureSession
-  -> Windows device / IOCTL / FPGA registers / DMA
+  -> GigabyteLib backend adapter
+  -> GvfgSdk.lib
 
 customer/sample (optional)
   -> gvfg_preview.h
@@ -43,12 +42,10 @@ customer/sample (optional)
 
 - `gvfg_capture.cpp`：公開 handle 狀態、狀態碼轉換、frame token 驗證、event
   queue、runtime counter 與 debug API facade。
-- `pcies2mm_capture_session.*`：每 channel 的 stream lifecycle、driver event、DMA
-  wait/read、單一 outstanding frame 與 backend statistics；不包含 SDK frame ring。
-- `pcies2mm_device.*`：SetupAPI 裝置列舉與 interface path。
-- `sdk/giga_ioctl`：獨立 DLL；集中管理與 driver 共用的 private ABI 與 `DeviceIoControl` 薄封裝。
-- `pcies2mm_reg.h`：FPGA register offsets/masks。
-- `pcies2mm_video_format.*`：format register 解碼與 YUY2/Y210 layout；相容舊 FPGA 回報的 YVYU register 值。
+- `backend/gigabyte/gigabyte_capture_session.*`：把既有 GVFG lifecycle、event、
+  copy/zero-copy ownership 契約轉接到 `GvfgSdk.lib`。
+- `backend/gigabyte/gigabyte_device.*`：SetupAPI 裝置列舉與 interface path。
+- `third_party/GigabyteLib`：主管提供的靜態 library 與其 private headers，只供 SDK build。
 - `src/gpu/*`：D3D11 同步轉換及 readback 到 caller buffer。
 
 ## 3. 公開 facade 狀態

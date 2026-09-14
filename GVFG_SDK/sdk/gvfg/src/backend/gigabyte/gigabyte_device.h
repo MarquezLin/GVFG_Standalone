@@ -5,11 +5,11 @@
 
 namespace gvfg::internal
 {
-    struct PcieS2mmDevice
+    struct GigabyteDevice
     {
         std::wstring interface_path;
         std::wstring friendly_name;
     };
 
-    std::vector<PcieS2mmDevice> enumerate_pcies2mm_devices();
+    std::vector<GigabyteDevice> enumerate_gigabyte_devices();
 }

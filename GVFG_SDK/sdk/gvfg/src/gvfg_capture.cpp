@@ -1,7 +1,7 @@
 #include "gvfg_capture.h"
 
 #include "gvfg_debug.h"
-#include "pcies2mm_capture_session.h"
+#include "gigabyte_capture_session.h"
 
 #include <algorithm>
 #include <array>
@@ -1076,8 +1076,8 @@ extern "C"
 {
     int gvfg_enumerate_devices(gvfg_device_info_t *out_devices, int max_devices)
     {
-        const std::vector<gvfg::internal::PcieS2mmDevice> devices =
-            gvfg::internal::enumerate_pcies2mm_devices();
+        const std::vector<gvfg::internal::GigabyteDevice> devices =
+            gvfg::internal::enumerate_gigabyte_devices();
         const int n = static_cast<int>(devices.size());
         if (n <= 0)
             return n;

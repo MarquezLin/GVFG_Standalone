@@ -341,12 +341,11 @@ extern "C"
         _Out_ int *out_enabled);
 
     /*
-     * Select the native capture format. Call after opening the device and
-     * before gvfg_start_channel(), or after gvfg_stop_channel(). A running stream rejects the
-     * change with GVFG_ESTATE.
-     *
-     * Currently the SDK implements this through a temporary hardware register;
-     * applications must use this API so the backend can move to an IOCTL later.
+     * Request the native capture format. Call after opening the device and
+     * before gvfg_start_channel(), or after gvfg_stop_channel(). A running stream
+     * rejects the change with GVFG_ESTATE. The GigabyteLib backend does not
+     * expose format conversion, so it returns GVFG_ENOTSUP when a connected
+     * input's native format differs from the requested format.
      */
     GVFG_API gvfg_status_t gvfg_set_channel_video_format(
         _In_ gvfg_handle handle,

@@ -3,7 +3,7 @@
 > 學習文件入口：[`GVFG_LEARNING_INDEX.md`](GVFG_LEARNING_INDEX.md)
 > 延伸閱讀：[`GVFG_ERROR_HANDLING.md`](GVFG_ERROR_HANDLING.md)、[`GVFG_FRAME_FLOW_AND_STATE.md`](GVFG_FRAME_FLOW_AND_STATE.md)
 
-可以把整個架構理解成：**應用程式拿一個總管理 handle，裡面可以管理兩條 channel；兩條 channel 共用同一個 driver connection，但各自有自己的擷取狀態與 frame buffer。**
+可以把整個架構理解成：**應用程式拿一個總管理 handle，裡面可以管理兩條 channel；每條 channel 經由 GigabyteLib adapter 保有自己的 context、事件、擷取狀態與 frame buffer。**
 
 ## 目前模組分工
 
@@ -17,17 +17,17 @@ sdk/gvfg/include
 sdk/gvfg/src/gvfg_capture.cpp
     C ABI facade、opaque handle、channel 管理、參數驗證、frame token、event queue
 
-sdk/gvfg/src/backend/pcies2mm
-    driver device、register、DMA/event、copy/zero-copy 與 backend 狀態
+sdk/gvfg/src/backend/gigabyte
+    將公開 API 的 lifecycle、event、copy/zero-copy ownership 轉接至 GvfgSdk.lib
 
-sdk/giga_ioctl
-    獨立 driver ABI DLL；只包裝 IOCTL，不持有 capture lifecycle
+third_party/GigabyteLib
+    主管提供的靜態 library 與 private headers，只供 gvfg.dll build
 
 helpers/gvfg_preview
     獨立 preview helper DLL；只負責顯示，不擁有 capture frame
 ```
 
-這些 DLL 邊界是刻意保留的維護責任，不應為了減少檔案而全部合併。
+客戶端仍只面對 `gvfg.dll`；`GvfgSdk.lib` 已靜態連結，不是部署用 DLL。
 
 ```mermaid
 flowchart TD
@@ -36,14 +36,14 @@ flowchart TD
     API["公開 C API<br/>gvfg_create / open_channel / start_channel<br/>read_channel_frame / release_channel_frame"]
 
     H["gvfg_handle_t<br/>整張擷取卡的管理者"]
-    DC["PcieS2mmDeviceConnection<br/>唯一的 Windows HANDLE"]
+    DC["Gigabyte device selection<br/>interface path"]
     C0["gvfg_channel_session_t<br/>CH0 的 SDK 包裝"]
     C1["gvfg_channel_session_t<br/>CH1 的 SDK 包裝"]
-    B0["PcieS2mmCaptureSession<br/>CH0 backend"]
-    B1["PcieS2mmCaptureSession<br/>CH1 backend"]
+    B0["GigabyteLib adapter<br/>CH0 context / events"]
+    B1["GigabyteLib adapter<br/>CH1 context / events"]
     BUF0["copy_buffer_<br/>CH0 copy-mode frame"]
     BUF1["copy_buffer_<br/>CH1 copy-mode frame"]
-    DRV["Windows driver<br/>DMA / DeviceIoControl"]
+    DRV["GvfgSdk.lib<br/>private driver ABI"]
 
     APP --> API
     API --> H
@@ -55,8 +55,8 @@ flowchart TD
     C0 --> B0
     C1 --> B1
 
-    B0 -. shared_ptr .-> DC
-    B1 -. shared_ptr .-> DC
+    B0 -. device path .-> DC
+    B1 -. device path .-> DC
 
     B0 --> BUF0
     B1 --> BUF1
