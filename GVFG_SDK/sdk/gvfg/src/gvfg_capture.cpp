@@ -864,16 +864,7 @@ struct gvfg_handle_t
             return rejectChannel(channelIndex, GVFG_EINVAL,
                                  "gvfg_set_channel_video_format rejected: pixel format is invalid");
 
-        const int other = channelIndex == GVFG_CHANNEL_0 ? GVFG_CHANNEL_1 : GVFG_CHANNEL_0;
-        if (format == GVFG_PIXFMT_Y210 &&
-            requestedFormats[static_cast<size_t>(other)] == GVFG_PIXFMT_Y210)
-            return rejectChannel(channelIndex, GVFG_ENOTSUP,
-                                 "both channels cannot use Y210 at the same time");
-
-        const gvfg_status_t status = channel->setVideoFormat(format);
-        if (status == GVFG_OK)
-            requestedFormats[static_cast<size_t>(channelIndex)] = format;
-        return status;
+        return channel->setVideoFormat(format);
     }
 
     gvfg_status_t stopAll()
@@ -911,7 +902,6 @@ struct gvfg_handle_t
     std::array<std::unique_ptr<gvfg_channel_session_t>, 2> channels;
     int currentIndex = -1;
     std::array<bool, 2> zeroCopyRequested{false, false};
-    std::array<gvfg_pixel_format_t, 2> requestedFormats{GVFG_PIXFMT_YUY2, GVFG_PIXFMT_YUY2};
 };
 
 extern "C"

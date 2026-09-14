@@ -356,11 +356,7 @@ extern "C"
         GVFG_PARAM_IN int channel_index,
         GVFG_PARAM_OUT int *out_enabled);
 
-    /*
-     * Select the hardware output format before capture starts. This capability
-     * currently uses an isolated driver extension because GvfgSdk.lib 1.0.0
-     * does not expose an equivalent API.
-     */
+    /* Select the hardware output format before capture starts. */
     GVFG_API gvfg_status_t gvfg_set_channel_video_format(
         GVFG_PARAM_IN gvfg_handle handle,
         GVFG_PARAM_IN int channel_index,

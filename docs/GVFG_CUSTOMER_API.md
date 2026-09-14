@@ -229,7 +229,7 @@ Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，每次成
 成功 read 後，不論 PCM 是送往播放、錄音或被丟棄，都必須正好 release 一次。
 
 `gvfg_set_channel_video_format()` 可在 stream 尚未開始或已 stop 時選擇 YUY2/Y210。
-目前 GigabyteLib 1.0.0 沒有對應 API，因此此功能由隔離的 driver extension 暫時補足。
+此功能由 GigabyteLib 1.0.2 的 `GvfgSetVideoColorDepth()` 實作。
 
 ### 查詢
 

@@ -9,8 +9,8 @@ extern "C" {
 #define GVFG_PARAM_OUT
     
 #define GVFG_SDK_API
-#define GVFG_SDK_VER        "1.0.0"
-
+#define GVFG_SDK_VER        "1.0.2"
+    
     
 #ifdef __cplusplus
 }

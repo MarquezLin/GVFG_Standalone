@@ -193,12 +193,11 @@ gvfg_status_t GigabyteCaptureSession::set_video_format(gvfg_pixel_format_t forma
     if (openStatus != GVFG_OK)
         return openStatus;
 
-    constexpr uint32_t kVideoOutputFormatRegister = 0x080;
-    if (!gigabyte_write_register(device_handle_, kVideoOutputFormatRegister,
-                                  format == GVFG_PIXFMT_Y210 ? 1u : 0u))
-        return reject(GVFG_EIO,
-                      "GigabyteLib gap: driver extension failed to set the output format register");
-    return GVFG_OK;
+    const ULONG colorDepth = format == GVFG_PIXFMT_Y210
+                                 ? GVFG_VIDEO_COLOR_DEPTH_10_BITS
+                                 : GVFG_VIDEO_COLOR_DEPTH_8_BITS;
+    return from_vendor(GvfgSetVideoColorDepth(context_, channel_, colorDepth),
+                       "GvfgSetVideoColorDepth");
 }
 
 gvfg_status_t GigabyteCaptureSession::refresh_video_info() const

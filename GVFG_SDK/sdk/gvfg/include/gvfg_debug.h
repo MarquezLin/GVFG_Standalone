@@ -43,7 +43,7 @@ GVFG_API gvfg_status_t gvfg_debug_get_channel_backend_stats(
     GVFG_PARAM_IN int channel_index,
     GVFG_PARAM_OUT gvfg_debug_backend_stats_t *out_stats);
 
-/* GIGABYTELIB GAP: GvfgSdk.lib 1.0.0 has no register-access API. */
+/* GIGABYTELIB GAP: GvfgSdk.lib 1.0.2 has no declared register-access API. */
 GVFG_API gvfg_status_t gvfg_debug_read_register(
     GVFG_PARAM_IN gvfg_handle handle,
     GVFG_PARAM_IN uint32_t offset,

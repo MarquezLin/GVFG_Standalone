@@ -13,7 +13,7 @@ extern "C" {
              
 
 typedef struct _GVFG_CONTEXT GVFG_CONTEXT, *PGVFG_CONTEXT;
-
+    
 typedef enum GVFG_HRESULT {
     
     GVFG_HRESULT_OK                     = 0x0,
@@ -27,7 +27,9 @@ typedef enum GVFG_HRESULT {
 
 } GVFG_HRESULT;
 
-
+#define GVFG_VIDEO_COLOR_DEPTH_8_BITS         (8)
+#define GVFG_VIDEO_COLOR_DEPTH_10_BITS        (10)
+    
 #define  GVFG_VIDEO_INTERFACE_SDI       (0)               
 #define  GVFG_VIDEO_INTERFACE_HDMI      (1)
 
@@ -165,7 +167,7 @@ typedef struct _GVFG_SDI_VIDEO_INFO_STR {
     char St352PayloadByte3BitDepth[24];
     
 } GVFG_SDI_VIDEO_INFO_STR, *PGVFG_SDI_VIDEO_INFO_STR;
-
+    
     
 GVFG_SDK_API GVFG_HRESULT GvfgCreateEvents(GVFG_PARAM_IN PGVFG_VIDEO_CHN_EVENT pEvents,
                                            GVFG_PARAM_IN BOOL audioDisable);
@@ -238,6 +240,11 @@ GVFG_SDK_API GVFG_HRESULT GvfgGetAudioFrame(GVFG_PARAM_IN PGVFG_CONTEXT pCxt,
                                             GVFG_PARAM_OUT VOID *pBuf,
                                             GVFG_PARAM_IN ULONG cbBufSize);
 
+
+
+GVFG_SDK_API GVFG_HRESULT GvfgSetVideoColorDepth(GVFG_PARAM_IN PGVFG_CONTEXT pCxt,
+                                                 GVFG_PARAM_IN ULONG videoChn,
+                                                 GVFG_PARAM_IN ULONG colorDepth);    
 
     
 

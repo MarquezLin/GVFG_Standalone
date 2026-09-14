@@ -57,7 +57,7 @@ register 與 DMA 實作不屬於本文件。
 
 `gvfg_sdi_mode_t`、`gvfg_sdi_resolution_t` 與 `gvfg_sdi_fps_t` 提供
 `gvfg_sdi_info_t.mode`、`resolution`、`fps` 的程式判斷常數。其數值與
-GigabyteLib 1.0.0 完全一致，包含：
+GigabyteLib 1.0.2 完全一致，包含：
 
 - Mode：`GVFG_SDI_INPUT_MODE_HD`、`SD`、`3G`。
 - Resolution：SMPTE ST 274 1920x1080、ST 296 1280x720、SMPTE 2048
@@ -286,9 +286,8 @@ gvfg_status_t gvfg_set_channel_video_format(gvfg_handle handle,
 
 - 支援 `GVFG_PIXFMT_YUY2` 與 `GVFG_PIXFMT_Y210`。
 - Channel 必須已 open，且 capture 必須尚未 start 或已 stop。
-- 目前透過隔離的 driver extension 寫入 output-format register；這是
-  `GvfgSdk.lib 1.0.0` 尚未提供的功能。
-- 同一裝置 CH0、CH1 不可同時設定 Y210。
+- YUY2 對應 GigabyteLib 8-bit color depth，Y210 對應 10-bit；SDK 透過
+  `GvfgSetVideoColorDepth()` 設定，不直接寫硬體 register。
 
 ### 1.20 Audio capture selection and frame ownership
 

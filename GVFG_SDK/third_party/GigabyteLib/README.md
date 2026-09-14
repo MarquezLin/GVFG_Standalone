@@ -3,10 +3,10 @@
 This directory contains the supervisor-provided static MSVC library used by the
 GVFG backend.
 
-- Upstream version macro: `GVFG_SDK_VER 1.0.0`
+- Upstream version macro: `GVFG_SDK_VER 1.0.2`
 - Library: `GvfgSdk.lib`
-- SHA-256: `B8D1ED04C2A8F1857F43B81E68B17DAE362D576D2156AF666A2B5C3286CEBDAA`
-- Original source: `_SDK/ex/_demo/GigabyteLib/GigabyteLib`
+- SHA-256: `EC9577D4BE76861E44DFDD3B537DF2A57CCDA5A5F1B14E0BAAC92213E796A743`
+- Original source: `ex_demo/GigabyteLib/vfg100_0914_b`
 
 `GvfgSdk.lib` is linked into `gvfg.dll`; it is not distributed as a separate
 customer runtime dependency. The supplied package did not contain source,

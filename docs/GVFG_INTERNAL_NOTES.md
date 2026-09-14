@@ -123,9 +123,10 @@ x64 `gvfg_frame_t` ABI 已在 `gvfg_capture.cpp` 以 static assertions 固定為
 ## GigabyteLib requirement
 
 Capture、audio、event 與 frame ownership 的 driver ABI 由主管提供的
-`GvfgSdk.lib` 負責。例外只有 library 1.0.0 尚未提供的 output-format selection
-與 diagnostic register R/W；它們集中在 `gigabyte_driver_extensions.*`，不得擴大
-成第二套 capture backend。待主管補上正式 `Gvfg*` API 後應刪除此 extension。
+`GvfgSdk.lib` 負責。Output-format selection 已改用 library 1.0.2 的
+`GvfgSetVideoColorDepth()`；目前唯一例外是 diagnostic register R/W，集中在
+`gigabyte_driver_extensions.*`，不得擴大成第二套 capture backend。待主管補上正式
+register API 後應刪除此 extension。
 
 目前原生格式：
 
