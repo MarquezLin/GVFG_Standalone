@@ -274,9 +274,9 @@ gvfg_status_t GigabyteCaptureSession::get_sdi_info(gvfg_sdi_info_t &out) const
         return status;
     out = {};
     out.connected = info.VideoSignalLock ? 1 : 0;
-    out.mode = info.Mode;
-    out.resolution = info.Resol;
-    out.fps = info.Fps;
+    out.mode = static_cast<gvfg_sdi_mode_t>(info.Mode);
+    out.resolution = static_cast<gvfg_sdi_resolution_t>(info.Resol);
+    out.fps = static_cast<gvfg_sdi_fps_t>(info.Fps);
     out.progressive = info.Progressive ? 1 : 0;
     out.level_b = info.LevelB ? 1 : 0;
     out.st352_payload = info.St352Payload;

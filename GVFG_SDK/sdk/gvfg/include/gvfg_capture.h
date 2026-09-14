@@ -108,6 +108,39 @@ extern "C"
         GVFG_INPUT_INTERFACE_HDMI = 1
     } gvfg_video_interface_t;
 
+    typedef enum
+    {
+        GVFG_SDI_INPUT_MODE_HD = 0,
+        GVFG_SDI_INPUT_MODE_SD = 1,
+        GVFG_SDI_INPUT_MODE_3G = 2
+    } gvfg_sdi_mode_t;
+
+    typedef enum
+    {
+        GVFG_SDI_INPUT_RESOLUTION_SMPTE_ST_274_1920X1080 = 0x0,
+        GVFG_SDI_INPUT_RESOLUTION_SMPTE_ST_296_1280X720 = 0x1,
+        GVFG_SDI_INPUT_RESOLUTION_SMPTE_2048_2048X1080 = 0x2,
+        GVFG_SDI_INPUT_RESOLUTION_SMPTE_295_1920X1080 = 0x3,
+        GVFG_SDI_INPUT_RESOLUTION_NTSC_720X486 = 0x8,
+        GVFG_SDI_INPUT_RESOLUTION_PAL_720X576 = 0x9,
+        GVFG_SDI_INPUT_RESOLUTION_UNKNOWN = 0xF
+    } gvfg_sdi_resolution_t;
+
+    typedef enum
+    {
+        GVFG_SDI_INPUT_FPS_NONE = 0x0,
+        GVFG_SDI_INPUT_FPS_23_98 = 0x2,
+        GVFG_SDI_INPUT_FPS_24 = 0x3,
+        GVFG_SDI_INPUT_FPS_47_95 = 0x4,
+        GVFG_SDI_INPUT_FPS_25 = 0x5,
+        GVFG_SDI_INPUT_FPS_29_97 = 0x6,
+        GVFG_SDI_INPUT_FPS_30 = 0x7,
+        GVFG_SDI_INPUT_FPS_48 = 0x8,
+        GVFG_SDI_INPUT_FPS_50 = 0x9,
+        GVFG_SDI_INPUT_FPS_59_94 = 0xA,
+        GVFG_SDI_INPUT_FPS_60 = 0xB
+    } gvfg_sdi_fps_t;
+
     typedef struct
     {
         uint32_t sample_rate;
@@ -129,9 +162,9 @@ extern "C"
     typedef struct
     {
         int connected;
-        uint32_t mode;
-        uint32_t resolution;
-        uint32_t fps;
+        gvfg_sdi_mode_t mode;
+        gvfg_sdi_resolution_t resolution;
+        gvfg_sdi_fps_t fps;
         int progressive;
         int level_b;
         uint32_t st352_payload;

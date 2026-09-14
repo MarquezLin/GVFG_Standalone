@@ -55,6 +55,18 @@ register 與 DMA 實作不屬於本文件。
 | `GVFG_INPUT_INTERFACE_SDI` | 0 | GigabyteLib 回報 SDI input |
 | `GVFG_INPUT_INTERFACE_HDMI` | 1 | GigabyteLib 回報 HDMI input |
 
+`gvfg_sdi_mode_t`、`gvfg_sdi_resolution_t` 與 `gvfg_sdi_fps_t` 提供
+`gvfg_sdi_info_t.mode`、`resolution`、`fps` 的程式判斷常數。其數值與
+GigabyteLib 1.0.0 完全一致，包含：
+
+- Mode：`GVFG_SDI_INPUT_MODE_HD`、`SD`、`3G`。
+- Resolution：SMPTE ST 274 1920x1080、ST 296 1280x720、SMPTE 2048
+  2048x1080、SMPTE 295 1920x1080、NTSC 720x486、PAL 720x576 與 UNKNOWN。
+- FPS：NONE、23.98、24、47.95、25、29.97、30、48、50、59.94 與 60。
+
+UI 應優先顯示 `gvfg_sdi_info_t` 的對應 `*_name`；程式邏輯則比較上述 enum，
+不要比較顯示字串或自行寫 magic number。
+
 ### 1.5 `gvfg_device_info_t`
 
 由 `gvfg_enumerate_devices()` 填入。
