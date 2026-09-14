@@ -341,18 +341,6 @@ extern "C"
         _Out_ int *out_enabled);
 
     /*
-     * Request the native capture format. Call after opening the device and
-     * before gvfg_start_channel(), or after gvfg_stop_channel(). A running stream
-     * rejects the change with GVFG_ESTATE. The GigabyteLib backend does not
-     * expose format conversion, so it returns GVFG_ENOTSUP when a connected
-     * input's native format differs from the requested format.
-     */
-    GVFG_API gvfg_status_t gvfg_set_channel_video_format(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _In_ gvfg_pixel_format_t format);
-
-    /*
      * Enable or disable audio for the next channel start. Video remains
      * enabled; applications do not need to construct stream flag masks.
      */

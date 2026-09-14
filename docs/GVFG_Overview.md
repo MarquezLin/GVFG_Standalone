@@ -17,7 +17,7 @@ sdk/gvfg/include
 sdk/gvfg/src/gvfg_capture.cpp
     C ABI facade、opaque handle、channel 管理、參數驗證、frame token、event queue
 
-sdk/gvfg/src/backend/gigabyte
+sdk/gvfg/src/gigabyte
     將公開 API 的 lifecycle、event、copy/zero-copy ownership 轉接至 GvfgSdk.lib
 
 third_party/GigabyteLib
@@ -112,7 +112,7 @@ struct gvfg_handle_t
     std::array<ChannelErrorState, 2> channelErrors;
 
     std::shared_ptr<
-        gvfg::internal::PcieS2mmDeviceConnection
+        gvfg::internal::GigabyteDeviceConnection
     > deviceConnection;
 
     std::array<
@@ -135,7 +135,7 @@ struct gvfg_handle_t
 ### `deviceConnection`
 
 ```cpp
-std::shared_ptr<PcieS2mmDeviceConnection> deviceConnection;
+std::shared_ptr<GigabyteDeviceConnection> deviceConnection;
 ```
 
 負責保存底層 Windows driver connection。
@@ -207,7 +207,7 @@ channels[1] 獨自擁有 CH1 session
 struct gvfg_channel_session_t
 {
     ChannelErrorState &errorState;
-    std::unique_ptr<PcieS2mmCaptureSession> backend;
+    std::unique_ptr<GigabyteCaptureSession> backend;
 
     int currentIndex;
     uint32_t selectedChannel;
@@ -218,13 +218,13 @@ struct gvfg_channel_session_t
     bool readInProgress;
     bool frameHeld;
 
-    pcies2mm_frame_t heldBackendFrame;
+    gigabyte_frame_t heldBackendFrame;
 
     // FPS、signal、event queue 等其他狀態
 };
 ```
 
-它是「公開 GVFG API」與「底層 PCIES2MM backend」中間的包裝層。
+它是「公開 GVFG API」與「底層 GIGABYTE backend」中間的包裝層。
 
 例如應用程式呼叫：
 
@@ -241,7 +241,7 @@ gvfg_read_channel_frame()
         ↓
 gvfg_channel_session_t::readFrame()
         ↓
-PcieS2mmCaptureSession::wait_frame()
+GigabyteCaptureSession::wait_frame()
         ↓
 driver IOCTL
 ```
@@ -257,14 +257,14 @@ driver IOCTL
 
 ---
 
-## 第四層：`PcieS2mmCaptureSession`
+## 第四層：`GigabyteCaptureSession`
 
-這是實際操作 PCIES2MM driver 的單一 channel backend：
+這是實際操作 GIGABYTE driver 的單一 channel backend：
 
 ```cpp
-class PcieS2mmCaptureSession
+class GigabyteCaptureSession
 {
-    std::shared_ptr<PcieS2mmDeviceConnection>
+    std::shared_ptr<GigabyteDeviceConnection>
         device_connection_;
 
     HANDLE dma_event_;
@@ -277,7 +277,7 @@ class PcieS2mmCaptureSession
     bool zero_copy_enabled_;
 
     std::vector<uint8_t> copy_buffer_;
-    pcies2mm_frame_t held_frame_;
+    gigabyte_frame_t held_frame_;
 
     bool frame_held_;
     bool read_in_progress_;
@@ -288,7 +288,7 @@ class PcieS2mmCaptureSession
 };
 ```
 
-CH0、CH1 各有自己的 `PcieS2mmCaptureSession`，因此它們各自擁有：
+CH0、CH1 各有自己的 `GigabyteCaptureSession`，因此它們各自擁有：
 
 - 自己的 DMA event
 - 自己的 signal event
@@ -308,16 +308,16 @@ device_connection_
 
 ---
 
-## 第五層：`PcieS2mmDeviceConnection`
+## 第五層：`GigabyteDeviceConnection`
 
 目前非常單純：
 
 ```cpp
-struct PcieS2mmDeviceConnection
+struct GigabyteDeviceConnection
 {
     HANDLE handle = INVALID_HANDLE_VALUE;
 
-    ~PcieS2mmDeviceConnection();
+    ~GigabyteDeviceConnection();
 };
 ```
 
@@ -332,7 +332,7 @@ connection->handle = CreateFileW(...);
 最後一個 `shared_ptr` 被釋放時，destructor 執行：
 
 ```cpp
-PcieS2mmDeviceConnection::~PcieS2mmDeviceConnection()
+GigabyteDeviceConnection::~GigabyteDeviceConnection()
 {
     if (handle != INVALID_HANDLE_VALUE)
         CloseHandle(handle);
@@ -345,8 +345,8 @@ PcieS2mmDeviceConnection::~PcieS2mmDeviceConnection()
 
 ```text
 gvfg_handle_t
-CH0 PcieS2mmCaptureSession
-CH1 PcieS2mmCaptureSession
+CH0 GigabyteCaptureSession
+CH1 GigabyteCaptureSession
 ```
 
 它們共同使用同一個 Windows `HANDLE`。
@@ -462,14 +462,14 @@ gvfg_create()
 gvfg_open_channel(CH0)
 │
 ├─ 建立 CH0 gvfg_channel_session_t
-├─ 建立 CH0 PcieS2mmCaptureSession
+├─ 建立 CH0 GigabyteCaptureSession
 ├─ CreateFileW() 開啟 driver
 └─ deviceConnection 保存 Windows HANDLE
 
 gvfg_open_channel(CH1)
 │
 ├─ 建立 CH1 gvfg_channel_session_t
-├─ 建立 CH1 PcieS2mmCaptureSession
+├─ 建立 CH1 GigabyteCaptureSession
 └─ 共用既有 deviceConnection
 
 gvfg_start_channel(CH0)
@@ -496,10 +496,10 @@ gvfg_handle_t
 gvfg_channel_session_t
     = 公開 API 所看到的一條 channel
 
-PcieS2mmCaptureSession
+GigabyteCaptureSession
     = 實際操作 driver 的一條 channel
 
-PcieS2mmDeviceConnection
+GigabyteDeviceConnection
     = CH0、CH1 共用的 Windows driver 連線
 
 copy_buffer_

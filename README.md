@@ -76,26 +76,8 @@ MSVC 上層連結 `gvfg.lib` 與 `gvfg_preview.lib`；MinGW 上層連結
 
 ## Driver compatibility
 
-此版本只支援新版 PCIE S2MM driver，不再 backward compatible 舊版 driver。
-新版 driver 必須支援：
-
-- `IOCTL_GIGA_VIDEO_START`（function `0x830`）。
-- `IOCTL_GIGA_VIDEO_STOP`（function `0x831`）。
-- `IOCTL_GIGA_RELEASE_VIDEO_FRAME` 到 `IOCTL_GIGA_CLOSE_VIDEO`
-  使用 function `0x832` 到 `0x837`。
-- `IOCTL_PCIES2MM_GET_FRAME` 接受 `frameIndex = MAXULONG`（`0xFFFFFFFF`），
-  由 driver 自行選擇已完成的 frame。
-- `IOCTL_PCIES2MM_GET_AUDIO_FRAME`（function `0x809`）同樣接受
-  `frameIndex = MAXULONG`。
-- `IOCTL_GIGA_START_VIDEO_AUDIO`、`IOCTL_GIGA_STOP_VIDEO_AUDIO` 與
-  `IOCTL_GIGA_GET_AUDIO_INFO`（function `0x839` 到 `0x83B`）。
-- Extra video/audio frame event（event type `5`、`6`）表示 driver 仍有
-  frame 待取；SDK 將它們當成額外的 ready notification。
-
-SDK 不再呼叫 `IOCTL_PCIES2MM_GET_VIDEO_DONE_INDEX`，也不會在新 IOCTL
-不支援時退回直接寫入 `VIDEO_DMA_EN_OFFSET`、`VIDEO_EN_OFFSET` 或
-`IRQ_MASK_W1S_OFFSET`。若搭配舊版 driver，stream start 或 frame capture
-可能失敗。
+GVFG SDK 不再直接定義 driver IOCTL 或 register layout。底層 driver 相容性由
+主管提供的 `GvfgSdk.lib` 負責，GVFG 只使用其 `Gvfg*` API。
 
 ### Zero-copy selection
 
@@ -217,6 +199,6 @@ bin/gvfg_preview.dll
 
 GPU snapshot/export conversion 已整合在 `gvfg.dll`，不需要額外 helper DLL。
 
-Customer/demo package 不應包含 `gvfg_debug.h`、SDK source、PCIES2MM backend
+Customer/demo package 不應包含 `gvfg_debug.h`、SDK source、GigabyteLib session
 headers、IRQ details 或 helper source。這些只屬於 internal
 debug/full application package。

@@ -29,7 +29,7 @@ public:
     ~CaptureController() override;
 
     void setSelectedDeviceIndex(int index) { selectedDeviceIndex_ = index; }
-    void setChannelOptions(int channel, bool zeroCopy, gvfg_pixel_format_t format, bool audioEnabled);
+    void setChannelOptions(int channel, bool zeroCopy, bool audioEnabled);
     void setChannelStatusVisible(int channel, bool visible);
     void setPreviewTarget(int channel, void *nativeWindow);
     void setPreviewVisible(int channel, bool visible);
@@ -47,7 +47,6 @@ public slots:
     void refreshDevices();
     bool openDevice();
     void closeDevice();
-    bool applyOutputFormat(int channel);
     void startCapture(int channel);
     void stopCapture(int channel);
     void stopAllCaptures();
@@ -71,7 +70,6 @@ private:
         bool opened = false;
         bool zeroCopy = false;
         bool requestedAudio = false;
-        gvfg_pixel_format_t requestedFormat = GVFG_PIXFMT_YUY2;
         void *previewTarget = nullptr;
         gvfg_preview_handle previewHandle = nullptr;
         std::atomic<bool> running{false}, stopRequested{false}, signalConnected{false};

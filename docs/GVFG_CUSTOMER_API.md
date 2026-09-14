@@ -231,8 +231,8 @@ Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，每次成
 
 成功 read 後，不論 PCM 是送往播放、錄音或被丟棄，都必須正好 release 一次。
 
-`gvfg_set_channel_video_format()` 只能在指定 stream 尚未開始或已 stop 時呼叫；streaming 中
-切換會回傳 `GVFG_ESTATE`。應用程式應在 UI 上同步鎖定格式選項。
+Video format 由 `GvfgGetVideoInfo()` 回報的原生輸入格式決定。GigabyteLib 沒有
+輸出格式切換 API，因此 GVFG 不提供格式 setter。
 
 ### 查詢
 

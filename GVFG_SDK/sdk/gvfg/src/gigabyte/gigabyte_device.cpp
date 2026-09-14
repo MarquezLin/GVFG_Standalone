@@ -10,7 +10,7 @@
 namespace
 {
     // Device interface exported by pcie_s2mm_driver.
-    const GUID kPcieS2mmDeviceInterfaceGuid =
+    const GUID kGigabyteDeviceInterfaceGuid =
         {0x8c47b9c3, 0x1faa, 0x4557, {0xbc, 0x1d, 0xf2, 0x25, 0xd2, 0x6c, 0x9e, 0x91}};
 
     std::wstring device_property(HDEVINFO info, SP_DEVINFO_DATA &deviceInfo, DWORD property)
@@ -34,14 +34,14 @@ namespace gvfg::internal
     std::vector<GigabyteDevice> enumerate_gigabyte_devices()
     {
         std::vector<GigabyteDevice> devices;
-        HDEVINFO info = SetupDiGetClassDevsW(&kPcieS2mmDeviceInterfaceGuid, nullptr, nullptr,
+        HDEVINFO info = SetupDiGetClassDevsW(&kGigabyteDeviceInterfaceGuid, nullptr, nullptr,
                                              DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
         if (info == INVALID_HANDLE_VALUE)
             return devices;
 
         SP_DEVICE_INTERFACE_DATA iface = {};
         iface.cbSize = sizeof(iface);
-        for (DWORD index = 0; SetupDiEnumDeviceInterfaces(info, nullptr, &kPcieS2mmDeviceInterfaceGuid, index, &iface); ++index)
+        for (DWORD index = 0; SetupDiEnumDeviceInterfaces(info, nullptr, &kGigabyteDeviceInterfaceGuid, index, &iface); ++index)
         {
             DWORD required = 0;
             SetupDiGetDeviceInterfaceDetailW(info, &iface, nullptr, 0, &required, nullptr);

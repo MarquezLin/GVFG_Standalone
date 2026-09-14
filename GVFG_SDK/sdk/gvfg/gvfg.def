@@ -9,7 +9,6 @@ EXPORTS
     gvfg_get_channel_event_mask
     gvfg_set_channel_zero_copy_enabled
     gvfg_get_channel_zero_copy_enabled
-    gvfg_set_channel_video_format
     gvfg_set_channel_audio_enabled
     gvfg_get_channel_audio_format
     gvfg_start_channel
@@ -30,6 +29,4 @@ EXPORTS
     gvfg_pixel_format_name
     gvfg_strerror
     gvfg_get_channel_last_error_detail
-    gvfg_debug_get_channel_backend_stats
-    gvfg_debug_read_register
-    gvfg_debug_write_register
+    gvfg_debug_get_channel_stats

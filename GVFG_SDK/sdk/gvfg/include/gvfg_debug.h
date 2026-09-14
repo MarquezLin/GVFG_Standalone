@@ -34,17 +34,17 @@ typedef struct
     uint64_t frames_returned;
     gvfg_debug_last_frame_info_t last_frame;
 
-    int backend_state;
-    uint64_t backend_frames_captured;
-    uint64_t backend_frames_delivered;
-    uint64_t backend_dma_errors;
-    uint64_t backend_interrupt_count;
-    uint64_t backend_wait_timeouts;
+    int session_state;
+    uint64_t session_frames_captured;
+    uint64_t session_frames_delivered;
+    uint64_t session_dma_errors;
+    uint64_t session_interrupt_count;
+    uint64_t session_wait_timeouts;
 
-    int backend_running;
-    int backend_capture_active;
-    uint64_t backend_latest_sequence;
-    uint64_t backend_delivered_sequence;
+    int session_running;
+    int session_capture_active;
+    uint64_t session_latest_sequence;
+    uint64_t session_delivered_sequence;
     uint64_t audio_dma_event_wakes;
     uint64_t extra_audio_event_wakes;
     uint64_t audio_frames_from_driver;
@@ -55,34 +55,18 @@ typedef struct
     double get_frame_timing_average_us;
     double get_frame_timing_max300_us;
     double get_frame_timing_max_us;
-} gvfg_debug_backend_stats_t;
+} gvfg_debug_channel_stats_t;
 
 /*
- * Query driver-neutral internal backend counters.
+ * Query driver-neutral internal session counters.
  *
  * This exposes implementation-level counters for internal tools only. Customer
  * applications should use gvfg_get_channel_runtime_info() instead.
  */
-GVFG_API gvfg_status_t gvfg_debug_get_channel_backend_stats(
+GVFG_API gvfg_status_t gvfg_debug_get_channel_stats(
     _In_ gvfg_handle handle,
     _In_ int channel_index,
-    _Out_ gvfg_debug_backend_stats_t *out_stats);
-
-/*
- * Read or write one 32-bit BAR-relative hardware register.
- *
- * The offset must be 4-byte aligned. Register writes can disrupt active DMA,
- * interrupt handling, or video capture and are intended for internal tools.
- */
-GVFG_API gvfg_status_t gvfg_debug_read_register(
-    _In_ gvfg_handle handle,
-    _In_ uint32_t offset,
-    _Out_ uint32_t *out_value);
-
-GVFG_API gvfg_status_t gvfg_debug_write_register(
-    _In_ gvfg_handle handle,
-    _In_ uint32_t offset,
-    _In_ uint32_t value);
+    _Out_ gvfg_debug_channel_stats_t *out_stats);
 
 #ifdef __cplusplus
 }

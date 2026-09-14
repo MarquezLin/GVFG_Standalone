@@ -7,11 +7,11 @@ add_library(gvfg SHARED
     gvfg.def
     include/gvfg_capture.h
     include/gvfg_debug.h
-    src/backend/gigabyte/gigabyte_backend_types.h
-    src/backend/gigabyte/gigabyte_capture_session.cpp
-    src/backend/gigabyte/gigabyte_capture_session.h
-    src/backend/gigabyte/gigabyte_device.cpp
-    src/backend/gigabyte/gigabyte_device.h
+    src/gigabyte/gigabyte_types.h
+    src/gigabyte/gigabyte_capture_session.cpp
+    src/gigabyte/gigabyte_capture_session.h
+    src/gigabyte/gigabyte_device.cpp
+    src/gigabyte/gigabyte_device.h
     src/gpu/d3d_conversion_pipeline.cpp
     src/gpu/d3d_conversion_pipeline.h
     src/gpu/gvfg_gpu_convert.cpp
@@ -30,7 +30,7 @@ target_include_directories(gvfg
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/gigabyte
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/gigabyte
         ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu
         ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/GigabyteLib
 )

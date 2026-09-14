@@ -65,7 +65,7 @@ explicit gvfg_channel_session_t(ChannelErrorState &errorState)
 backend 也取得同一份 reference：
 
 ```cpp
-backend = std::make_unique<PcieS2mmCaptureSession>(errorState);
+backend = std::make_unique<GigabyteCaptureSession>(errorState);
 ```
 
 因此同一條 channel 的三層共用同一份詳細訊息：
@@ -75,7 +75,7 @@ backend = std::make_unique<PcieS2mmCaptureSession>(errorState);
        ↓
 gvfg_channel_session_t
        ↓
-PcieS2mmCaptureSession
+GigabyteCaptureSession
        ↓
 同一個 ChannelErrorState
 ```
@@ -104,7 +104,7 @@ backend event thread、capture/read thread 與 application thread 都可能產�
 
 `gvfg_poll_channel_event()` 的 timeout／non-blocking 無資料不會寫入
 `ChannelErrorState`。目前 `gvfg_read_channel_frame()` 的 backend timeout 會經過
-`PcieS2mmCaptureSession::reject()`，因此會保存 timeout 詳細訊息。新的
+`GigabyteCaptureSession::reject()`，因此會保存 timeout 詳細訊息。新的
 `gvfg_start_channel()` request 會先清除舊內容；若 start 失敗，失敗路徑會立即寫入新的
 詳細資訊。
 
@@ -146,7 +146,7 @@ backend 的 `fail()` 會組合：
 例如：
 
 ```cpp
-return fail(PCIES2MM_EIO, "wait DMA event", err);
+return fail(GIGABYTE_EIO, "wait DMA event", err);
 ```
 
 同時會：
@@ -157,16 +157,16 @@ return fail(PCIES2MM_EIO, "wait DMA event", err);
 
 ## 6. Backend status 如何轉成公開 status
 
-backend 使用 `pcies2mm_status_t`，facade 透過 `map_status()` 轉成 `gvfg_status_t`：
+backend 使用 `gigabyte_status_t`，facade 透過 `map_status()` 轉成 `gvfg_status_t`：
 
 ```text
-PCIES2MM_OK       -> GVFG_OK
-PCIES2MM_EINVAL   -> GVFG_EINVAL
-PCIES2MM_ENODEV   -> GVFG_ENODEV
-PCIES2MM_ESTATE   -> GVFG_ESTATE
-PCIES2MM_ENOTSUP  -> GVFG_ENOTSUP
-PCIES2MM_ETIMEOUT -> GVFG_ETIMEOUT
-PCIES2MM_EIO      -> GVFG_EIO
+GIGABYTE_OK       -> GVFG_OK
+GIGABYTE_EINVAL   -> GVFG_EINVAL
+GIGABYTE_ENODEV   -> GVFG_ENODEV
+GIGABYTE_ESTATE   -> GVFG_ESTATE
+GIGABYTE_ENOTSUP  -> GVFG_ENOTSUP
+GIGABYTE_ETIMEOUT -> GVFG_ETIMEOUT
+GIGABYTE_EIO      -> GVFG_EIO
 ```
 
 轉換只改錯誤分類，不應覆蓋 backend 已寫入的詳細訊息。

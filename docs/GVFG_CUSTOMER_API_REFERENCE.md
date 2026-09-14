@@ -263,22 +263,7 @@ gvfg_status_t gvfg_get_channel_zero_copy_enabled(gvfg_handle handle, int channel
   呼叫 `gvfg_release_channel_frame()`，且每個 channel 同時最多持有一張 frame。
 - SDK 在 open 時 enable driver zero-copy，在 destroy/close 前 disable。
 
-### 1.19 `gvfg_set_channel_video_format`
-
-```c
-gvfg_status_t gvfg_set_channel_video_format(gvfg_handle handle,
-                                            int channel_index,
-                                            gvfg_pixel_format_t format);
-```
-
-- 支援 `GVFG_PIXFMT_YUY2` 與 `GVFG_PIXFMT_Y210`。
-- Device 必須已 open，且 stream 必須尚未 start 或已 stop。
-- Streaming 中呼叫回傳 `GVFG_ESTATE`；不支援的 format 回傳 `GVFG_ENOTSUP` 或
-  `GVFG_EINVAL`。
-- 同一裝置的 CH0、CH1 不可同時設定 Y210；第二個 Y210 request 回傳
-  `GVFG_ENOTSUP`。
-
-### 1.19a Audio capture selection and frame ownership
+### 1.19 Audio capture selection and frame ownership
 
 ```c
 gvfg_status_t gvfg_set_channel_audio_enabled(gvfg_handle handle,

@@ -58,7 +58,7 @@ frame ownership 與 timeout 契約，不再直接操作 driver IOCTL 或 FPGA re
 | signal 欄位 | `stateMutex` | width/height/format/connected cache |
 | delivered/FPS 欄位 | atomic | UI/debug runtime 統計 |
 
-### `PcieS2mmCaptureSession`：driver backend
+### `GigabyteCaptureSession`：driver backend
 
 | 變數 | 保護方式 | 意義 |
 |---|---|---|
@@ -119,9 +119,9 @@ currentIndex = -1
 
 ```text
 建立 gvfg_channel_session_t
-    -> 建立 PcieS2mmCaptureSession
+    -> 建立 GigabyteCaptureSession
     -> CreateFileW() 得到 Windows HANDLE
-    -> 建立 PcieS2mmDeviceConnection
+    -> 建立 GigabyteDeviceConnection
     -> gvfg_handle_t 保存 shared_ptr
     -> backend set_channel(CH0 或 CH1)
     -> 建立並註冊該 channel events

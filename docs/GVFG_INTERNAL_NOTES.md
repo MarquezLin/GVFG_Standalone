@@ -42,9 +42,9 @@ customer/sample (optional)
 
 - `gvfg_capture.cpp`：公開 handle 狀態、狀態碼轉換、frame token 驗證、event
   queue、runtime counter 與 debug API facade。
-- `backend/gigabyte/gigabyte_capture_session.*`：把既有 GVFG lifecycle、event、
+- `gigabyte/gigabyte_capture_session.*`：把既有 GVFG lifecycle、event、
   copy/zero-copy ownership 契約轉接到 `GvfgSdk.lib`。
-- `backend/gigabyte/gigabyte_device.*`：SetupAPI 裝置列舉與 interface path。
+- `gigabyte/gigabyte_device.*`：SetupAPI 裝置列舉與 interface path。
 - `third_party/GigabyteLib`：主管提供的靜態 library 與其 private headers，只供 SDK build。
 - `src/gpu/*`：D3D11 同步轉換及 readback 到 caller buffer。
 
@@ -120,19 +120,10 @@ x64 `gvfg_frame_t` ABI 已在 `gvfg_capture.cpp` 以 static assertions 固定為
 及明確欄位 offsets。修改公開 struct 時必須視為 ABI 變更，不能只重新編譯 DLL。
 新增 metadata 優先考慮新 query API 或帶 size/version 的新 struct。
 
-## Driver ABI requirement
+## GigabyteLib requirement
 
-目前 SDK 只支援新版 PCIE S2MM driver，必要 private ABI 包含：
-
-- `IOCTL_GIGA_VIDEO_START` (`0x830`) / `IOCTL_GIGA_VIDEO_STOP` (`0x831`)。
-- `IOCTL_GIGA_RELEASE_VIDEO_FRAME` (`0x832`)。
-- `IOCTL_GIGA_ACQUIRE_VIDEO_FRAME_ZEROCOPY` (`0x833`)。
-- `IOCTL_GIGA_ENABLE_FRAME_ZEROCOPY` (`0x834`) /
-  `IOCTL_GIGA_DISABLE_FRAME_ZEROCOPY` (`0x835`)。
-- Copy mode 的 `IOCTL_PCIES2MM_GET_FRAME` 接受 `frameIndex=0xFFFFFFFF`。
-
-不再呼叫 `GET_VIDEO_DONE_INDEX`，也不再 fallback 直接寫入 video enable、DMA enable
-或 IRQ mask registers。舊 driver 不屬於此 revision 的支援範圍。
+GVFG 不再保存或操作 private IOCTL、register offset 或 DMA request layout。
+Driver ABI 相容性由主管提供的 `GvfgSdk.lib` 負責。
 
 目前原生格式：
 
@@ -148,18 +139,14 @@ Backend event 映射：
 
 | Backend | Public |
 |---|---|
-| `PCIES2MM_EVENT_PLUG_IN` | `GVFG_EVENT_SIGNAL_CONNECTED` |
-| `PCIES2MM_EVENT_PLUG_OUT` | `GVFG_EVENT_SIGNAL_DISCONNECTED` |
-| `PCIES2MM_EVENT_STREAM_READY` | `GVFG_EVENT_STREAM_READY` |
-| `PCIES2MM_EVENT_FORMAT_CHANGE_BEGIN` | `GVFG_EVENT_FORMAT_CHANGE_BEGIN` |
+| `GIGABYTE_EVENT_PLUG_IN` | `GVFG_EVENT_SIGNAL_CONNECTED` |
+| `GIGABYTE_EVENT_PLUG_OUT` | `GVFG_EVENT_SIGNAL_DISCONNECTED` |
+| `GIGABYTE_EVENT_STREAM_READY` | `GVFG_EVENT_STREAM_READY` |
+| `GIGABYTE_EVENT_FORMAT_CHANGE_BEGIN` | `GVFG_EVENT_FORMAT_CHANGE_BEGIN` |
 
 每個 channel 的 public event mask 在 open 前設定。Video DMA event 永遠註冊；
 format-change、plug-in、unplug driver event 依 mask 選擇性註冊。關閉 driver event
 同時代表 backend 不執行該事件所驅動的自動 recovery。
-
-Register read 必須排除純 write-only 位址：global `0x080`，以及每個 video/audio
-channel 的 descriptor-write pulse 與 DMA soft-reset register。Interrupt
-`0x000/0x004/0x008` 是 read-status/write-control 雙語意位址，讀取其 RO status 合法。
 
 Facade queue 上限為 64；滿時丟棄最舊事件。`pollEvent()` 只允許 running 狀態，支援
 non-blocking、有限 timeout 與 infinite wait；stop 透過 `eventCv` 喚醒 waiter。
@@ -172,13 +159,8 @@ non-blocking、有限 timeout 與 infinite wait；stop 透過 `eventCv` 喚醒 w
 
 `gvfg_debug.h` 僅供內部工具，包含：
 
-- `gvfg_debug_get_channel_backend_stats()`：指定 channel 的 facade/backend state、
+- `gvfg_debug_get_channel_stats()`：指定 channel 的 facade/backend state、
   captured/delivered frame、DMA error、IRQ、timeout、sequence 與 GetFrame timing。
-- `gvfg_debug_read_register()`：讀取 4-byte aligned BAR-relative register。
-- `gvfg_debug_write_register()`：寫入 register。
-
-Register write 可能中斷 DMA、interrupt 或 capture。工具必須確認裝置、offset 與當前
-stream 狀態，且不得將 register API 包裝成客戶功能。
 
 客戶診斷使用 `gvfg_get_channel_signal_status()`、`gvfg_get_channel_runtime_info()`、event、
 `gvfg_strerror()` 與 `gvfg_get_channel_last_error_detail()`。每個 channel 的 `ChannelErrorState`

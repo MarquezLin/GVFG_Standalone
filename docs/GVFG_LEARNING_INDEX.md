@@ -5,7 +5,7 @@
 ## 建議閱讀順序
 
 1. [`GVFG_Overview.md`](GVFG_Overview.md)
-   - 先認識 `gvfg_handle_t`、`gvfg_channel_session_t`、`PcieS2mmCaptureSession`。
+   - 先認識 `gvfg_handle_t`、`gvfg_channel_session_t`、`GigabyteCaptureSession`。
    - 理解 `unique_ptr`、`shared_ptr`、宣告與實際配置的差異。
    - 理解 CH0、CH1 如何共用同一個 Windows device handle。
 2. [`GVFG_ERROR_HANDLING.md`](GVFG_ERROR_HANDLING.md)
@@ -31,7 +31,7 @@
 目前已實作：
 
 - 一個 `gvfg_handle_t` 可管理 CH0、CH1。
-- CH0、CH1 共用一個 `PcieS2mmDeviceConnection`，底層只有一個 Windows device `HANDLE`。
+- CH0、CH1 共用一個 `GigabyteDeviceConnection`，底層只有一個 Windows device `HANDLE`。
 - 每條 channel 各自擁有 backend、event、capture thread、copy buffer 與 frame lifetime state。
 - 公開 API 已改為 channel-aware：open/start/read/release/poll/stop 都帶 `channel_index`。
 - copy mode 直接把 driver frame 寫入該 channel 的 `copy_buffer_`。
