@@ -1,4 +1,5 @@
 #include "gigabyte_device.h"
+#include "gvfgsdkapi.h"
 
 #include <windows.h>
 #include <setupapi.h>
@@ -10,8 +11,7 @@
 namespace
 {
     // Device interface exported by pcie_s2mm_driver.
-    const GUID kGigabyteDeviceInterfaceGuid =
-        {0x8c47b9c3, 0x1faa, 0x4557, {0xbc, 0x1d, 0xf2, 0x25, 0xd2, 0x6c, 0x9e, 0x91}};
+    const GUID kGigabyteDeviceInterfaceGuid = GUID_DEVINTERFACE_GVFG100;
 
     std::wstring device_property(HDEVINFO info, SP_DEVINFO_DATA &deviceInfo, DWORD property)
     {

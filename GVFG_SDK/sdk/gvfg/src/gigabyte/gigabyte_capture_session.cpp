@@ -238,6 +238,54 @@ gvfg_status_t GigabyteCaptureSession::get_signal_status(gvfg_signal_status_t &ou
     return status;
 }
 
+gvfg_status_t GigabyteCaptureSession::get_device_capabilities(
+    gvfg_device_capabilities_t &out) const
+{
+    const gvfg_status_t openStatus = ensure_vendor_channel_open();
+    if (openStatus != GVFG_OK)
+        return openStatus;
+    GVFG_DEV_INFO info{};
+    const gvfg_status_t status = from_vendor(GvfgGetDevInfo(context_, &info), "GvfgGetDevInfo");
+    if (status != GVFG_OK)
+        return status;
+    out = {};
+    out.video_channel_count = info.NumVideoChn;
+    out.has_audio = info.HasAudio ? 1 : 0;
+    return GVFG_OK;
+}
+
+gvfg_status_t GigabyteCaptureSession::get_sdi_info(gvfg_sdi_info_t &out) const
+{
+    const gvfg_status_t openStatus = ensure_vendor_channel_open();
+    if (openStatus != GVFG_OK)
+        return openStatus;
+    GVFG_SDI_VIDEO_INFO info{};
+    gvfg_status_t status = from_vendor(
+        GvfgGetSdiVideoInputInfo(context_, channel_, &info), "GvfgGetSdiVideoInputInfo");
+    if (status != GVFG_OK)
+        return status;
+    GVFG_SDI_VIDEO_INFO_STR text{};
+    status = from_vendor(
+        GvfgStringifySdiVideoInputInfo(context_, &info, &text),
+        "GvfgStringifySdiVideoInputInfo");
+    if (status != GVFG_OK)
+        return status;
+    out = {};
+    out.connected = info.VideoSignalLock ? 1 : 0;
+    out.mode = info.Mode;
+    out.resolution = info.Resol;
+    out.fps = info.Fps;
+    out.progressive = info.Progressive ? 1 : 0;
+    out.level_b = info.LevelB ? 1 : 0;
+    out.st352_payload = info.St352Payload;
+    out.error_count = info.ErrorCount;
+    strncpy_s(out.mode_name, text.Mode, _TRUNCATE);
+    strncpy_s(out.resolution_name, text.Resol, _TRUNCATE);
+    strncpy_s(out.fps_name, text.Fps, _TRUNCATE);
+    strncpy_s(out.scan_name, text.Progressive, _TRUNCATE);
+    return GVFG_OK;
+}
+
 gvfg_status_t GigabyteCaptureSession::get_audio_format(GigabyteAudioInfo &out) const
 {
     const gvfg_status_t openStatus = ensure_vendor_channel_open();

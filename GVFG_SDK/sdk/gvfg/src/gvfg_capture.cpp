@@ -1258,6 +1258,35 @@ extern "C"
                                                "gvfg_get_channel_runtime_info rejected: channel is not open");
     }
 
+    gvfg_status_t gvfg_get_device_capabilities(
+        gvfg_handle handle, gvfg_device_capabilities_t *out_capabilities)
+    {
+        if (!handle || !out_capabilities)
+            return GVFG_EINVAL;
+        gvfg_channel_session_t *channel = handle->findOpenChannel();
+        if (!channel || !channel->session)
+            return handle->rejectAllChannels(
+                GVFG_ESTATE, "gvfg_get_device_capabilities rejected: no channel is open");
+        return channel->session->get_device_capabilities(*out_capabilities);
+    }
+
+    gvfg_status_t gvfg_get_channel_sdi_info(
+        gvfg_handle handle, int channel_index, gvfg_sdi_info_t *out_info)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        if (!out_info)
+            return handle->rejectChannel(
+                channel_index, GVFG_EINVAL,
+                "gvfg_get_channel_sdi_info rejected: out_info is null");
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        if (!channel || !channel->session)
+            return handle->rejectChannel(
+                channel_index, GVFG_ESTATE,
+                "gvfg_get_channel_sdi_info rejected: channel is not open");
+        return channel->session->get_sdi_info(*out_info);
+    }
+
     const char *gvfg_get_version(void)
     {
         return GVFG_VERSION_STRING;

@@ -25,6 +25,8 @@ EXPORTS
     gvfg_stop
     gvfg_stop_channel
     gvfg_get_channel_signal_status
+    gvfg_get_device_capabilities
+    gvfg_get_channel_sdi_info
     gvfg_get_channel_runtime_info
     gvfg_get_version
     gvfg_pixel_format_name

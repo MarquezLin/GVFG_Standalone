@@ -134,6 +134,28 @@ extern "C"
 
     typedef struct
     {
+        uint32_t video_channel_count;
+        int has_audio;
+    } gvfg_device_capabilities_t;
+
+    typedef struct
+    {
+        int connected;
+        uint32_t mode;
+        uint32_t resolution;
+        uint32_t fps;
+        int progressive;
+        int level_b;
+        uint32_t st352_payload;
+        uint32_t error_count;
+        char mode_name[16];
+        char resolution_name[64];
+        char fps_name[24];
+        char scan_name[16];
+    } gvfg_sdi_info_t;
+
+    typedef struct
+    {
         int connected;    /* Non-zero while this channel has a valid input signal. */
         int channel;      /* gvfg_channel_t selected when the device was opened. */
         int width;        /* Signal width in pixels when connected. */
@@ -561,6 +583,16 @@ extern "C"
         _In_ gvfg_handle handle,
         _In_ int channel_index,
         _Out_ gvfg_signal_status_t *out_status);
+
+    /* Optional vendor-backed device and SDI detail queries. */
+    GVFG_API gvfg_status_t gvfg_get_device_capabilities(
+        _In_ gvfg_handle handle,
+        _Out_ gvfg_device_capabilities_t *out_capabilities);
+
+    GVFG_API gvfg_status_t gvfg_get_channel_sdi_info(
+        _In_ gvfg_handle handle,
+        _In_ int channel_index,
+        _Out_ gvfg_sdi_info_t *out_info);
 
     /*
      * Query runtime frame-delivery diagnostics.
