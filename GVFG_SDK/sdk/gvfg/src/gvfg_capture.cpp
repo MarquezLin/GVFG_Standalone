@@ -27,11 +27,6 @@ using namespace gvfg::internal;
 
 namespace
 {
-    static_assert(GVFG_EVENT_MASK_SIGNAL_CONNECTED == GIGABYTE_EVENT_MASK_PLUG_IN);
-    static_assert(GVFG_EVENT_MASK_SIGNAL_DISCONNECTED == GIGABYTE_EVENT_MASK_PLUG_OUT);
-    static_assert(GVFG_EVENT_MASK_STREAM_READY == GIGABYTE_EVENT_MASK_STREAM_READY);
-    static_assert(GVFG_EVENT_MASK_FORMAT_CHANGE_BEGIN == GIGABYTE_EVENT_MASK_FORMAT_CHANGE_BEGIN);
-
 #if INTPTR_MAX == INT64_MAX
     static_assert(sizeof(gvfg_audio_format_t) == 12, "gvfg_audio_format_t ABI must remain frozen");
     static_assert(std::is_standard_layout_v<gvfg_audio_frame_t>);
@@ -70,28 +65,6 @@ namespace
         return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());
     }
 
-    gvfg_status_t map_status(gigabyte_status_t st)
-    {
-        switch (st)
-        {
-        case GIGABYTE_OK:
-            return GVFG_OK;
-        case GIGABYTE_EINVAL:
-            return GVFG_EINVAL;
-        case GIGABYTE_ENODEV:
-            return GVFG_ENODEV;
-        case GIGABYTE_ESTATE:
-            return GVFG_ESTATE;
-        case GIGABYTE_ETIMEOUT:
-            return GVFG_ETIMEOUT;
-        case GIGABYTE_ENOTSUP:
-            return GVFG_ENOTSUP;
-        case GIGABYTE_EIO:
-        default:
-            return GVFG_EIO;
-        }
-    }
-
     void copy_wide_to_utf8(const std::wstring &src, char *dst, size_t dstSize)
     {
         if (!dst || dstSize == 0)
@@ -101,36 +74,6 @@ namespace
             return;
         WideCharToMultiByte(CP_UTF8, 0, src.c_str(), -1, dst, static_cast<int>(dstSize), nullptr, nullptr);
         dst[dstSize - 1] = '\0';
-    }
-
-    gvfg_event_type_t map_event_type(gigabyte_event_type_t type)
-    {
-        switch (type)
-        {
-        case GIGABYTE_EVENT_PLUG_IN:
-            return GVFG_EVENT_SIGNAL_CONNECTED;
-        case GIGABYTE_EVENT_PLUG_OUT:
-            return GVFG_EVENT_SIGNAL_DISCONNECTED;
-        case GIGABYTE_EVENT_STREAM_READY:
-            return GVFG_EVENT_STREAM_READY;
-        case GIGABYTE_EVENT_FORMAT_CHANGE_BEGIN:
-            return GVFG_EVENT_FORMAT_CHANGE_BEGIN;
-        default:
-            return GVFG_EVENT_UNKNOWN;
-        }
-    }
-
-    int to_gvfg_pixel_format(gigabyte_pixel_format_t fmt)
-    {
-        switch (fmt)
-        {
-        case GIGABYTE_PIXFMT_YUY2:
-            return GVFG_PIXFMT_YUY2;
-        case GIGABYTE_PIXFMT_Y210:
-            return GVFG_PIXFMT_Y210;
-        default:
-            return GVFG_PIXFMT_UNKNOWN;
-        }
     }
 
     const char *pixel_format_name(int fmt)
@@ -155,13 +98,13 @@ namespace
     }
 
     gvfg_status_t native_row_stride_bytes(uint32_t width,
-                                          gigabyte_pixel_format_t pixelFormat,
+                                          int pixelFormat,
                                           int &outStride)
     {
         uint64_t bytesPerPixel = 0;
-        if (pixelFormat == GIGABYTE_PIXFMT_YUY2)
+        if (pixelFormat == GVFG_PIXFMT_YUY2)
             bytesPerPixel = 2;
-        else if (pixelFormat == GIGABYTE_PIXFMT_Y210)
+        else if (pixelFormat == GVFG_PIXFMT_Y210)
             bytesPerPixel = 4;
         else
             return GVFG_ENOTSUP;
@@ -191,40 +134,40 @@ struct gvfg_channel_session_t
 
     gvfg_status_t open(int index,
                        int channelIndex = GVFG_CHANNEL_0,
-                       const std::shared_ptr<gvfg::internal::GigabyteDeviceConnection> &deviceConnection = nullptr)
+                       const std::wstring *devicePath = nullptr)
     {
         if (index < 0 || (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1))
             return reject(GVFG_EINVAL, "gvfg_open_channel rejected: device or channel index is invalid");
         close();
 
         session = std::make_unique<gvfg::internal::GigabyteCaptureSession>(errorState);
-        const gigabyte_status_t stOpen = deviceConnection
-                                             ? session->open_device_connection(deviceConnection)
+        const gvfg_status_t stOpen = devicePath
+                                             ? session->open_device_path(*devicePath)
                                              : session->open_device_index(static_cast<size_t>(index));
-        if (stOpen != GIGABYTE_OK)
+        if (stOpen != GVFG_OK)
         {
             session.reset();
-            return map_status(stOpen);
+            return stOpen;
         }
 
         currentIndex = index;
         syncSessionEventCallback();
         selectedChannel = static_cast<uint32_t>(channelIndex);
         resetRuntimeCounters();
-        const gigabyte_status_t stChannel = session->set_channel(selectedChannel);
-        if (stChannel != GIGABYTE_OK)
+        const gvfg_status_t stChannel = session->set_channel(selectedChannel);
+        if (stChannel != GVFG_OK)
         {
             close();
-            return map_status(stChannel);
+            return stChannel;
         }
 
         if (zeroCopyRequested)
         {
-            const gigabyte_status_t stZeroCopy = session->set_zero_copy_enabled(true);
-            if (stZeroCopy != GIGABYTE_OK)
+            const gvfg_status_t stZeroCopy = session->set_zero_copy_enabled(true);
+            if (stZeroCopy != GVFG_OK)
             {
                 close();
-                return map_status(stZeroCopy);
+                return stZeroCopy;
             }
         }
 
@@ -259,9 +202,9 @@ struct gvfg_channel_session_t
             eventQueue.clear();
         }
 
-        const gigabyte_status_t st = session->start_stream();
-        if (st != GIGABYTE_OK)
-            return map_status(st);
+        const gvfg_status_t st = session->start_stream();
+        if (st != GVFG_OK)
+            return st;
 
         running = true;
         return GVFG_OK;
@@ -273,7 +216,7 @@ struct gvfg_channel_session_t
         releaseHeldFrameForStop();
         releaseHeldAudioFrameForStop();
 
-        gigabyte_status_t st = GIGABYTE_OK;
+        gvfg_status_t st = GVFG_OK;
         if (session)
         {
             // stop_stream() joins the session event thread, so no new event can
@@ -286,7 +229,7 @@ struct gvfg_channel_session_t
             eventQueue.clear();
         }
         eventCv.notify_all();
-        return map_status(st);
+        return st;
     }
 
     void close()
@@ -306,17 +249,17 @@ struct gvfg_channel_session_t
         if (!session)
             return reject(GVFG_ESTATE, "gvfg_get_channel_signal_status rejected: channel is not open");
         std::memset(&out, 0, sizeof(out));
-        const gigabyte_status_t status = querySignal();
+        const gvfg_status_t status = querySignal();
         {
             std::lock_guard<std::mutex> lock(stateMutex);
             out.connected = signalConnected ? 1 : 0;
             out.channel = static_cast<int>(selectedChannel);
             out.width = static_cast<int>(width);
             out.height = static_cast<int>(height);
-            out.pixel_format = to_gvfg_pixel_format(pixelFormat);
+            out.pixel_format = static_cast<int>(pixelFormat);
             out.bit_depth = static_cast<int>(bitDepth);
         }
-        return map_status(status);
+        return status;
     }
 
     gvfg_status_t getRuntimeInfo(gvfg_runtime_info_t &out)
@@ -327,15 +270,13 @@ struct gvfg_channel_session_t
         std::memset(&out, 0, sizeof(out));
         out.capture_fps = runtimeFps.load(std::memory_order_relaxed);
         out.delivered_frames = deliveredFrames.load(std::memory_order_relaxed);
-        gigabyte_stream_stats_t stats{};
-        gigabyte_debug_state_t debugState{};
-        uint64_t waitTimeouts = 0;
-        session->get_debug_stats(stats, waitTimeouts, debugState);
-        out.zero_copy_enabled = debugState.get_frame_zero_copy;
-        out.driver_read_samples = debugState.get_frame_timing_samples;
-        out.driver_read_average_us = debugState.get_frame_timing_average_us;
-        out.driver_read_max300_us = debugState.get_frame_timing_max300_us;
-        out.driver_read_max_us = debugState.get_frame_timing_max_us;
+        gvfg_debug_backend_stats_t stats{};
+        session->fill_debug_stats(stats);
+        out.zero_copy_enabled = stats.get_frame_zero_copy;
+        out.driver_read_samples = stats.get_frame_timing_samples;
+        out.driver_read_average_us = stats.get_frame_timing_average_us;
+        out.driver_read_max300_us = stats.get_frame_timing_max300_us;
+        out.driver_read_max_us = stats.get_frame_timing_max_us;
         return GVFG_OK;
     }
 
@@ -348,7 +289,7 @@ struct gvfg_channel_session_t
                                     eventMask);
     }
 
-    static void onSessionEvent(gigabyte_event_type_t event, void *user)
+    static void onSessionEvent(gvfg_event_type_t event, void *user)
     {
         auto *self = static_cast<gvfg_channel_session_t *>(user);
         if (!self)
@@ -356,35 +297,36 @@ struct gvfg_channel_session_t
         self->emitEvent(event);
     }
 
-    void emitEvent(gigabyte_event_type_t event)
+    void emitEvent(gvfg_event_type_t event)
     {
-        const gvfg_event_type_t type = map_event_type(event);
         {
             std::lock_guard<std::mutex> lock(eventMutex);
             if (eventQueue.size() >= 64)
                 eventQueue.pop_front();
             gvfg_event_t out{};
             out.struct_size = sizeof(out);
-            out.type = type;
+            out.type = event;
             eventQueue.push_back(out);
         }
         eventCv.notify_one();
     }
 
-    gigabyte_status_t querySignal()
+    gvfg_status_t querySignal()
     {
         if (!session)
-            return GIGABYTE_ESTATE;
+            return GVFG_ESTATE;
 
-        gigabyte_signal_status_t sig{};
-        const gigabyte_status_t status = session->get_signal_status(sig);
+        gvfg_signal_status_t sig{};
+        const gvfg_status_t status = session->get_signal_status(sig);
 
         std::lock_guard<std::mutex> lock(stateMutex);
-        width = status == GIGABYTE_OK ? sig.width : 0;
-        height = status == GIGABYTE_OK ? sig.height : 0;
-        bitDepth = status == GIGABYTE_OK ? sig.bit_depth : 0;
-        pixelFormat = status == GIGABYTE_OK ? sig.pixel_format : GIGABYTE_PIXFMT_UNKNOWN;
-        signalConnected = status == GIGABYTE_OK && sig.connected != 0;
+        width = status == GVFG_OK ? sig.width : 0;
+        height = status == GVFG_OK ? sig.height : 0;
+        bitDepth = status == GVFG_OK ? sig.bit_depth : 0;
+        pixelFormat = status == GVFG_OK
+                          ? static_cast<gvfg_pixel_format_t>(sig.pixel_format)
+                          : GVFG_PIXFMT_UNKNOWN;
+        signalConnected = status == GVFG_OK && sig.connected != 0;
         return status;
     }
 
@@ -393,13 +335,13 @@ struct gvfg_channel_session_t
         if (!session)
             return reject(GVFG_ESTATE, "configure stream rejected: channel is not open");
 
-        const gigabyte_status_t signalStatus = querySignal();
-        if (signalStatus != GIGABYTE_OK)
-            return map_status(signalStatus);
+        const gvfg_status_t signalStatus = querySignal();
+        if (signalStatus != GVFG_OK)
+            return signalStatus;
 
-        const gigabyte_status_t st = session->configure_stream();
-        if (st != GIGABYTE_OK)
-            return map_status(st);
+        const gvfg_status_t st = session->configure_stream();
+        if (st != GVFG_OK)
+            return st;
         return GVFG_OK;
     }
 
@@ -424,20 +366,20 @@ struct gvfg_channel_session_t
         if (stateError)
             return reject(GVFG_ESTATE, stateError);
 
-        gigabyte_frame_t frame{};
-        const gigabyte_status_t st = session->wait_frame(timeoutMs, frame);
-        if (st != GIGABYTE_OK)
+        gvfg_frame_t frame{};
+        const gvfg_status_t st = session->wait_frame(timeoutMs, frame);
+        if (st != GVFG_OK)
         {
             {
                 std::lock_guard<std::mutex> lock(frameMutex);
                 readInProgress = false;
             }
-            return map_status(st);
+            return st;
         }
 
         if (!frame.data || frame.width == 0 || frame.height == 0)
         {
-            session->release_frame(frame);
+            session->release_frame();
             std::lock_guard<std::mutex> lock(frameMutex);
             readInProgress = false;
             return reject(GVFG_EIO, "gvfg_read_channel_frame received an invalid frame descriptor");
@@ -460,27 +402,27 @@ struct gvfg_channel_session_t
         }
         if (stoppedWhileWaiting)
         {
-            session->release_frame(frame);
+            session->release_frame();
             return GVFG_ESTATE;
         }
 
         updateRuntimeFps(now_ns());
 
         out.data = frame.data;
-        out.data_size = static_cast<uint64_t>(frame.data_size_bytes);
+        out.data_size = static_cast<uint64_t>(frame.data_size);
         out.width = static_cast<int>(frame.width);
         out.height = static_cast<int>(frame.height);
         const gvfg_status_t strideStatus =
             native_row_stride_bytes(frame.width, frame.pixel_format, out.row_stride_bytes);
         if (strideStatus != GVFG_OK)
         {
-            session->release_frame(frame);
+            session->release_frame();
             std::lock_guard<std::mutex> lock(frameMutex);
             heldSessionFrame = {};
             frameHeld = false;
             return reject(strideStatus, "gvfg_read_channel_frame received an invalid row stride");
         }
-        out.pixel_format = to_gvfg_pixel_format(frame.pixel_format);
+        out.pixel_format = frame.pixel_format;
         out.bit_depth = static_cast<int>(frame.bit_depth);
         out.frame_id = frame.frame_id;
         out.timestamp_ns = frame.timestamp_ns;
@@ -506,19 +448,19 @@ struct gvfg_channel_session_t
                 return reject(GVFG_ESTATE, "gvfg_release_channel_frame rejected: held frame has an invalid row stride");
 
             if (frameToken.data != heldSessionFrame.data ||
-                frameToken.data_size != static_cast<uint64_t>(heldSessionFrame.data_size_bytes) ||
+                frameToken.data_size != static_cast<uint64_t>(heldSessionFrame.data_size) ||
                 frameToken.width != static_cast<int>(heldSessionFrame.width) ||
                 frameToken.height != static_cast<int>(heldSessionFrame.height) ||
                 frameToken.row_stride_bytes != expectedStride ||
-                frameToken.pixel_format != to_gvfg_pixel_format(heldSessionFrame.pixel_format) ||
+                frameToken.pixel_format != heldSessionFrame.pixel_format ||
                 frameToken.bit_depth != static_cast<int>(heldSessionFrame.bit_depth) ||
                 frameToken.frame_id != heldSessionFrame.frame_id ||
                 frameToken.timestamp_ns != heldSessionFrame.timestamp_ns)
                 return reject(GVFG_EINVAL, "gvfg_release_channel_frame rejected: frame token does not match the held frame");
 
-            const gigabyte_status_t st = session->release_frame(heldSessionFrame);
-            if (st != GIGABYTE_OK)
-                return map_status(st);
+            const gvfg_status_t st = session->release_frame();
+            if (st != GVFG_OK)
+                return st;
 
             heldSessionFrame = {};
             frameHeld = false;
@@ -532,7 +474,7 @@ struct gvfg_channel_session_t
         if (!session)
             return;
 
-        gigabyte_frame_t frame{};
+        gvfg_frame_t frame{};
         bool shouldRelease = false;
         {
             std::lock_guard<std::mutex> lock(frameMutex);
@@ -546,7 +488,7 @@ struct gvfg_channel_session_t
         }
 
         if (shouldRelease)
-            session->release_frame(frame);
+            session->release_frame();
     }
 
     gvfg_status_t pollEvent(gvfg_event_t &out, uint32_t timeoutMs)
@@ -619,29 +561,7 @@ struct gvfg_channel_session_t
 
         if (session)
         {
-            gigabyte_stream_stats_t stats{};
-            gigabyte_debug_state_t debugState{};
-            uint64_t waitTimeouts = 0;
-            session->get_debug_stats(stats, waitTimeouts, debugState);
-            out.backend_state = static_cast<int>(stats.state);
-            out.backend_frames_captured = stats.frames_captured;
-            out.backend_frames_delivered = stats.frames_delivered;
-            out.backend_dma_errors = stats.dma_errors;
-            out.backend_interrupt_count = stats.interrupt_count;
-            out.backend_wait_timeouts = waitTimeouts;
-            out.backend_running = debugState.running;
-            out.backend_capture_active = debugState.capture_active;
-            out.backend_latest_sequence = debugState.latest_sequence;
-            out.backend_delivered_sequence = debugState.delivered_sequence;
-            out.audio_dma_event_wakes = debugState.audio_dma_event_wakes;
-            out.extra_audio_event_wakes = debugState.extra_audio_event_wakes;
-            out.audio_frames_from_driver = debugState.audio_frames_from_driver;
-            out.audio_bytes_from_driver = debugState.audio_bytes_from_driver;
-            out.get_frame_zero_copy = debugState.get_frame_zero_copy;
-            out.get_frame_timing_samples = debugState.get_frame_timing_samples;
-            out.get_frame_timing_average_us = debugState.get_frame_timing_average_us;
-            out.get_frame_timing_max300_us = debugState.get_frame_timing_max300_us;
-            out.get_frame_timing_max_us = debugState.get_frame_timing_max_us;
+            session->fill_debug_stats(out);
         }
 
         return GVFG_OK;
@@ -651,7 +571,7 @@ struct gvfg_channel_session_t
     {
         if (!session)
             return reject(GVFG_ESTATE, "debug register read rejected: channel is not open");
-        return map_status(session->debug_read_register(offset, outValue));
+        return session->debug_read_register(offset, outValue);
     }
 
     gvfg_status_t setVideoFormat(gvfg_pixel_format_t format)
@@ -659,14 +579,9 @@ struct gvfg_channel_session_t
         if (!session)
             return reject(GVFG_ESTATE, "gvfg_set_channel_video_format rejected: channel is not open");
 
-        gigabyte_pixel_format_t nativeFormat = GIGABYTE_PIXFMT_UNKNOWN;
-        if (format == GVFG_PIXFMT_YUY2)
-            nativeFormat = GIGABYTE_PIXFMT_YUY2;
-        else if (format == GVFG_PIXFMT_Y210)
-            nativeFormat = GIGABYTE_PIXFMT_Y210;
-        else
+        if (format != GVFG_PIXFMT_YUY2 && format != GVFG_PIXFMT_Y210)
             return reject(GVFG_EINVAL, "gvfg_set_channel_video_format rejected: pixel format is invalid");
-        return map_status(session->set_video_format(nativeFormat));
+        return session->set_video_format(format);
     }
 
     gvfg_status_t setAudioEnabled(bool enabled)
@@ -675,9 +590,9 @@ struct gvfg_channel_session_t
             return reject(GVFG_ESTATE, "gvfg_set_channel_audio_enabled rejected: channel is not open");
         if (running)
             return reject(GVFG_ESTATE, "gvfg_set_channel_audio_enabled rejected: channel is running");
-        const gigabyte_status_t status = session->set_audio_enabled(enabled);
-        if (status != GIGABYTE_OK)
-            return map_status(status);
+        const gvfg_status_t status = session->set_audio_enabled(enabled);
+        if (status != GVFG_OK)
+            return status;
         audioEnabled = enabled;
         return GVFG_OK;
     }
@@ -686,7 +601,7 @@ struct gvfg_channel_session_t
     {
         if (!session)
             return reject(GVFG_ESTATE, "debug register write rejected: channel is not open");
-        return map_status(session->debug_write_register(offset, value));
+        return session->debug_write_register(offset, value);
     }
 
     gvfg_status_t getAudioFormat(gvfg_audio_format_t &out)
@@ -694,10 +609,10 @@ struct gvfg_channel_session_t
         std::memset(&out, 0, sizeof(out));
         if (!session)
             return reject(GVFG_ESTATE, "gvfg_get_channel_audio_format rejected: channel is not open");
-        gigabyte_audio_format_t format{};
-        const gigabyte_status_t status = session->get_audio_format(format);
-        if (status != GIGABYTE_OK)
-            return map_status(status);
+        GigabyteAudioInfo format{};
+        const gvfg_status_t status = session->get_audio_format(format);
+        if (status != GVFG_OK)
+            return status;
         out.sample_rate = format.sample_rate;
         out.channels = format.channels;
         out.bits_per_sample = format.bits_per_sample;
@@ -721,10 +636,10 @@ struct gvfg_channel_session_t
             audioReadInProgress = true;
         }
 
-        gigabyte_audio_format_t format{};
-        gigabyte_status_t status = session->get_audio_format(format);
+        GigabyteAudioInfo format{};
+        gvfg_status_t status = session->get_audio_format(format);
         uint32_t bytes = 0;
-        if (status == GIGABYTE_OK)
+        if (status == GVFG_OK)
         {
             audioBuffer.resize(format.frame_bytes);
             status = session->wait_audio(timeoutMs, audioBuffer.data(),
@@ -734,8 +649,8 @@ struct gvfg_channel_session_t
         {
             std::lock_guard<std::mutex> lock(audioMutex);
             audioReadInProgress = false;
-            if (status != GIGABYTE_OK)
-                return map_status(status);
+            if (status != GVFG_OK)
+                return status;
             if (!running.load(std::memory_order_acquire) || bytes == 0 || bytes > audioBuffer.size())
                 return reject(GVFG_ESTATE, "gvfg_read_channel_audio_frame completed after capture stopped or returned invalid data");
             audioFrameHeld = true;
@@ -836,7 +751,7 @@ struct gvfg_channel_session_t
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t bitDepth = 0;
-    gigabyte_pixel_format_t pixelFormat = GIGABYTE_PIXFMT_UNKNOWN;
+    gvfg_pixel_format_t pixelFormat = GVFG_PIXFMT_UNKNOWN;
     bool signalConnected = false;
     mutable std::mutex stateMutex;
     std::atomic<uint64_t> fpsWindowStartNs{0};
@@ -852,7 +767,7 @@ struct gvfg_channel_session_t
     std::mutex frameMutex;
     bool readInProgress = false;
     bool frameHeld = false;
-    gigabyte_frame_t heldSessionFrame{};
+    gvfg_frame_t heldSessionFrame{};
     std::mutex audioMutex;
     std::vector<uint8_t> audioBuffer;
     bool audioReadInProgress = false;
@@ -934,14 +849,12 @@ struct gvfg_handle_t
 
         const gvfg_status_t status = channel->open(index,
                                                    channelIndex,
-                                                   deviceConnection);
+                                                   devicePath.empty() ? nullptr : &devicePath);
         if (status != GVFG_OK)
             return status;
 
-        if (!deviceConnection)
-        {
-            deviceConnection = channel->session->device_connection();
-        }
+        if (devicePath.empty())
+            devicePath = channel->session->device_path();
         channels[slot] = std::move(channel);
         currentIndex = index;
         return GVFG_OK;
@@ -1036,7 +949,7 @@ struct gvfg_handle_t
     }
 
     std::array<ChannelErrorState, 2> channelErrors;
-    std::shared_ptr<gvfg::internal::GigabyteDeviceConnection> deviceConnection;
+    std::wstring devicePath;
     std::array<std::unique_ptr<gvfg_channel_session_t>, 2> channels;
     std::array<uint32_t, 2> eventMasks{GVFG_EVENT_MASK_ALL, GVFG_EVENT_MASK_ALL};
     int currentIndex = -1;

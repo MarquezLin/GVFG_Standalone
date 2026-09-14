@@ -7,7 +7,6 @@ add_library(gvfg SHARED
     gvfg.def
     include/gvfg_capture.h
     include/gvfg_debug.h
-    src/gigabyte/gigabyte_types.h
     src/gigabyte/gigabyte_capture_session.cpp
     src/gigabyte/gigabyte_capture_session.h
     src/gigabyte/gigabyte_driver_extensions.cpp
