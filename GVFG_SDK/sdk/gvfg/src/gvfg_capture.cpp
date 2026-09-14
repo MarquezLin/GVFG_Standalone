@@ -36,7 +36,7 @@ namespace
     static_assert(offsetof(gvfg_audio_frame_t, sample_rate) == 16);
     static_assert(offsetof(gvfg_audio_frame_t, frame_id) == 32);
     static_assert(offsetof(gvfg_audio_frame_t, timestamp_ns) == 40);
-    static_assert(sizeof(gvfg_runtime_info_t) == 56, "gvfg_runtime_info_t x64 ABI must remain frozen");
+    static_assert(sizeof(gvfg_runtime_info_t) == 16, "gvfg_runtime_info_t x64 ABI must remain frozen");
     static_assert(std::is_standard_layout_v<gvfg_frame_t>);
     static_assert(sizeof(gvfg_frame_t) == 56, "gvfg_frame_t x64 ABI must remain frozen");
     static_assert(offsetof(gvfg_frame_t, data) == 0);
@@ -270,13 +270,6 @@ struct gvfg_channel_session_t
         std::memset(&out, 0, sizeof(out));
         out.capture_fps = runtimeFps.load(std::memory_order_relaxed);
         out.delivered_frames = deliveredFrames.load(std::memory_order_relaxed);
-        gvfg_debug_backend_stats_t stats{};
-        session->fill_debug_stats(stats);
-        out.zero_copy_enabled = stats.get_frame_zero_copy;
-        out.driver_read_samples = stats.get_frame_timing_samples;
-        out.driver_read_average_us = stats.get_frame_timing_average_us;
-        out.driver_read_max300_us = stats.get_frame_timing_max300_us;
-        out.driver_read_max_us = stats.get_frame_timing_max_us;
         return GVFG_OK;
     }
 
@@ -537,17 +530,7 @@ struct gvfg_channel_session_t
     gvfg_status_t getDebugStats(gvfg_debug_backend_stats_t &out)
     {
         std::memset(&out, 0, sizeof(out));
-        out.sdk_running = running.load(std::memory_order_relaxed) ? 1 : 0;
-        out.runtime_fps = runtimeFps.load(std::memory_order_relaxed);
-        out.frames_returned = deliveredFrames.load(std::memory_order_relaxed);
-        out.last_frame.valid = out.sdk_running && out.frames_returned > 0 ? 1 : 0;
-        if (out.last_frame.valid)
-        {
-            out.last_frame.width = static_cast<int>(deliveredWidth.load(std::memory_order_relaxed));
-            out.last_frame.height = static_cast<int>(deliveredHeight.load(std::memory_order_relaxed));
-            out.last_frame.bit_depth = static_cast<int>(deliveredBitDepth.load(std::memory_order_relaxed));
-            out.last_frame.pixel_format = deliveredPixelFormat.load(std::memory_order_relaxed);
-        }
+        out.running = running.load(std::memory_order_relaxed) ? 1 : 0;
 
         {
             std::lock_guard<std::mutex> lock(frameMutex);

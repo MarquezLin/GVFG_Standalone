@@ -146,9 +146,8 @@ Backend event 映射：
 | `GIGABYTE_EVENT_STREAM_READY` | `GVFG_EVENT_STREAM_READY` |
 | `GIGABYTE_EVENT_FORMAT_CHANGE_BEGIN` | `GVFG_EVENT_FORMAT_CHANGE_BEGIN` |
 
-每個 channel 的 public event mask 在 open 前設定。Video DMA event 永遠註冊；
-format-change、plug-in、unplug driver event 依 mask 選擇性註冊。關閉 driver event
-同時代表 backend 不執行該事件所驅動的自動 recovery。
+依 GigabyteLib 行為，video、format-change、plug-in 與 unplug events 在 open channel
+時固定註冊；使用者只選擇是否啟用 audio，SDK 不再提供重複的 event mask 層。
 
 Facade queue 上限為 64；滿時丟棄最舊事件。`pollEvent()` 只允許 running 狀態，支援
 non-blocking、有限 timeout 與 infinite wait；stop 透過 `eventCv` 喚醒 waiter。
@@ -161,8 +160,13 @@ non-blocking、有限 timeout 與 infinite wait；stop 透過 `eventCv` 喚醒 w
 
 `gvfg_debug.h` 僅供內部工具，包含：
 
-- `gvfg_debug_get_channel_backend_stats()`：指定 channel 的 facade/backend state、
-  captured/delivered frame、DMA error、IRQ、timeout、sequence 與 GetFrame timing。
+- `gvfg_debug_get_channel_backend_stats()`：指定 channel 的 running/frame-held 狀態、
+  event queue depth、frame wait timeout、video/audio event wake、audio 讀取量與
+  GigabyteLib GetFrame/acquire timing。
+
+公開的 `gvfg_runtime_info_t` 只保留 application-facing capture FPS 與 delivered frame
+數；zero-copy 用公開 getter 查詢。Debug 結構不重複這些公開資訊，也不偽造
+GigabyteLib 未提供的 DMA error、IRQ 或 driver sequence counter。
 
 客戶診斷使用 `gvfg_get_channel_signal_status()`、`gvfg_get_channel_runtime_info()`、event、
 `gvfg_strerror()` 與 `gvfg_get_channel_last_error_detail()`。每個 channel 的 `ChannelErrorState`

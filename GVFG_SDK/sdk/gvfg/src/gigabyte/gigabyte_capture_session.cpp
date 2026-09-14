@@ -596,20 +596,12 @@ void GigabyteCaptureSession::emit_event(gvfg_event_type_t type) const
 void GigabyteCaptureSession::fill_debug_stats(gvfg_debug_backend_stats_t &out) const
 {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    out.backend_state = running_ ? 2 : configured_ ? 1 : 0;
-    out.backend_frames_captured = video_event_wakes_;
-    out.backend_frames_delivered = frame_id_;
-    out.backend_interrupt_count = video_event_wakes_;
-    out.backend_wait_timeouts = wait_timeout_count_;
-    out.backend_running = running_ ? 1 : 0;
-    out.backend_capture_active = running_ ? 1 : 0;
-    out.backend_latest_sequence = video_event_wakes_;
-    out.backend_delivered_sequence = frame_id_;
+    out.frame_wait_timeouts = wait_timeout_count_;
+    out.video_event_wakes = video_event_wakes_;
     out.audio_dma_event_wakes = audio_event_wakes_;
     out.extra_audio_event_wakes = extra_audio_event_wakes_;
     out.audio_frames_from_driver = audio_frames_from_driver_;
     out.audio_bytes_from_driver = audio_bytes_from_driver_;
-    out.get_frame_zero_copy = zero_copy_enabled_ ? 1 : 0;
     out.get_frame_timing_samples = get_frame_timing_samples_;
     out.get_frame_timing_average_us = get_frame_timing_samples_
         ? get_frame_timing_total_us_ / static_cast<double>(get_frame_timing_samples_) : 0.0;

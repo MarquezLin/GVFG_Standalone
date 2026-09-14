@@ -150,12 +150,6 @@ extern "C"
     {
         double capture_fps;        /* Runtime FPS measured from frames returned by gvfg_read_channel_frame(). */
         uint64_t delivered_frames; /* Number of frames returned by gvfg_read_channel_frame(). */
-        int zero_copy_enabled;     /* Non-zero when driver zero-copy delivery is selected. */
-        uint32_t reserved;
-        uint64_t driver_read_samples;
-        double driver_read_average_us;
-        double driver_read_max300_us;
-        double driver_read_max_us;
     } gvfg_runtime_info_t;
 
     typedef struct

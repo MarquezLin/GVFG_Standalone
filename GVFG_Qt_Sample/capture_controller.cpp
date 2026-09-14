@@ -37,13 +37,11 @@ namespace
 
 #if GVFG_INTERNAL_DIAGNOSTICS
     QString boolText(int value) { return value ? QStringLiteral("yes") : QStringLiteral("no"); }
-    QString valueOrDash(uint64_t value) { return QString::number(static_cast<qulonglong>(value)); }
 
     QString captureStatusText(const gvfg_debug_backend_stats_t &stats, bool signalConnected)
     {
-        if (!stats.backend_running) return QStringLiteral("stopped");
+        if (!stats.running) return QStringLiteral("stopped");
         if (!signalConnected) return QStringLiteral("waiting_signal");
-        if (!stats.backend_capture_active) return QStringLiteral("paused");
         return QStringLiteral("streaming");
     }
 #endif
@@ -429,10 +427,6 @@ void CaptureController::startCapture(int channelIndex)
         channel.audioFailedBytes = channel.audioIdGaps = channel.audioIdResets = 0;
         channel.audioLastId = 0;
     }
-#if GVFG_INTERNAL_DIAGNOSTICS
-    channel.haveDebugBaseline = false;
-    channel.lastDebugDmaErrors = 0;
-#endif
     channel.signalConnected.store(channel.cachedSignalStatus.connected != 0,
                                   std::memory_order_release);
     channel.stopRequested.store(false, std::memory_order_release);
@@ -570,9 +564,6 @@ void CaptureController::updateSignalStatus(bool queryHardware)
         return;
 
     QStringList statusLines;
-#if GVFG_INTERNAL_DIAGNOSTICS
-    bool diagnosticProblemDetected = false;
-#endif
     for (int channelIndex = GVFG_CHANNEL_0; channelIndex <= GVFG_CHANNEL_1; ++channelIndex)
     {
         if (!channelStatusVisible_[channelIndex])
@@ -685,41 +676,26 @@ void CaptureController::updateSignalStatus(bool queryHardware)
                                   .arg(static_cast<qulonglong>(readSamples))
                             : QStringLiteral("CH%1 Read | measuring").arg(channelIndex));
 
-        gvfg_runtime_info_t runtimeInfo{};
-        if (gvfg_get_channel_runtime_info(handle_, channelIndex, &runtimeInfo) == GVFG_OK)
-        {
-            statusLines << (runtimeInfo.driver_read_samples >= 300
-                                ? QStringLiteral("CH%1 %2 | avg=%3 max300=%4 max=%5 us samples=%6")
-                                      .arg(channelIndex)
-                                      .arg(runtimeInfo.zero_copy_enabled
-                                               ? QStringLiteral("ZeroCopy Acquire")
-                                               : QStringLiteral("Copy GetFrame"))
-                                      .arg(runtimeInfo.driver_read_average_us, 0, 'f', 3)
-                                      .arg(runtimeInfo.driver_read_max300_us, 0, 'f', 3)
-                                      .arg(runtimeInfo.driver_read_max_us, 0, 'f', 3)
-                                      .arg(static_cast<qulonglong>(runtimeInfo.driver_read_samples))
-                                : QStringLiteral("CH%1 Driver GetFrame | measuring").arg(channelIndex));
-        }
-
 #if GVFG_INTERNAL_DIAGNOSTICS
         gvfg_debug_backend_stats_t channelStats{};
         if (gvfg_debug_get_channel_backend_stats(handle_, channelIndex, &channelStats) == GVFG_OK)
         {
-            statusLines << QStringLiteral("CH%1 Capture | status=%2 dma_errors=%3 no_frame_waits=%4")
+            statusLines << (channelStats.get_frame_timing_samples >= 300
+                                ? QStringLiteral("CH%1 %2 | avg=%3 max300=%4 max=%5 us samples=%6")
+                                      .arg(channelIndex)
+                                      .arg(channel.zeroCopy
+                                               ? QStringLiteral("ZeroCopy Acquire")
+                                               : QStringLiteral("Copy GetFrame"))
+                                      .arg(channelStats.get_frame_timing_average_us, 0, 'f', 3)
+                                      .arg(channelStats.get_frame_timing_max300_us, 0, 'f', 3)
+                                      .arg(channelStats.get_frame_timing_max_us, 0, 'f', 3)
+                                      .arg(static_cast<qulonglong>(channelStats.get_frame_timing_samples))
+                                : QStringLiteral("CH%1 Driver GetFrame | measuring").arg(channelIndex));
+            statusLines << QStringLiteral("CH%1 Capture | status=%2 no_frame_waits=%3 video_wakes=%4")
                                .arg(channelIndex)
                                .arg(captureStatusText(channelStats, signal.connected != 0))
-                               .arg(static_cast<qulonglong>(channelStats.backend_dma_errors))
-                               .arg(static_cast<qulonglong>(channelStats.backend_wait_timeouts));
-            if (channel.haveDebugBaseline && channelStats.backend_dma_errors > channel.lastDebugDmaErrors)
-            {
-                appendLog(QStringLiteral("CH%1 ERROR DMA failures +%2, total=%3")
-                              .arg(channelIndex)
-                              .arg(valueOrDash(channelStats.backend_dma_errors - channel.lastDebugDmaErrors),
-                                   valueOrDash(channelStats.backend_dma_errors)));
-                diagnosticProblemDetected = true;
-            }
-            channel.lastDebugDmaErrors = channelStats.backend_dma_errors;
-            channel.haveDebugBaseline = true;
+                               .arg(static_cast<qulonglong>(channelStats.frame_wait_timeouts))
+                               .arg(static_cast<qulonglong>(channelStats.video_event_wakes));
         }
 #endif
     }
@@ -733,10 +709,6 @@ void CaptureController::updateSignalStatus(bool queryHardware)
     }
     emit stateChanged();
 
-#if GVFG_INTERNAL_DIAGNOSTICS
-    if (diagnosticProblemDetected)
-        writeDiagnosticSnapshot(statusText);
-#endif
 }
 
 void CaptureController::reportError(const QString &apiName, gvfg_status_t status, int channel)

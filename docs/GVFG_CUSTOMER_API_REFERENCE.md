@@ -77,11 +77,9 @@ register 與 DMA 實作不屬於本文件。
 | ------------------ | ---------- | ------------------------------------------------------- |
 | `capture_fps`      | `double`   | 依 `gvfg_read_channel_frame()` 成功交付時間估算並平滑化的 FPS；尚無足夠 frame 時為 0 |
 | `delivered_frames` | `uint64_t` | 此次 running session 中成功交付給 caller 的 frame 數              |
-| `zero_copy_enabled` | `int` | 非零表示目前使用 driver zero-copy frame delivery |
-| `driver_read_samples` | `uint64_t` | 排除前 30 張 warmup 後的 driver read/acquire timing 樣本數 |
-| `driver_read_average_us` | `double` | `GET_FRAME` 或 zero-copy acquire 平均時間，單位為微秒 |
-| `driver_read_max300_us` | `double` | 最近完成的 300-sample window 最大值，單位為微秒 |
-| `driver_read_max_us` | `double` | 本次 capture lifetime 最大值，單位為微秒 |
+
+Zero-copy 模式另由 `gvfg_get_channel_zero_copy_enabled()` 查詢；driver read/acquire
+timing 屬於內部診斷資訊，不放入客戶 runtime 結構。
 
 ### 1.8 `gvfg_frame_t`
 
