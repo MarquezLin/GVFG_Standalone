@@ -65,7 +65,12 @@ namespace
                                    ? QString::fromLatin1(gvfg_pixel_format_name(signal.pixel_format))
                                    : QStringLiteral("--");
         const QString bit = signal.bit_depth > 0 ? QString::number(signal.bit_depth) : QStringLiteral("--");
-        return QStringLiteral("%1 %2 %3-bit").arg(resolution, format, bit);
+        const QString interfaceName = signal.video_interface == GVFG_INPUT_INTERFACE_SDI
+                                          ? QStringLiteral("SDI")
+                                      : signal.video_interface == GVFG_INPUT_INTERFACE_HDMI
+                                          ? QStringLiteral("HDMI")
+                                          : QStringLiteral("--");
+        return QStringLiteral("%1 %2 %3-bit %4").arg(resolution, format, bit, interfaceName);
     }
 
     QString eventTypeText(gvfg_event_type_t type)

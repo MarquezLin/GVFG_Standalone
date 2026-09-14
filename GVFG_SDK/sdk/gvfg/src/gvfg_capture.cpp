@@ -195,7 +195,6 @@ struct gvfg_channel_session_t
             std::lock_guard<std::mutex> lock(audioMutex);
             heldAudioFrame = {};
             audioFrameHeld = false;
-            audioFrameId = 0;
         }
         {
             std::lock_guard<std::mutex> lock(eventMutex);
@@ -621,11 +620,13 @@ struct gvfg_channel_session_t
         GigabyteAudioInfo format{};
         gvfg_status_t status = session->get_audio_format(format);
         uint32_t bytes = 0;
+        uint64_t frameCount = 0;
         if (status == GVFG_OK)
         {
             audioBuffer.resize(format.frame_bytes);
             status = session->wait_audio(timeoutMs, audioBuffer.data(),
-                                         static_cast<uint32_t>(audioBuffer.size()), bytes);
+                                         static_cast<uint32_t>(audioBuffer.size()), bytes,
+                                         frameCount);
         }
 
         {
@@ -636,13 +637,12 @@ struct gvfg_channel_session_t
             if (!running.load(std::memory_order_acquire) || bytes == 0 || bytes > audioBuffer.size())
                 return reject(GVFG_ESTATE, "gvfg_read_channel_audio_frame completed after capture stopped or returned invalid data");
             audioFrameHeld = true;
-            ++audioFrameId;
             out.data = audioBuffer.data();
             out.data_size = bytes;
             out.sample_rate = format.sample_rate;
             out.channels = format.channels;
             out.bits_per_sample = format.bits_per_sample;
-            out.frame_id = audioFrameId;
+            out.frame_id = frameCount;
             out.timestamp_ns = now_ns();
             heldAudioFrame = out;
         }
@@ -753,7 +753,6 @@ struct gvfg_channel_session_t
     std::vector<uint8_t> audioBuffer;
     bool audioReadInProgress = false;
     bool audioFrameHeld = false;
-    uint64_t audioFrameId = 0;
     gvfg_audio_frame_t heldAudioFrame{};
     std::mutex eventMutex;
     std::condition_variable eventCv;

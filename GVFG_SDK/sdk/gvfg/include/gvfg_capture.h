@@ -102,6 +102,12 @@ extern "C"
         GVFG_CHANNEL_1 = 1
     } gvfg_channel_t;
 
+    typedef enum
+    {
+        GVFG_INPUT_INTERFACE_SDI = 0,
+        GVFG_INPUT_INTERFACE_HDMI = 1
+    } gvfg_video_interface_t;
+
     typedef struct
     {
         uint32_t sample_rate;
@@ -134,6 +140,10 @@ extern "C"
         char resolution_name[64];
         char fps_name[24];
         char scan_name[16];
+        char st352_format_name[64];
+        char st352_fps_name[24];
+        char st352_chroma_name[36];
+        char st352_bit_depth_name[24];
     } gvfg_sdi_info_t;
 
     typedef struct
@@ -144,6 +154,7 @@ extern "C"
         int height;       /* Signal height in pixels when connected. */
         int pixel_format; /* gvfg_pixel_format_t value for the actual DMA payload. */
         int bit_depth;    /* Signal bit depth derived from the payload format. */
+        int video_interface; /* gvfg_video_interface_t reported by GigabyteLib. */
     } gvfg_signal_status_t;
 
     typedef struct
@@ -161,7 +172,7 @@ extern "C"
         int row_stride_bytes; /* Byte distance between the starts of adjacent rows. */
         int pixel_format;     /* gvfg_pixel_format_t value. */
         int bit_depth;        /* Bits per color channel of the native frame. */
-        uint64_t frame_id;    /* Monotonic identifier within the current channel start/stop run. */
+        uint64_t frame_id;    /* GigabyteLib GVFG_VIDEO_INFO.FrameCount. */
         uint64_t timestamp_ns; /* Monotonic SDK delivery time; same clock domain as audio. */
     } gvfg_frame_t;
 
@@ -173,7 +184,7 @@ extern "C"
         uint32_t channels;         /* Interleaved PCM channel count. */
         uint32_t bits_per_sample;  /* Bits in each native PCM sample. */
         uint32_t reserved;
-        uint64_t frame_id;         /* Monotonic identifier within the current start/stop run. */
+        uint64_t frame_id;         /* GigabyteLib GVFG_AUDIO_INFO.FrameCount. */
         uint64_t timestamp_ns;     /* Monotonic SDK delivery time; same clock domain as video. */
     } gvfg_audio_frame_t;
 

@@ -48,6 +48,13 @@ register 與 DMA 實作不屬於本文件。
 | `GVFG_CHANNEL_0` | 0   | 裝置輸入通道 0 |
 | `GVFG_CHANNEL_1` | 1   | 裝置輸入通道 1 |
 
+### 1.4a `gvfg_video_interface_t`
+
+| 成員 | 值 | 說明 |
+| --- | ---: | --- |
+| `GVFG_INPUT_INTERFACE_SDI` | 0 | GigabyteLib 回報 SDI input |
+| `GVFG_INPUT_INTERFACE_HDMI` | 1 | GigabyteLib 回報 HDMI input |
+
 ### 1.5 `gvfg_device_info_t`
 
 由 `gvfg_enumerate_devices()` 填入。
@@ -55,6 +62,18 @@ register 與 DMA 實作不屬於本文件。
 | 欄位      | 型別          | 說明                                      |
 | ------- | ----------- | --------------------------------------- |
 | `name`  | `char[128]` | 供 UI／log 顯示的 UTF-8、null-terminated 裝置名稱 |
+
+### 1.5a `gvfg_device_capabilities_t`
+
+由 `gvfg_get_device_capabilities()` 填入；`video_channel_count` 與 `has_audio`
+直接來自 GigabyteLib `GVFG_DEV_INFO`。
+
+### 1.5b `gvfg_sdi_info_t`
+
+由 `gvfg_get_channel_sdi_info()` 填入。數值欄位直接來自
+`GVFG_SDI_VIDEO_INFO`；`mode_name`、`resolution_name`、`fps_name`、`scan_name`
+以及 `st352_format_name`、`st352_fps_name`、`st352_chroma_name`、
+`st352_bit_depth_name` 直接來自 `GvfgStringifySdiVideoInputInfo()`。
 
 ### 1.6 `gvfg_signal_status_t`
 
@@ -68,6 +87,7 @@ register 與 DMA 實作不屬於本文件。
 | `height`       | `int` | 連線時的輸入高度；未連線時為 0                           |
 | `pixel_format` | `int` | 實際 frame payload 的 `gvfg_pixel_format_t` 值 |
 | `bit_depth`    | `int` | 從 payload 格式取得的每色彩 channel bit depth       |
+| `video_interface` | `int` | GigabyteLib 回傳的 `gvfg_video_interface_t`，為 SDI 或 HDMI |
 
 ### 1.7 `gvfg_runtime_info_t`
 
@@ -88,13 +108,13 @@ timing 屬於內部診斷資訊，不放入客戶 runtime 結構。
 | 欄位                 | 型別             | 說明                                           |
 | ------------------ | -------------- | -------------------------------------------- |
 | `data`             | `const void *` | Copy mode 為 SDK-owned、zero-copy 為 driver-owned；release 或 stop 後失效 |
-| `data_size`        | `uint64_t`     | `data` 指向的總 byte 數                           |
+| `data_size`        | `uint64_t`     | GigabyteLib `GVFG_VIDEO_INFO.cbBufSize` 回傳的總 byte 數 |
 | `width`            | `int`          | frame 寬度，單位 pixel                            |
 | `height`           | `int`          | frame 高度，單位 pixel                            |
 | `row_stride_bytes` | `int`          | 相鄰兩列起點間距，單位 byte；處理每列時必須使用此值                 |
 | `pixel_format`     | `int`          | `gvfg_pixel_format_t` 值                      |
 | `bit_depth`        | `int`          | 原生 frame 每色彩 channel 的 bit depth             |
-| `frame_id`         | `uint64_t`     | 此次 start/stop run 中單調遞增的 frame ID            |
+| `frame_id`         | `uint64_t`     | GigabyteLib `GVFG_VIDEO_INFO.FrameCount` |
 | `timestamp_ns`     | `uint64_t`     | SDK 交付時間；與 audio 共用 monotonic clock，單位 ns |
 
 Caller 不得修改任何欄位再 release。SDK 會將完整 token 與目前 held frame 比對。
@@ -125,7 +145,7 @@ Driver 一次傳回多少 bytes、buffer capacity 與 block alignment 均由 SDK
 | `sample_rate` | `uint32_t` | 每秒 sample 數 |
 | `channels` | `uint32_t` | interleaved PCM channel 數 |
 | `bits_per_sample` | `uint32_t` | 每個 PCM sample 的 bit 數 |
-| `frame_id` | `uint64_t` | 此次 start/stop run 中單調遞增的 audio frame ID |
+| `frame_id` | `uint64_t` | GigabyteLib `GVFG_AUDIO_INFO.FrameCount` |
 | `timestamp_ns` | `uint64_t` | SDK 交付時間；與 video 共用 monotonic clock，單位 ns |
 
 與 video 相同，每個 channel 同時只能持有一個 audio frame，且 caller 不得修改

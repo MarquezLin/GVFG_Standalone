@@ -142,7 +142,7 @@ currentIndex = -1
 1. 讀取 signal status。
 2. 決定 width、height、pixel format。
 3. 呼叫 backend `configure_stream()`。
-4. 計算 `frame_size_bytes()`。
+4. 使用 GigabyteLib `GVFG_VIDEO_INFO.cbBufSize` 作為 frame buffer size。
 5. 清除上一份 held/read/timing state。
 
 Copy mode：
