@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(gvfg_sdk VERSION 0.2.1 LANGUAGES CXX)
+project(gvfg_sdk VERSION 0.3.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 

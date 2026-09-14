@@ -604,7 +604,7 @@ extern "C"
         GVFG_PARAM_IN int channel_index,
         GVFG_PARAM_OUT gvfg_runtime_info_t *out_info);
 
-    /* Return the loaded GVFG runtime DLL version, for example "0.2.1". */
+    /* Return the loaded GVFG runtime DLL version, for example "0.3.0". */
     GVFG_API const char *gvfg_get_version(void);
 
     /* Convert a gvfg_pixel_format_t value to a static English format name. */
