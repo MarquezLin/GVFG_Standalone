@@ -231,16 +231,6 @@ extern "C"
         GVFG_EVENT_FORMAT_CHANGE_BEGIN = 4
     } gvfg_event_type_t;
 
-    typedef enum
-    {
-        GVFG_EVENT_MASK_NONE = 0,
-        GVFG_EVENT_MASK_SIGNAL_CONNECTED = 1u << 0,
-        GVFG_EVENT_MASK_SIGNAL_DISCONNECTED = 1u << 1,
-        GVFG_EVENT_MASK_STREAM_READY = 1u << 2,
-        GVFG_EVENT_MASK_FORMAT_CHANGE_BEGIN = 1u << 3,
-        GVFG_EVENT_MASK_ALL = (1u << 4) - 1u
-    } gvfg_event_mask_t;
-
     typedef struct
     {
         /* Set to sizeof(gvfg_event_t) before calling gvfg_poll_channel_event(). */
@@ -320,22 +310,6 @@ extern "C"
         _In_ gvfg_handle handle,
         _In_ int device_index,
         _In_ int channel_index);
-
-    /*
-     * Select events for one channel before gvfg_open_channel(). VIDEO_DMA is
-     * always registered because frame capture requires it. Disabling plug,
-     * unplug, or format-change events also disables the corresponding automatic
-     * signal/format recovery path.
-     */
-    GVFG_API gvfg_status_t gvfg_set_channel_event_mask(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _In_ uint32_t event_mask);
-
-    GVFG_API gvfg_status_t gvfg_get_channel_event_mask(
-        _In_ gvfg_handle handle,
-        _In_ int channel_index,
-        _Out_ uint32_t *out_event_mask);
 
     /*
      * A handle may open both channels of the same device. The first call opens

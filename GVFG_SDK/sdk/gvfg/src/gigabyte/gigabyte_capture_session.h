@@ -50,7 +50,7 @@ namespace gvfg::internal
         gvfg_status_t get_device_capabilities(gvfg_device_capabilities_t &out) const;
         gvfg_status_t get_sdi_info(gvfg_sdi_info_t &out) const;
         gvfg_status_t get_audio_format(GigabyteAudioInfo &out) const;
-        gvfg_status_t set_event_callback(GigabyteEventCallback callback, void *user, uint32_t eventMask);
+        gvfg_status_t set_event_callback(GigabyteEventCallback callback, void *user);
         gvfg_status_t configure_stream();
         gvfg_status_t start_stream();
         gvfg_status_t stop_stream();
@@ -96,7 +96,6 @@ namespace gvfg::internal
         mutable std::mutex callback_mutex_;
         GigabyteEventCallback event_callback_ = nullptr;
         void *event_callback_user_ = nullptr;
-        uint32_t event_mask_filter_ = GVFG_EVENT_MASK_ALL;
         mutable std::mutex state_mutex_;
         std::vector<uint8_t> copy_buffer_;
         bool frame_held_ = false;

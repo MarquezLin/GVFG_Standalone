@@ -201,9 +201,6 @@ audio API 不是 zero-copy，但上層仍使用和 video 相同的 read/release 
   channel 選擇的模式。
 - `gvfg_open_channel(handle, device_index, channel)`：開啟列舉所得裝置，channel
   必須為 `GVFG_CHANNEL_0` 或 `GVFG_CHANNEL_1`。
-- `gvfg_set_channel_event_mask(handle, channel, mask)`：在 open 前設定指定 channel
-  要註冊及通知的事件；預設 `GVFG_EVENT_MASK_ALL`。DMA event 為擷取必要項目，
-  不受 mask 控制。
 - `gvfg_start_channel(handle, channel)`：開始指定 channel 擷取。若目前無訊號，成功進入訊號監看模式；此時
   frame read 會 timeout，訊號接上後 SDK 會自動開始擷取。
 - `gvfg_stop(handle)`：停止擷取；重複呼叫仍回傳成功。

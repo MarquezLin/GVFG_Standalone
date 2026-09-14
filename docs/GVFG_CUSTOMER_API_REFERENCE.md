@@ -168,9 +168,8 @@ delivery timing，不是 driver 或硬體 capture timestamp。
 `gvfg_event_t` 是 `gvfg_poll_channel_event()` 的輸出。呼叫前將結構清零並把
 `struct_size` 設為 `sizeof(gvfg_event_t)`。`type` 是上述事件型別。
 
-`gvfg_event_mask_t` 提供對應的 `GVFG_EVENT_MASK_*` bit，可在 channel open 前用
-`gvfg_set_channel_event_mask()` 組合。預設為 `GVFG_EVENT_MASK_ALL`；mask 為 0
-表示不註冊選用的 plug/unplug/format-change driver event，也不送出 SDK 衍生事件。
+GigabyteLib 會建立並註冊完整的 channel event 集合；使用者直接透過
+`gvfg_poll_channel_event()` 接收，不另外設定 event mask。
 
 ### 1.12 `gvfg_handle`
 
@@ -231,22 +230,6 @@ gvfg_status_t gvfg_open_channel(gvfg_handle handle,
 
 對同一 handle 可分別 open CH0、CH1；第二個 channel 共用同一個 Windows device
 handle，但擁有獨立 backend stream 狀態。已開啟 channel 時不可切換 device index。
-
-### 1.17 `gvfg_set_channel_event_mask`／`gvfg_get_channel_event_mask`
-
-```c
-gvfg_status_t gvfg_set_channel_event_mask(gvfg_handle handle,
-                                          int channel_index,
-                                          uint32_t event_mask);
-gvfg_status_t gvfg_get_channel_event_mask(gvfg_handle handle,
-                                          int channel_index,
-                                          uint32_t *out_event_mask);
-```
-
-- `set` 必須在指定 channel open 前呼叫。
-- `event_mask` 只能包含 `GVFG_EVENT_MASK_*`；預設為 `GVFG_EVENT_MASK_ALL`。
-- VIDEO_DMA 是擷取必要事件，不受此 mask 控制。
-- 關閉 plug/unplug/format-change event 也會停用對應的自動 recovery。
 
 ### 1.18 Zero-copy mode selection
 

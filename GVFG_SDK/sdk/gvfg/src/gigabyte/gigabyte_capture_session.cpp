@@ -305,12 +305,11 @@ gvfg_status_t GigabyteCaptureSession::get_audio_format(GigabyteAudioInfo &out) c
 }
 
 gvfg_status_t GigabyteCaptureSession::set_event_callback(
-    GigabyteEventCallback callback, void *user, uint32_t eventMask)
+    GigabyteEventCallback callback, void *user)
 {
     std::lock_guard<std::mutex> lock(callback_mutex_);
     event_callback_ = callback;
     event_callback_user_ = user;
-    event_mask_filter_ = eventMask;
     return GVFG_OK;
 }
 
@@ -590,12 +589,7 @@ void GigabyteCaptureSession::event_thread_proc()
 void GigabyteCaptureSession::emit_event(gvfg_event_type_t type) const
 {
     std::lock_guard<std::mutex> lock(callback_mutex_);
-    uint32_t bit = 0;
-    if (type == GVFG_EVENT_SIGNAL_CONNECTED) bit = GVFG_EVENT_MASK_SIGNAL_CONNECTED;
-    if (type == GVFG_EVENT_SIGNAL_DISCONNECTED) bit = GVFG_EVENT_MASK_SIGNAL_DISCONNECTED;
-    if (type == GVFG_EVENT_STREAM_READY) bit = GVFG_EVENT_MASK_STREAM_READY;
-    if (type == GVFG_EVENT_FORMAT_CHANGE_BEGIN) bit = GVFG_EVENT_MASK_FORMAT_CHANGE_BEGIN;
-    if (event_callback_ && (event_mask_filter_ & bit) != 0)
+    if (event_callback_)
         event_callback_(type, event_callback_user_);
 }
 

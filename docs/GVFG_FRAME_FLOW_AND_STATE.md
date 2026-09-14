@@ -41,7 +41,6 @@ frame ownership 與 timeout 契約，不再直接操作 driver IOCTL 或 FPGA re
 | `deviceConnection` | CH0、CH1 共用的 Windows device connection |
 | `channels[2]` | CH0、CH1 facade session；未 open 時為 null |
 | `channelErrors[2]` | 每條 channel 最近一次詳細錯誤 |
-| `eventMasks[2]` | open 前設定的 channel event mask |
 | `currentIndex` | 此 handle 已綁定的 device index；`-1` 表示尚未綁定 |
 | `zeroCopyRequested[2]` | 各 channel open 前獨立選擇的 delivery mode |
 

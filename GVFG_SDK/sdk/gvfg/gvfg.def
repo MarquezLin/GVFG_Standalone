@@ -5,8 +5,6 @@ EXPORTS
     gvfg_create
     gvfg_destroy
     gvfg_open_channel
-    gvfg_set_channel_event_mask
-    gvfg_get_channel_event_mask
     gvfg_set_channel_zero_copy_enabled
     gvfg_get_channel_zero_copy_enabled
     gvfg_set_channel_video_format

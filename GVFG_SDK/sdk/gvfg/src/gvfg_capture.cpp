@@ -237,7 +237,7 @@ struct gvfg_channel_session_t
         stop();
         if (session)
         {
-            session->set_event_callback(nullptr, nullptr, 0);
+            session->set_event_callback(nullptr, nullptr);
             session->close();
             session.reset();
         }
@@ -285,8 +285,7 @@ struct gvfg_channel_session_t
         if (!session)
             return;
         session->set_event_callback(&gvfg_channel_session_t::onSessionEvent,
-                                    this,
-                                    eventMask);
+                                    this);
     }
 
     static void onSessionEvent(gvfg_event_type_t event, void *user)
@@ -746,7 +745,6 @@ struct gvfg_channel_session_t
     uint32_t selectedChannel = GVFG_CHANNEL_0;
     bool zeroCopyRequested = false;
     bool audioEnabled = false;
-    uint32_t eventMask = GVFG_EVENT_MASK_ALL;
 
     uint32_t width = 0;
     uint32_t height = 0;
@@ -845,7 +843,6 @@ struct gvfg_handle_t
 
         auto channel = std::make_unique<gvfg_channel_session_t>(channelErrors[slot]);
         channel->zeroCopyRequested = zeroCopyRequested[slot];
-        channel->eventMask = eventMasks[slot];
 
         const gvfg_status_t status = channel->open(index,
                                                    channelIndex,
@@ -872,27 +869,6 @@ struct gvfg_handle_t
             return GVFG_ESTATE;
         }
         zeroCopyRequested[slot] = enabled;
-        return GVFG_OK;
-    }
-
-    gvfg_status_t setChannelEventMask(int channelIndex, uint32_t eventMask)
-    {
-        if (channelIndex != GVFG_CHANNEL_0 && channelIndex != GVFG_CHANNEL_1)
-            return GVFG_EINVAL;
-        if ((eventMask & ~static_cast<uint32_t>(GVFG_EVENT_MASK_ALL)) != 0)
-        {
-            channelErrors[static_cast<size_t>(channelIndex)].set(
-                "gvfg_set_channel_event_mask rejected: event mask contains unsupported bits");
-            return GVFG_EINVAL;
-        }
-        const size_t slot = static_cast<size_t>(channelIndex);
-        if (channels[slot])
-        {
-            channelErrors[slot].set(
-                "gvfg_set_channel_event_mask rejected: channel is already open");
-            return GVFG_ESTATE;
-        }
-        eventMasks[slot] = eventMask;
         return GVFG_OK;
     }
 
@@ -951,7 +927,6 @@ struct gvfg_handle_t
     std::array<ChannelErrorState, 2> channelErrors;
     std::wstring devicePath;
     std::array<std::unique_ptr<gvfg_channel_session_t>, 2> channels;
-    std::array<uint32_t, 2> eventMasks{GVFG_EVENT_MASK_ALL, GVFG_EVENT_MASK_ALL};
     int currentIndex = -1;
     std::array<bool, 2> zeroCopyRequested{false, false};
     std::array<gvfg_pixel_format_t, 2> requestedFormats{GVFG_PIXFMT_YUY2, GVFG_PIXFMT_YUY2};
@@ -1015,26 +990,6 @@ extern "C"
         if (!handle)
             return GVFG_EINVAL;
         return handle->openChannel(device_index, channel_index);
-    }
-
-    gvfg_status_t gvfg_set_channel_event_mask(gvfg_handle handle,
-                                               int channel_index,
-                                               uint32_t event_mask)
-    {
-        if (!handle)
-            return GVFG_EINVAL;
-        return handle->setChannelEventMask(channel_index, event_mask);
-    }
-
-    gvfg_status_t gvfg_get_channel_event_mask(gvfg_handle handle,
-                                               int channel_index,
-                                               uint32_t *out_event_mask)
-    {
-        if (!handle || !out_event_mask ||
-            (channel_index != GVFG_CHANNEL_0 && channel_index != GVFG_CHANNEL_1))
-            return GVFG_EINVAL;
-        *out_event_mask = handle->eventMasks[static_cast<size_t>(channel_index)];
-        return GVFG_OK;
     }
 
     gvfg_status_t gvfg_set_channel_zero_copy_enabled(gvfg_handle handle,

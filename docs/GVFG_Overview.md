@@ -120,11 +120,6 @@ struct gvfg_handle_t
         2
     > channels;
 
-    std::array<uint32_t, 2> eventMasks{
-        GVFG_EVENT_MASK_ALL,
-        GVFG_EVENT_MASK_ALL
-    };
-
     int currentIndex = -1;
     std::array<bool, 2> zeroCopyRequested{false, false};
 };
@@ -212,8 +207,6 @@ struct gvfg_channel_session_t
     int currentIndex;
     uint32_t selectedChannel;
     bool zeroCopyRequested;
-    uint32_t eventMask;
-
     std::atomic<bool> running;
     bool readInProgress;
     bool frameHeld;
