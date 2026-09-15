@@ -20,7 +20,8 @@ typedef struct
     int running;
     int frame_held;
     uint32_t event_queue_depth;
-    uint64_t video_event_wakes;
+    uint64_t video_dma_event_wakes;
+    uint64_t extra_video_event_wakes;
     uint64_t video_frames_from_lib;
     uint64_t audio_dma_event_wakes;
     uint64_t extra_audio_event_wakes;

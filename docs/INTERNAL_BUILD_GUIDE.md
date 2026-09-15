@@ -38,11 +38,11 @@
 
 ## 4. 更新 SDK 版本
 
-版本只有一個來源：`GVFG_SDK/CMakeLists.txt` 的 `project()`。例如準備 `0.3.0`
+版本只有一個來源：`GVFG_SDK/CMakeLists.txt` 的 `project()`。例如準備 `1.0.0`
 時改成：
 
 ```cmake
-project(gvfg_sdk VERSION 0.3.0 LANGUAGES CXX)
+project(gvfg_sdk VERSION 1.0.0 LANGUAGES CXX)
 ```
 
 `sdk/gvfg` 會直接繼承根 project version，並將它編入 `gvfg.dll`。不再存在 `GVFG_SDK_VERSION` cache option，也不應使用 `-DGVFG_SDK_VERSION=...` 覆寫。修改版本後要重新 configure，再重新建置 DLL。
@@ -119,7 +119,7 @@ Debug 診斷會增加 log 與檢查成本，不應拿來判斷正式版本效能
 - 使用 `gvfg_get_version()` 查詢實際載入的 runtime DLL 版本。
 - signal status、runtime FPS 與 channel event。
 - GPU conversion：BGRA8、RGB10A2、NV12。
-- 公開詳細錯誤 API：`gvfg_get_channel_last_error_detail()`。
+- SDK 詳細錯誤 API：`gvfg_get_channel_last_sdk_error_detail()`；只適用於負數 SDK error。
 - 內部 debug API：backend stats、register read/write。
 
 目前 FPGA 的 8-bit format register 仍可能回報舊 `YVYU` 值；SDK 只把它當作 legacy register identifier，對外格式與實際 DMA layout一律是 YUY2（`Y0 U0 Y1 V0`）。

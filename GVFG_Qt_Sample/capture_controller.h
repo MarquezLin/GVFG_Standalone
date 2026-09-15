@@ -4,7 +4,6 @@
 #include <gvfg_debug.h>
 #include <gvfg_preview.h>
 
-#include <QFile>
 #include <QObject>
 #include <QStringList>
 
@@ -40,14 +39,10 @@ public:
     bool frameAvailable(int channel) const;
     bool cachedSignalStatus(int channel, gvfg_signal_status_t *status) const;
     QString sdkVersion() const;
-    void logStartupInfo();
-    void logUiMessage(const QString &message);
 
 public slots:
     void refreshDevices();
-    bool openDevice();
     void closeDevice();
-    bool applyOutputFormat(int channel);
     void startCapture(int channel);
     void stopCapture(int channel);
     void stopAllCaptures();
@@ -59,12 +54,17 @@ signals:
     void devicesChanged(const QStringList &names);
     void stateChanged();
     void statusChanged(const QString &text);
+    void sdiInfoChanged(const QString &text);
     void logMessage(const QString &message);
+    void diagnosticMessage(const QString &message);
     void previewSourceSizeChanged(int channel, int width, int height);
     void previewShowRequested(int channel);
     void previewCloseRequested(int channel);
 
 private:
+    bool openDevice();
+    bool applyOutputFormat(int channel);
+
     struct ChannelRuntime
     {
         struct AudioPacket { std::vector<uint8_t> pcm; };
@@ -84,10 +84,9 @@ private:
         std::deque<AudioPacket> audioQueue;
         bool audioEnabled = false;
         gvfg_audio_format_t audioFormat{};
-        uint64_t audioReceivedFrames = 0, audioOutputFrames = 0;
-        uint64_t audioDroppedFrames = 0, audioCancelledFrames = 0;
+        uint64_t audioReceivedFrames = 0;
         uint64_t audioReleaseFailedFrames = 0, audioOutputFailedFrames = 0;
-        std::atomic<uint64_t> videoReceived{0}, videoSubmitted{0}, videoSkipped{0}, videoFailed{0};
+        std::atomic<uint64_t> videoReceived{0}, videoFailed{0};
         gvfg_preview_delivery_stats_t previewBaseline{};
         gvfg_debug_backend_stats_t backendBaseline{};
         std::chrono::steady_clock::time_point startupStartTime{};
@@ -100,16 +99,14 @@ private:
         uint64_t previewFailureCount = 0;
         gvfg_signal_status_t cachedSignalStatus{};
         bool haveCachedSignalStatus = false;
+        QString cachedSdiInfoText;
         QString lastLoggedInputStatus;
     };
 
     void reportError(const QString &apiName, gvfg_status_t status, int channel = -1);
     void appendLog(const QString &message);
     bool openChannel(int channel);
-    void openLogFile();
-    bool openLogFilePart();
-    void rotateLogFileIfNeeded();
-    void writeLogFileLine(const QString &line);
+    void refreshSdiInfo(int channel);
 #if GVFG_INTERNAL_DIAGNOSTICS
     void writeDiagnosticSnapshot(const QString &statusText);
 #endif
@@ -120,7 +117,6 @@ private:
     void joinAudioThread(int channel);
     void logDeliveryStatus(int channel, bool finalSnapshot = false);
 
-    static constexpr qint64 kMaxLogFileBytes = 20ll * 1024ll * 1024ll;
     std::array<gvfg_device_info_t, GVFG_MAX_DEVICES> devices_{};
     int deviceCount_ = 0;
     gvfg_handle handle_ = nullptr;
@@ -129,8 +125,4 @@ private:
     std::array<bool, 2> channelStatusVisible_{{true, true}};
     QTimer *runtimeStatusTimer_ = nullptr;
     QString lastSignalStatusText_;
-    QFile logFile_;
-    std::mutex logFileMutex_;
-    QString logDirPath_, logFilePath_, logSessionStamp_;
-    int logPartIndex_ = 1;
 };

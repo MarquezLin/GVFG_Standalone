@@ -35,7 +35,8 @@
 - 每條 channel 各自擁有 backend、event、capture thread、copy buffer 與 frame lifetime state。
 - 公開 API 已改為 channel-aware：open/start/read/release/poll/stop 都帶 `channel_index`。
 - copy mode 直接把 driver frame 寫入該 channel 的 `copy_buffer_`。
-- zero-copy mode 保存 driver-owned pointer，成功 read 必須配對一次 release。
+- zero-copy mode 保存 driver-owned pointer，成功 read 必須配對一次公開 release 以結束
+  SDK pointer lifetime；目前不送逐 frame Lib/driver release。
 - `ChannelErrorState` 由 `gvfg_handle_t` 逐 channel 持有，facade/backend 共用同一份詳細錯誤。
 - `firstOpenChannel()` 與「第二條 channel 從第一條借 backend」的 ownership 已移除。
 - 重複的 `device_`、`opened_`、device path/name session 狀態已移除；`device_connection_` 是 device handle 的唯一來源。

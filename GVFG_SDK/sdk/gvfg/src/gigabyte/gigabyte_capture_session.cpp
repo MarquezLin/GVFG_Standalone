@@ -3,8 +3,6 @@
 
 #include <algorithm>
 #include <array>
-#include <iomanip>
-#include <sstream>
 
 namespace
 {
@@ -33,6 +31,7 @@ uint32_t bit_depth(int format)
     return format == GVFG_PIXFMT_Y210 ? 10u :
            format == GVFG_PIXFMT_YUY2 ? 8u : 0u;
 }
+
 }
 
 namespace gvfg::internal
@@ -89,7 +88,7 @@ gvfg_status_t GigabyteCaptureSession::ensure_vendor_channel_open() const
                                  ? GVFG_VIDEO_FRAME_ZERO_COPY | GVFG_AUDIO_FRAME_BUF_COPY
                                  : GVFG_VIDEO_FRAME_BUF_COPY | GVFG_AUDIO_FRAME_BUF_COPY;
     gvfg_status_t status = from_vendor(
-        GvfgOpenDev(device_handle_, &context_, memoryMode), "GvfgOpenDev");
+        GvfgOpenDev(device_handle_, &context_, memoryMode));
     if (status != GVFG_OK)
     {
         CloseHandle(device_handle_);
@@ -98,8 +97,7 @@ gvfg_status_t GigabyteCaptureSession::ensure_vendor_channel_open() const
         return status;
     }
 
-    status = from_vendor(GvfgCreateEvents(&events_, audio_enabled_ ? FALSE : TRUE),
-                         "GvfgCreateEvents");
+    status = from_vendor(GvfgCreateEvents(&events_, audio_enabled_ ? FALSE : TRUE));
     if (status != GVFG_OK)
     {
         GvfgCloseDev(&context_);
@@ -115,16 +113,21 @@ gvfg_status_t GigabyteCaptureSession::ensure_vendor_channel_open() const
         close_vendor_channel();
         return reject(GVFG_EIO, "CreateEvent for GigabyteLib cancellation failed");
     }
+    recovery_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!recovery_event_)
+    {
+        close_vendor_channel();
+        return reject(GVFG_EIO, "CreateEvent for GigabyteLib recovery failed");
+    }
 
-    status = from_vendor(GvfgOpenVideoChn(context_, channel_, &events_),
-                         "GvfgOpenVideoChn");
+    status = from_vendor(GvfgOpenVideoChn(context_, channel_, &events_));
     if (status != GVFG_OK)
     {
         close_vendor_channel();
         return status;
     }
     channel_open_ = true;
-    return refresh_video_info();
+    return GVFG_OK;
 }
 
 void GigabyteCaptureSession::close_vendor_channel() const
@@ -132,6 +135,11 @@ void GigabyteCaptureSession::close_vendor_channel() const
     if (channel_open_ && context_)
         GvfgCloseVideoChn(context_, channel_);
     channel_open_ = false;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        video_info_valid_ = false;
+        audio_info_valid_ = false;
+    }
     if (context_)
         GvfgCloseDev(&context_);
     if (events_created_)
@@ -141,6 +149,9 @@ void GigabyteCaptureSession::close_vendor_channel() const
     if (stop_event_)
         CloseHandle(stop_event_);
     stop_event_ = nullptr;
+    if (recovery_event_)
+        CloseHandle(recovery_event_);
+    recovery_event_ = nullptr;
     if (device_handle_ != INVALID_HANDLE_VALUE)
         CloseHandle(device_handle_);
     device_handle_ = INVALID_HANDLE_VALUE;
@@ -177,8 +188,13 @@ gvfg_status_t GigabyteCaptureSession::set_audio_enabled(bool enabled)
 {
     if (running_)
         return reject(GVFG_ESTATE, "GigabyteLib audio mode cannot change while running");
-    if (channel_open_ && audio_enabled_ != enabled)
-        close_vendor_channel();
+    if (audio_enabled_ != enabled)
+    {
+        if (channel_open_)
+            close_vendor_channel();
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        audio_info_valid_ = false;
+    }
     audio_enabled_ = enabled;
     return GVFG_OK;
 }
@@ -197,7 +213,7 @@ gvfg_status_t GigabyteCaptureSession::set_video_format(gvfg_pixel_format_t forma
                                  ? GVFG_VIDEO_COLOR_DEPTH_10_BITS
                                  : GVFG_VIDEO_COLOR_DEPTH_8_BITS;
     const gvfg_status_t status = from_vendor(
-        GvfgSetVideoColorDepth(context_, channel_, colorDepth), "GvfgSetVideoColorDepth");
+        GvfgSetVideoColorDepth(context_, channel_, colorDepth));
     return status == GVFG_OK ? refresh_video_info() : status;
 }
 
@@ -206,8 +222,11 @@ gvfg_status_t GigabyteCaptureSession::refresh_video_info() const
     if (!context_)
         return reject(GVFG_ESTATE, "GigabyteLib video info requested before open");
     GVFG_VIDEO_INFO info{};
-    const gvfg_status_t status = from_vendor(
-        GvfgGetVideoInfo(context_, channel_, &info), "GvfgGetVideoInfo");
+    gvfg_status_t status = GVFG_OK;
+    {
+        std::lock_guard<std::mutex> captureLock(capture_mutex_);
+        status = from_vendor(GvfgGetVideoInfo(context_, channel_, &info));
+    }
     if (status != GVFG_OK)
         return status;
     gvfg_signal_status_t signal{};
@@ -222,6 +241,7 @@ gvfg_status_t GigabyteCaptureSession::refresh_video_info() const
         std::lock_guard<std::mutex> lock(state_mutex_);
         cached_signal_ = signal;
         video_info_ = info;
+        video_info_valid_ = true;
     }
     return GVFG_OK;
 }
@@ -231,6 +251,9 @@ gvfg_status_t GigabyteCaptureSession::get_signal_status(gvfg_signal_status_t &ou
     const gvfg_status_t openStatus = ensure_vendor_channel_open();
     if (openStatus != GVFG_OK)
         return openStatus;
+    const gvfg_status_t status = refresh_video_info();
+    if (status != GVFG_OK)
+        return status;
     std::lock_guard<std::mutex> lock(state_mutex_);
     out = cached_signal_;
     return GVFG_OK;
@@ -243,7 +266,7 @@ gvfg_status_t GigabyteCaptureSession::get_device_capabilities(
     if (openStatus != GVFG_OK)
         return openStatus;
     GVFG_DEV_INFO info{};
-    const gvfg_status_t status = from_vendor(GvfgGetDevInfo(context_, &info), "GvfgGetDevInfo");
+    const gvfg_status_t status = from_vendor(GvfgGetDevInfo(context_, &info));
     if (status != GVFG_OK)
         return status;
     out = {};
@@ -259,13 +282,11 @@ gvfg_status_t GigabyteCaptureSession::get_sdi_info(gvfg_sdi_info_t &out) const
         return openStatus;
     GVFG_SDI_VIDEO_INFO info{};
     gvfg_status_t status = from_vendor(
-        GvfgGetSdiVideoInputInfo(context_, channel_, &info), "GvfgGetSdiVideoInputInfo");
+        GvfgGetSdiVideoInputInfo(context_, channel_, &info));
     if (status != GVFG_OK)
         return status;
     GVFG_SDI_VIDEO_INFO_STR text{};
-    status = from_vendor(
-        GvfgStringifySdiVideoInputInfo(context_, &info, &text),
-        "GvfgStringifySdiVideoInputInfo");
+    status = from_vendor(GvfgStringifySdiVideoInputInfo(context_, &info, &text));
     if (status != GVFG_OK)
         return status;
     out = {};
@@ -277,6 +298,7 @@ gvfg_status_t GigabyteCaptureSession::get_sdi_info(gvfg_sdi_info_t &out) const
     out.level_b = info.LevelB ? 1 : 0;
     out.st352_payload = info.St352Payload;
     out.error_count = info.ErrorCount;
+    strncpy_s(out.signal_lock_name, text.VideoSignalLock, _TRUNCATE);
     strncpy_s(out.mode_name, text.Mode, _TRUNCATE);
     strncpy_s(out.resolution_name, text.Resol, _TRUNCATE);
     strncpy_s(out.fps_name, text.Fps, _TRUNCATE);
@@ -293,9 +315,17 @@ gvfg_status_t GigabyteCaptureSession::get_audio_format(GigabyteAudioInfo &out) c
     const gvfg_status_t openStatus = ensure_vendor_channel_open();
     if (openStatus != GVFG_OK)
         return openStatus;
-    const gvfg_status_t status = refresh_audio_info();
-    if (status != GVFG_OK)
-        return status;
+    bool refresh = false;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        refresh = !audio_info_valid_;
+    }
+    if (refresh)
+    {
+        const gvfg_status_t status = refresh_audio_info();
+        if (status != GVFG_OK)
+            return status;
+    }
     std::lock_guard<std::mutex> lock(state_mutex_);
     out = {};
     out.sample_rate = audio_info_.SamplesPerSec;
@@ -309,11 +339,12 @@ gvfg_status_t GigabyteCaptureSession::refresh_audio_info() const
 {
     GVFG_AUDIO_INFO info{};
     const gvfg_status_t status = from_vendor(
-        GvfgGetAudioInfo(context_, channel_, &info), "GvfgGetAudioInfo");
+        GvfgGetAudioInfo(context_, channel_, &info));
     if (status != GVFG_OK)
         return status;
     std::lock_guard<std::mutex> lock(state_mutex_);
     audio_info_ = info;
+    audio_info_valid_ = true;
     return GVFG_OK;
 }
 
@@ -333,9 +364,17 @@ gvfg_status_t GigabyteCaptureSession::configure_stream()
     const gvfg_status_t openStatus = ensure_vendor_channel_open();
     if (openStatus != GVFG_OK)
         return openStatus;
-    const gvfg_status_t infoStatus = refresh_video_info();
-    if (infoStatus != GVFG_OK)
-        return infoStatus;
+    bool refresh = false;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        refresh = !video_info_valid_;
+    }
+    if (refresh)
+    {
+        const gvfg_status_t status = refresh_video_info();
+        if (status != GVFG_OK)
+            return status;
+    }
     configured_ = true;
     return GVFG_OK;
 }
@@ -347,8 +386,11 @@ gvfg_status_t GigabyteCaptureSession::start_stream()
     if (!configured_)
         return reject(GVFG_ESTATE, "GigabyteLib stream has not been configured");
     ResetEvent(stop_event_);
-    const gvfg_status_t status = from_vendor(
-        GvfgStartCapture(context_, channel_), "GvfgStartCapture");
+    ResetEvent(recovery_event_);
+    recovery_pending_ = false;
+    recovery_status_ = GVFG_OK;
+    std::lock_guard<std::mutex> captureLock(capture_mutex_);
+    const gvfg_status_t status = from_vendor(GvfgStartCapture(context_, channel_));
     if (status != GVFG_OK)
         return status;
     {
@@ -363,22 +405,24 @@ gvfg_status_t GigabyteCaptureSession::start_stream()
 gvfg_status_t GigabyteCaptureSession::stop_stream()
 {
     const bool wasRunning = running_.exchange(false);
+    recovery_pending_ = false;
+    recovery_status_ = GVFG_OK;
     if (stop_event_)
         SetEvent(stop_event_);
-    stop_event_monitoring();
+    if (recovery_event_)
+        SetEvent(recovery_event_);
 
-    gvfg_status_t result = GVFG_OK;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (frame_held_ && zero_copy_enabled_ && context_)
-            result = from_vendor(GvfgReleaseVideoFrameZeroCopy(context_, channel_),
-                                 "GvfgReleaseVideoFrameZeroCopy during stop");
         frame_held_ = false;
     }
+    recovery_cv_.notify_all();
+    stop_event_monitoring();
+    gvfg_status_t result = GVFG_OK;
     if (wasRunning && channel_open_ && context_)
     {
-        const gvfg_status_t stopStatus = from_vendor(
-            GvfgStopCapture(context_, channel_), "GvfgStopCapture");
+        std::lock_guard<std::mutex> captureLock(capture_mutex_);
+        const gvfg_status_t stopStatus = from_vendor(GvfgStopCapture(context_, channel_));
         if (result == GVFG_OK)
             result = stopStatus;
     }
@@ -396,9 +440,10 @@ gvfg_status_t GigabyteCaptureSession::wait_frame(uint32_t timeoutMs, gvfg_frame_
             return reject(GVFG_ESTATE, "GigabyteLib frame read rejected: previous frame is held");
     }
 
-    std::array<HANDLE, 3> handles{stop_event_, events_.hVideoFrameInEvent, events_.hVideoExtraFrame};
-    const DWORD count = handles[2] ? 3u : 2u;
-    if (!handles[1])
+    std::array<HANDLE, 4> handles{stop_event_, recovery_event_,
+                                  events_.hVideoFrameInEvent, events_.hVideoExtraFrame};
+    const DWORD count = handles[3] ? 4u : 3u;
+    if (!handles[2])
         return reject(GVFG_EIO, "GigabyteLib did not provide a video-frame event");
     const DWORD waitMs = timeoutMs == UINT32_MAX ? INFINITE : timeoutMs;
     const DWORD wait = WaitForMultipleObjects(count, handles.data(), FALSE, waitMs);
@@ -406,11 +451,16 @@ gvfg_status_t GigabyteCaptureSession::wait_frame(uint32_t timeoutMs, gvfg_frame_
         return GVFG_ETIMEOUT;
     if (wait == WAIT_OBJECT_0)
         return GVFG_ESTATE;
-    if (wait != WAIT_OBJECT_0 + 1 && wait != WAIT_OBJECT_0 + 2)
+    if (wait == WAIT_OBJECT_0 + 1)
+        return wait_for_recovery(timeoutMs);
+    if (wait != WAIT_OBJECT_0 + 2 && wait != WAIT_OBJECT_0 + 3)
         return reject(GVFG_EIO, "GigabyteLib video event wait failed");
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        ++video_event_wakes_;
+        if (wait == WAIT_OBJECT_0 + 2)
+            ++video_dma_event_wakes_;
+        else
+            ++extra_video_event_wakes_;
     }
 
     gvfg_signal_status_t signal{};
@@ -432,8 +482,10 @@ gvfg_status_t GigabyteCaptureSession::wait_frame(uint32_t timeoutMs, gvfg_frame_
     {
         void *buffer = nullptr;
         const auto begin = std::chrono::steady_clock::now();
-        status = from_vendor(GvfgGetVideoFrameZeroCopy(context_, channel_, &buffer),
-                             "GvfgGetVideoFrameZeroCopy");
+        {
+            std::lock_guard<std::mutex> captureLock(capture_mutex_);
+            status = from_vendor(GvfgGetVideoFrameZeroCopy(context_, channel_, &buffer));
+        }
         const auto end = std::chrono::steady_clock::now();
         record_get_frame_timing(std::chrono::duration<double, std::micro>(end - begin).count());
         data = buffer;
@@ -443,9 +495,11 @@ gvfg_status_t GigabyteCaptureSession::wait_frame(uint32_t timeoutMs, gvfg_frame_
         if (copy_buffer_.size() != bytes)
             copy_buffer_.assign(bytes, 0);
         const auto begin = std::chrono::steady_clock::now();
-        status = from_vendor(GvfgGetVideoFrame(context_, channel_, copy_buffer_.data(),
-                                               static_cast<ULONG>(copy_buffer_.size())),
-                             "GvfgGetVideoFrame");
+        {
+            std::lock_guard<std::mutex> captureLock(capture_mutex_);
+            status = from_vendor(GvfgGetVideoFrame(context_, channel_, copy_buffer_.data(),
+                                                   static_cast<ULONG>(copy_buffer_.size())));
+        }
         const auto end = std::chrono::steady_clock::now();
         record_get_frame_timing(std::chrono::duration<double, std::micro>(end - begin).count());
         data = copy_buffer_.data();
@@ -472,17 +526,14 @@ gvfg_status_t GigabyteCaptureSession::wait_frame(uint32_t timeoutMs, gvfg_frame_
 
 gvfg_status_t GigabyteCaptureSession::release_frame()
 {
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    if (!frame_held_)
-        return reject(GVFG_ESTATE, "GigabyteLib frame release rejected: no frame is held");
-    if (zero_copy_enabled_)
     {
-        const gvfg_status_t status = from_vendor(
-            GvfgReleaseVideoFrameZeroCopy(context_, channel_), "GvfgReleaseVideoFrameZeroCopy");
-        if (status != GVFG_OK)
-            return status;
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (!frame_held_)
+            return reject(GVFG_ESTATE, "GigabyteLib frame release rejected: no frame is held");
+        // Current GigabyteLib zero-copy contract requires no per-frame release call.
+        frame_held_ = false;
     }
-    frame_held_ = false;
+    recovery_cv_.notify_all();
     return GVFG_OK;
 }
 
@@ -502,25 +553,31 @@ gvfg_status_t GigabyteCaptureSession::wait_audio(
     if (!events_.hAudioFrameInEvent)
         return reject(GVFG_EIO, "GigabyteLib did not provide an audio-frame event");
 
-    std::array<HANDLE, 3> handles{stop_event_, events_.hAudioFrameInEvent, events_.hAudioExtraFrame};
-    const DWORD count = handles[2] ? 3u : 2u;
+    std::array<HANDLE, 4> handles{stop_event_, recovery_event_,
+                                  events_.hAudioFrameInEvent, events_.hAudioExtraFrame};
+    const DWORD count = handles[3] ? 4u : 3u;
     const DWORD waitMs = timeoutMs == UINT32_MAX ? INFINITE : timeoutMs;
     const DWORD wait = WaitForMultipleObjects(count, handles.data(), FALSE, waitMs);
     if (wait == WAIT_TIMEOUT)
         return GVFG_ETIMEOUT;
     if (wait == WAIT_OBJECT_0)
         return GVFG_ESTATE;
-    if (wait != WAIT_OBJECT_0 + 1 && wait != WAIT_OBJECT_0 + 2)
+    if (wait == WAIT_OBJECT_0 + 1)
+        return wait_for_recovery(timeoutMs);
+    if (wait != WAIT_OBJECT_0 + 2 && wait != WAIT_OBJECT_0 + 3)
         return reject(GVFG_EIO, "GigabyteLib audio event wait failed");
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (wait == WAIT_OBJECT_0 + 1)
+        if (wait == WAIT_OBJECT_0 + 2)
             ++audio_event_wakes_;
         else
             ++extra_audio_event_wakes_;
     }
-    const gvfg_status_t status = from_vendor(
-        GvfgGetAudioFrame(context_, channel_, destination, frameBytes), "GvfgGetAudioFrame");
+    gvfg_status_t status = GVFG_OK;
+    {
+        std::lock_guard<std::mutex> captureLock(capture_mutex_);
+        status = from_vendor(GvfgGetAudioFrame(context_, channel_, destination, frameBytes));
+    }
     if (status != GVFG_OK)
         return status;
     outBytes = frameBytes;
@@ -576,15 +633,20 @@ void GigabyteCaptureSession::event_thread_proc()
             return;
         if (kind == 1)
         {
-            emit_event(GVFG_EVENT_FORMAT_CHANGE_BEGIN);
             refresh_video_info();
-            emit_event(GVFG_EVENT_STREAM_READY);
+            emit_event(GVFG_EVENT_VIDEO_FORMAT_CHANGED);
         }
         else if (kind == 2)
         {
             refresh_video_info();
-            emit_event(GVFG_EVENT_SIGNAL_CONNECTED);
-            emit_event(GVFG_EVENT_STREAM_READY);
+            if (running_)
+            {
+                recovery_status_ = GVFG_OK;
+                recovery_pending_ = true;
+                SetEvent(recovery_event_);
+                recover_stream_after_plugin();
+            }
+            emit_event(GVFG_EVENT_VIDEO_INPUT_PLUGIN);
         }
         else if (kind == 3)
         {
@@ -592,8 +654,9 @@ void GigabyteCaptureSession::event_thread_proc()
                 std::lock_guard<std::mutex> lock(state_mutex_);
                 cached_signal_ = {};
                 cached_signal_.channel = channel_;
+                video_info_valid_ = false;
             }
-            emit_event(GVFG_EVENT_SIGNAL_DISCONNECTED);
+            emit_event(GVFG_EVENT_VIDEO_INPUT_UNPLUG);
         }
     }
 }
@@ -608,7 +671,8 @@ void GigabyteCaptureSession::emit_event(gvfg_event_type_t type) const
 void GigabyteCaptureSession::fill_debug_stats(gvfg_debug_backend_stats_t &out) const
 {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    out.video_event_wakes = video_event_wakes_;
+    out.video_dma_event_wakes = video_dma_event_wakes_;
+    out.extra_video_event_wakes = extra_video_event_wakes_;
     out.video_frames_from_lib = video_frames_from_lib_;
     out.audio_dma_event_wakes = audio_event_wakes_;
     out.extra_audio_event_wakes = extra_audio_event_wakes_;
@@ -642,23 +706,54 @@ gvfg_status_t GigabyteCaptureSession::debug_write_register(uint32_t offset, uint
     return GVFG_OK;
 }
 
-gvfg_status_t GigabyteCaptureSession::from_vendor(GVFG_HRESULT result, const char *operation) const
+gvfg_status_t GigabyteCaptureSession::from_vendor(GVFG_HRESULT result)
 {
-    if (result == GVFG_HRESULT_OK)
+    return static_cast<gvfg_status_t>(result);
+}
+
+gvfg_status_t GigabyteCaptureSession::recover_stream_after_plugin()
+{
+    {
+        std::unique_lock<std::mutex> stateLock(state_mutex_);
+        recovery_cv_.wait(stateLock, [this]() { return !frame_held_ || !running_; });
+    }
+
+    std::lock_guard<std::mutex> captureLock(capture_mutex_);
+    if (!recovery_pending_)
+    {
+        ResetEvent(recovery_event_);
         return GVFG_OK;
-    gvfg_status_t status = GVFG_EIO;
-    if (result == GVFG_HRESULT_DEV_BUSY || result == GVFG_HRESULT_CONTEXT_ERROR)
-        status = GVFG_ESTATE;
-    else if (result == GVFG_HRESULT_VIDEO_CHN_INVALID)
-        status = GVFG_EINVAL;
-    else if (result == GVFG_HRESULT_DEV_ERROR)
-        status = GVFG_ENODEV;
-    std::ostringstream stream;
-    stream << (operation ? operation : "GigabyteLib")
-           << " failed with GVFG_HRESULT 0x" << std::hex << std::uppercase
-           << static_cast<unsigned int>(result);
-    error_state_.set(stream.str());
+    }
+    if (!running_)
+    {
+        recovery_pending_ = false;
+        ResetEvent(recovery_event_);
+        recovery_cv_.notify_all();
+        return GVFG_OK;
+    }
+
+    gvfg_status_t status = from_vendor(GvfgStopCapture(context_, channel_));
+    if (status == GVFG_OK)
+        status = from_vendor(GvfgStartCapture(context_, channel_));
+    recovery_status_ = status;
+    recovery_pending_ = false;
+    ResetEvent(recovery_event_);
+    recovery_cv_.notify_all();
     return status;
+}
+
+gvfg_status_t GigabyteCaptureSession::wait_for_recovery(uint32_t timeoutMs)
+{
+    std::unique_lock<std::mutex> lock(state_mutex_);
+    const auto complete = [this]() { return !recovery_pending_ || !running_; };
+    if (timeoutMs == UINT32_MAX)
+        recovery_cv_.wait(lock, complete);
+    else if (!recovery_cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs), complete))
+        return GVFG_ETIMEOUT;
+    if (!running_)
+        return GVFG_ESTATE;
+    const gvfg_status_t status = recovery_status_.load();
+    return status == GVFG_OK ? GVFG_ETIMEOUT : status;
 }
 
 gvfg_status_t GigabyteCaptureSession::reject(gvfg_status_t status, const char *message) const

@@ -2,10 +2,6 @@
 #include <QAudioDevice>
 #include <QAudioFormat>
 #include <QAudioSink>
-#include <QCoreApplication>
-#include <QDateTime>
-#include <QDir>
-#include <QIODevice>
 #include <QMediaDevices>
 #include <QMetaObject>
 #include <QStringList>
@@ -25,15 +21,6 @@
 namespace
 {
     constexpr size_t kMaxQueuedAudioFrames = 10;
-
-    QString logFilePrefix()
-    {
-#if GVFG_INTERNAL_DIAGNOSTICS
-        return QStringLiteral("gvfg_qt_preview_debug");
-#else
-        return QStringLiteral("gvfg_qt_preview");
-#endif
-    }
 
 #if GVFG_INTERNAL_DIAGNOSTICS
     QString boolText(int value) { return value ? QStringLiteral("yes") : QStringLiteral("no"); }
@@ -71,10 +58,9 @@ namespace
     {
         switch (type)
         {
-        case GVFG_EVENT_SIGNAL_CONNECTED: return QStringLiteral("SIGNAL_CONNECTED");
-        case GVFG_EVENT_SIGNAL_DISCONNECTED: return QStringLiteral("SIGNAL_DISCONNECTED");
-        case GVFG_EVENT_STREAM_READY: return QStringLiteral("STREAM_READY");
-        case GVFG_EVENT_FORMAT_CHANGE_BEGIN: return QStringLiteral("FORMAT_CHANGE_BEGIN");
+        case GVFG_EVENT_VIDEO_FORMAT_CHANGED: return QStringLiteral("VIDEO_FORMAT_CHANGED");
+        case GVFG_EVENT_VIDEO_INPUT_PLUGIN: return QStringLiteral("VIDEO_INPUT_PLUGIN");
+        case GVFG_EVENT_VIDEO_INPUT_UNPLUG: return QStringLiteral("VIDEO_INPUT_UNPLUG");
         default: return QStringLiteral("UNKNOWN");
         }
     }
@@ -87,7 +73,6 @@ CaptureController::CaptureController(QObject *parent) : QObject(parent)
         processPendingEvents();
         updateSignalStatus(false);
     });
-    openLogFile();
 }
 
 CaptureController::~CaptureController()
@@ -154,19 +139,6 @@ QString CaptureController::sdkVersion() const
     return QString::fromLatin1(gvfg_get_version());
 }
 
-void CaptureController::logStartupInfo()
-{
-    appendLog(QStringLiteral("GVFG SDK version | %1").arg(sdkVersion()));
-    appendLog(logFile_.isOpen()
-                  ? QStringLiteral("Log file | %1").arg(logFilePath_)
-                  : QStringLiteral("Log file unavailable | %1").arg(logFilePath_));
-}
-
-void CaptureController::logUiMessage(const QString &message)
-{
-    appendLog(message);
-}
-
 void CaptureController::refreshDevices()
 {
     if (handle_ != nullptr)
@@ -227,33 +199,48 @@ bool CaptureController::openDevice()
 bool CaptureController::openChannel(int channel)
 {
     ChannelRuntime &runtime = channels_[channel];
-    if (runtime.opened)
-        return applyOutputFormat(channel);
     if (handle_ == nullptr && !openDevice())
         return false;
 
+    const bool newlyOpened = !runtime.opened;
     const bool zeroCopyEnabled = runtime.zeroCopy;
-    gvfg_status_t status = gvfg_set_channel_zero_copy_enabled(handle_, channel, zeroCopyEnabled ? 1 : 0);
+    gvfg_status_t status = GVFG_OK;
+    if (newlyOpened)
+    {
+        status = gvfg_set_channel_zero_copy_enabled(handle_, channel, zeroCopyEnabled ? 1 : 0);
+        if (status != GVFG_OK)
+        {
+            reportError(QStringLiteral("gvfg_set_channel_zero_copy_enabled"), status, channel);
+            return false;
+        }
+        status = gvfg_open_channel(handle_, selectedDeviceIndex_, channel);
+        if (status != GVFG_OK)
+        {
+            reportError(QStringLiteral("gvfg_open_channel"), status, channel);
+            return false;
+        }
+        runtime.opened = true;
+    }
+
+    status = gvfg_set_channel_audio_enabled(
+        handle_, channel, runtime.requestedAudio ? 1 : 0);
     if (status != GVFG_OK)
     {
-        reportError(QStringLiteral("gvfg_set_channel_zero_copy_enabled"), status, channel);
+        reportError(QStringLiteral("gvfg_set_channel_audio_enabled"), status, channel);
         return false;
     }
-    status = gvfg_open_channel(handle_, selectedDeviceIndex_, channel);
-    if (status != GVFG_OK)
-    {
-        reportError(QStringLiteral("gvfg_open_channel"), status, channel);
-        return false;
-    }
-    runtime.opened = true;
     if (!applyOutputFormat(channel))
         return false;
 
-    appendLog(QStringLiteral("Opened device index %1 CH%2 | mode=%3")
-                  .arg(selectedDeviceIndex_)
-                  .arg(channel)
-                  .arg(zeroCopyEnabled ? QStringLiteral("zero-copy") : QStringLiteral("copy")));
-    updateSignalStatus();
+    if (newlyOpened)
+    {
+        refreshSdiInfo(channel);
+        appendLog(QStringLiteral("Opened device index %1 CH%2 | mode=%3")
+                      .arg(selectedDeviceIndex_)
+                      .arg(channel)
+                      .arg(zeroCopyEnabled ? QStringLiteral("zero-copy") : QStringLiteral("copy")));
+        updateSignalStatus();
+    }
     return true;
 }
 
@@ -270,7 +257,7 @@ bool CaptureController::applyOutputFormat(int channel)
         reportError(QStringLiteral("gvfg_set_channel_video_format"), status, channel);
         return false;
     }
-    appendLog(QStringLiteral("CH%1 Output format | %2 (GigabyteLib extension)")
+    appendLog(QStringLiteral("CH%1 Output format | %2")
                   .arg(channel)
                   .arg(format == GVFG_PIXFMT_Y210 ? QStringLiteral("Y210") : QStringLiteral("YUY2")));
     return true;
@@ -300,12 +287,14 @@ void CaptureController::closeDevice()
 
     emit statusChanged(QStringLiteral("Idle"));
     lastSignalStatusText_.clear();
+    emit sdiInfoChanged(QStringLiteral("SDI Info: --"));
     selectedDeviceIndex_ = -1;
     for (ChannelRuntime &channel : channels_)
     {
         channel.opened = false;
         channel.cachedSignalStatus = {};
         channel.haveCachedSignalStatus = false;
+        channel.cachedSdiInfoText.clear();
         channel.lastLoggedInputStatus.clear();
     }
     emit stateChanged();
@@ -320,10 +309,10 @@ void CaptureController::startCapture(int channelIndex)
     if (!openChannel(channelIndex))
         return;
 
-    // Consume queued signal events first. gvfg_start_channel() performs the
-    // single authoritative hardware revalidation; preview setup reuses the
-    // most recent UI cache instead of issuing another register query here.
+    // Consume queued events, then query the current Lib signal state once for
+    // this explicit Start request. The periodic UI update only uses the cache.
     processPendingEvents();
+    updateSignalStatus();
     if (!channel.haveCachedSignalStatus || !channel.cachedSignalStatus.connected)
     {
         appendLog(QStringLiteral("CH%1 [LIB] No input signal; start skipped").arg(channelIndex));
@@ -331,19 +320,14 @@ void CaptureController::startCapture(int channelIndex)
     }
 
     const bool audioEnabled = channel.requestedAudio;
-    gvfg_status_t st = gvfg_set_channel_audio_enabled(handle_, channelIndex, audioEnabled ? 1 : 0);
-    if (st != GVFG_OK)
-    {
-        reportError(QStringLiteral("gvfg_set_channel_audio_enabled"), st, channelIndex);
-        return;
-    }
     channel.audioFormat = {};
     if (audioEnabled)
     {
-        st = gvfg_get_channel_audio_format(handle_, channelIndex, &channel.audioFormat);
-        if (st != GVFG_OK)
+        const gvfg_status_t audioStatus =
+            gvfg_get_channel_audio_format(handle_, channelIndex, &channel.audioFormat);
+        if (audioStatus != GVFG_OK)
         {
-            reportError(QStringLiteral("gvfg_get_channel_audio_format"), st, channelIndex);
+            reportError(QStringLiteral("gvfg_get_channel_audio_format"), audioStatus, channelIndex);
             return;
         }
         if (channel.audioFormat.channels == 0 || channel.audioFormat.sample_rate == 0 ||
@@ -388,7 +372,7 @@ void CaptureController::startCapture(int channelIndex)
         return;
     }
     channel.startupStartTime = std::chrono::steady_clock::now();
-    st = gvfg_start_channel(handle_, channelIndex);
+    const gvfg_status_t st = gvfg_start_channel(handle_, channelIndex);
     const auto startupStartCallEnd = std::chrono::steady_clock::now();
     channel.startupStartCallMs =
         std::chrono::duration<double, std::milli>(
@@ -409,8 +393,7 @@ void CaptureController::startCapture(int channelIndex)
     channel.getFrameWindowMaximumMs.store(0.0, std::memory_order_relaxed);
     channel.getFrameSamples.store(0, std::memory_order_relaxed);
     channel.audioEnabled = audioEnabled;
-    channel.videoReceived = 0; channel.videoSubmitted = 0;
-    channel.videoSkipped = 0; channel.videoFailed = 0;
+    channel.videoReceived = 0; channel.videoFailed = 0;
     channel.lastLoggedPreviewFailures = 0;
     channel.lastLoggedAudioReleaseFailures = channel.lastLoggedAudioOutputFailures = 0;
     channel.lastDeliveryLogMs = 0;
@@ -421,8 +404,7 @@ void CaptureController::startCapture(int channelIndex)
     {
         std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
         channel.audioQueue.clear();
-        channel.audioReceivedFrames = channel.audioOutputFrames = 0;
-        channel.audioDroppedFrames = channel.audioCancelledFrames = 0;
+        channel.audioReceivedFrames = 0;
         channel.audioReleaseFailedFrames = channel.audioOutputFailedFrames = 0;
     }
     channel.signalConnected.store(channel.cachedSignalStatus.connected != 0,
@@ -529,31 +511,63 @@ void CaptureController::processPendingEvents()
         while (gvfg_poll_channel_event(handle_, channel, &event, 0) == GVFG_OK)
         {
             const auto eventType = static_cast<gvfg_event_type_t>(event.type);
-            if (eventType != GVFG_EVENT_STREAM_READY)
-                appendLog(QStringLiteral("CH%1 [LIB] Event | %2").arg(channel).arg(eventTypeText(eventType)));
+            appendLog(QStringLiteral("CH%1 [LIB] Event | %2").arg(channel).arg(eventTypeText(eventType)));
 
-            if (eventType == GVFG_EVENT_SIGNAL_CONNECTED ||
-                eventType == GVFG_EVENT_SIGNAL_DISCONNECTED ||
-                eventType == GVFG_EVENT_FORMAT_CHANGE_BEGIN ||
-                eventType == GVFG_EVENT_STREAM_READY)
+            if (eventType == GVFG_EVENT_VIDEO_FORMAT_CHANGED ||
+                eventType == GVFG_EVENT_VIDEO_INPUT_PLUGIN ||
+                eventType == GVFG_EVENT_VIDEO_INPUT_UNPLUG)
                 updateSignalStatus();
 
-            if (eventType == GVFG_EVENT_SIGNAL_DISCONNECTED)
+            if (eventType == GVFG_EVENT_VIDEO_INPUT_UNPLUG)
+            {
                 channels_[channel].signalConnected.store(false, std::memory_order_release);
-            else if (eventType == GVFG_EVENT_SIGNAL_CONNECTED ||
-                     eventType == GVFG_EVENT_STREAM_READY)
+            }
+            else if (eventType == GVFG_EVENT_VIDEO_INPUT_PLUGIN)
             {
                 channels_[channel].signalConnected.store(true, std::memory_order_release);
                 channels_[channel].signalReady.notify_all();
             }
 
-            if (eventType == GVFG_EVENT_SIGNAL_DISCONNECTED && channels_[channel].previewHandle)
+            if (eventType == GVFG_EVENT_VIDEO_INPUT_PLUGIN ||
+                eventType == GVFG_EVENT_VIDEO_INPUT_UNPLUG ||
+                eventType == GVFG_EVENT_VIDEO_FORMAT_CHANGED)
+                refreshSdiInfo(channel);
+
+            if (eventType == GVFG_EVENT_VIDEO_INPUT_UNPLUG && channels_[channel].previewHandle)
                 gvfg_preview_clear(channels_[channel].previewHandle);
 
             event = {};
             event.struct_size = sizeof(event);
         }
     }
+
+}
+
+void CaptureController::refreshSdiInfo(int channel)
+{
+    gvfg_sdi_info_t info{};
+    if (gvfg_get_channel_sdi_info(handle_, channel, &info) != GVFG_OK)
+        return;
+
+    const QString text = QStringLiteral("CH%1 SDI Info | %2 | %3 | %4 | %5 | %6 | %7 | %8 | %9 | %10 | ErrorCount=%11")
+                             .arg(channel)
+                             .arg(QString::fromUtf8(info.signal_lock_name))
+                             .arg(QString::fromUtf8(info.mode_name))
+                             .arg(QString::fromUtf8(info.resolution_name))
+                             .arg(QString::fromUtf8(info.fps_name))
+                             .arg(QString::fromUtf8(info.scan_name))
+                             .arg(QString::fromUtf8(info.st352_format_name))
+                             .arg(QString::fromUtf8(info.st352_fps_name))
+                             .arg(QString::fromUtf8(info.st352_chroma_name))
+                             .arg(QString::fromUtf8(info.st352_bit_depth_name))
+                             .arg(info.error_count);
+
+    ChannelRuntime &runtime = channels_[channel];
+    if (runtime.cachedSdiInfoText == text)
+        return;
+    runtime.cachedSdiInfoText = text;
+    if (channel == GVFG_CHANNEL_0)
+        emit sdiInfoChanged(text);
 }
 
 void CaptureController::updateSignalStatus(bool queryHardware)
@@ -593,11 +607,14 @@ void CaptureController::updateSignalStatus(bool queryHardware)
 
         const gvfg_signal_status_t &signal = channel.cachedSignalStatus;
         const QString inputStatus = signal.connected
-                                        ? QStringLiteral("CH%1 Connected | %2").arg(channelIndex).arg(signalFrameText(signal))
-                                        : QStringLiteral("CH%1 No signal").arg(channelIndex);
+                                        ? QStringLiteral("CH%1 [LIB] GVFG_VIDEO_INFO.VideoSignalLock=1 | Video Locked | %2")
+                                              .arg(channelIndex)
+                                              .arg(signalFrameText(signal))
+                                        : QStringLiteral("CH%1 [LIB] GVFG_VIDEO_INFO.VideoSignalLock=0 | Video Undetected")
+                                              .arg(channelIndex);
         if (inputStatus != channel.lastLoggedInputStatus)
         {
-            appendLog(QStringLiteral("[LIB] Input status | %1").arg(inputStatus));
+            appendLog(inputStatus);
             channel.lastLoggedInputStatus = inputStatus;
         }
         if (channel.previewVisible.load(std::memory_order_acquire) && signal.width > 0 && signal.height > 0)
@@ -610,9 +627,6 @@ void CaptureController::updateSignalStatus(bool queryHardware)
         gvfg_preview_stats_t previewStats{};
         const bool previewStatsOk = channel.previewHandle &&
                                     gvfg_preview_get_stats(channel.previewHandle, &previewStats) == GVFG_PREVIEW_OK;
-        gvfg_preview_delivery_stats_t previewDelivery{};
-        const bool previewDeliveryOk = channel.previewHandle &&
-            gvfg_preview_get_delivery_stats(channel.previewHandle, &previewDelivery) == GVFG_PREVIEW_OK;
         const QString previewFps = previewStatsOk && previewStats.present_fps > 0.0
                                        ? QString::number(previewStats.present_fps, 'f', 2)
                                        : QStringLiteral("--");
@@ -641,21 +655,15 @@ void CaptureController::updateSignalStatus(bool queryHardware)
                                .arg(channel.audioFormat.bits_per_sample)
                                .arg(static_cast<qulonglong>(receivedFrames));
 #if GVFG_INTERNAL_DIAGNOSTICS
-            uint64_t appOutputFrames = 0;
-            {
-                std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
-                appOutputFrames = channel.audioOutputFrames;
-            }
             gvfg_debug_backend_stats_t audioStats{};
             if (gvfg_debug_get_channel_backend_stats(handle_, channelIndex, &audioStats) == GVFG_OK)
             {
-                statusLines << QStringLiteral("CH%1 Audio Debug | LIB events DMA=%2 Extra=%3 | LIB->SDK %4 frames | SDK->APP %5 frames | APP->Output %6 frames")
+                statusLines << QStringLiteral("CH%1 Audio Debug | LIB events DMA=%2 Extra=%3 | LIB->SDK %4 frames | SDK->APP %5 frames")
                                    .arg(channelIndex)
                                    .arg(static_cast<qulonglong>(audioStats.audio_dma_event_wakes - channel.backendBaseline.audio_dma_event_wakes))
                                    .arg(static_cast<qulonglong>(audioStats.extra_audio_event_wakes - channel.backendBaseline.extra_audio_event_wakes))
                                    .arg(static_cast<qulonglong>(audioStats.audio_frames_from_lib - channel.backendBaseline.audio_frames_from_lib))
-                                   .arg(static_cast<qulonglong>(receivedFrames))
-                                   .arg(static_cast<qulonglong>(appOutputFrames));
+                                   .arg(static_cast<qulonglong>(receivedFrames));
             }
 #endif
         }
@@ -688,14 +696,12 @@ void CaptureController::updateSignalStatus(bool queryHardware)
                                       .arg(channelStats.get_frame_timing_max_us, 0, 'f', 3)
                                       .arg(static_cast<qulonglong>(channelStats.get_frame_timing_samples))
                                 : QStringLiteral("CH%1 [LIB] GetVideoFrame | measuring").arg(channelIndex));
-            statusLines << QStringLiteral("CH%1 Video Debug | LIB events=%2 | LIB->SDK %3 frames | SDK->APP %4 frames | APP->Preview %5 frames | Preview->DXGI %6 frames")
+            statusLines << QStringLiteral("CH%1 Video Debug | LIB events DMA=%2 Extra=%3 | LIB->SDK %4 frames | SDK->APP %5 frames")
                                .arg(channelIndex)
-                               .arg(static_cast<qulonglong>(channelStats.video_event_wakes - channel.backendBaseline.video_event_wakes))
+                               .arg(static_cast<qulonglong>(channelStats.video_dma_event_wakes - channel.backendBaseline.video_dma_event_wakes))
+                               .arg(static_cast<qulonglong>(channelStats.extra_video_event_wakes - channel.backendBaseline.extra_video_event_wakes))
                                .arg(static_cast<qulonglong>(channelStats.video_frames_from_lib - channel.backendBaseline.video_frames_from_lib))
-                               .arg(static_cast<qulonglong>(channel.videoReceived.load()))
-                               .arg(static_cast<qulonglong>(channel.videoSubmitted.load()))
-                               .arg(static_cast<qulonglong>(previewDeliveryOk
-                                   ? previewDelivery.presented - channel.previewBaseline.presented : 0));
+                               .arg(static_cast<qulonglong>(channel.videoReceived.load()));
         }
 #endif
     }
@@ -717,10 +723,11 @@ void CaptureController::reportError(const QString &apiName, gvfg_status_t status
                           .arg(apiName, QString::fromUtf8(gvfg_strerror(status)));
     if (channel == GVFG_CHANNEL_0 || channel == GVFG_CHANNEL_1)
         message.prepend(QStringLiteral("CH%1 ").arg(channel));
-    if (handle_ != nullptr && (channel == GVFG_CHANNEL_0 || channel == GVFG_CHANNEL_1))
+    if (status < 0 && handle_ != nullptr &&
+        (channel == GVFG_CHANNEL_0 || channel == GVFG_CHANNEL_1))
     {
         char detail[512] = {};
-        if (gvfg_get_channel_last_error_detail(handle_, channel, detail, sizeof(detail)) == GVFG_OK &&
+        if (gvfg_get_channel_last_sdk_error_detail(handle_, channel, detail, sizeof(detail)) == GVFG_OK &&
             detail[0] != '\0')
             message += QStringLiteral(" | %1").arg(QString::fromUtf8(detail));
     }
@@ -729,116 +736,13 @@ void CaptureController::reportError(const QString &apiName, gvfg_status_t status
 
 void CaptureController::appendLog(const QString &message)
 {
-    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));
-    const QStringList lines = message.split(QLatin1Char('\n'));
-    for (int i = 0; i < lines.size(); ++i)
-    {
-        const QString line = QStringLiteral("[%1] %2%3")
-                                 .arg(timestamp, i == 0 ? QString() : QStringLiteral("  "), lines.at(i));
-        writeLogFileLine(line);
-        emit logMessage(line);
-    }
-}
-
-void CaptureController::openLogFile()
-{
-    logSessionStamp_ = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
-    logPartIndex_ = 1;
-    logDirPath_ = QCoreApplication::applicationDirPath() + QStringLiteral("/logs");
-    if (!QDir().mkpath(logDirPath_))
-    {
-        logFilePath_ = logDirPath_;
-        return;
-    }
-
-    openLogFilePart();
-}
-
-bool CaptureController::openLogFilePart()
-{
-    std::lock_guard<std::mutex> lock(logFileMutex_);
-    if (logFile_.isOpen())
-        logFile_.close();
-
-    logFilePath_ = QStringLiteral("%1/%2_%3_part%4.log")
-                       .arg(logDirPath_, logFilePrefix(), logSessionStamp_)
-                       .arg(logPartIndex_, 2, 10, QLatin1Char('0'));
-    logFile_.setFileName(logFilePath_);
-    if (!logFile_.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
-        return false;
-
-    const QString header = QStringLiteral("\n==== %1 session %2 part %3 ====\n")
-                               .arg(logFilePrefix(),
-                                    QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")))
-                               .arg(logPartIndex_);
-    logFile_.write(header.toUtf8());
-    logFile_.flush();
-    return true;
-}
-
-void CaptureController::rotateLogFileIfNeeded()
-{
-    if (!logFile_.isOpen() || logFile_.size() < kMaxLogFileBytes)
-        return;
-
-    const QString footer = QStringLiteral("==== log rotated at %1 ====\n")
-                               .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")));
-    logFile_.write(footer.toUtf8());
-    logFile_.flush();
-    ++logPartIndex_;
-    openLogFilePart();
-}
-
-void CaptureController::writeLogFileLine(const QString &line)
-{
-    std::lock_guard<std::mutex> lock(logFileMutex_);
-    if (!logFile_.isOpen())
-        return;
-
-    if (logFile_.size() >= kMaxLogFileBytes)
-    {
-        const QString footer = QStringLiteral("==== log rotated at %1 ====\n")
-                                   .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")));
-        logFile_.write(footer.toUtf8());
-        logFile_.flush();
-        ++logPartIndex_;
-        if (logFile_.isOpen())
-            logFile_.close();
-        logFilePath_ = QStringLiteral("%1/%2_%3_part%4.log")
-                           .arg(logDirPath_, logFilePrefix(), logSessionStamp_)
-                           .arg(logPartIndex_, 2, 10, QLatin1Char('0'));
-        logFile_.setFileName(logFilePath_);
-        if (logFile_.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
-        {
-            const QString header = QStringLiteral("\n==== %1 session %2 part %3 ====\n")
-                                       .arg(logFilePrefix(),
-                                            QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")))
-                                       .arg(logPartIndex_);
-            logFile_.write(header.toUtf8());
-        }
-    }
-
-    if (!logFile_.isOpen())
-        return;
-
-    logFile_.write(line.toUtf8());
-    logFile_.write("\n");
-    logFile_.flush();
+    emit logMessage(message);
 }
 
 #if GVFG_INTERNAL_DIAGNOSTICS
 void CaptureController::writeDiagnosticSnapshot(const QString &statusText)
 {
-    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));
-    const QStringList lines = statusText.split(QLatin1Char('\n'));
-    for (int i = 0; i < lines.size(); ++i)
-    {
-        const QString line = QStringLiteral("[%1] %2%3")
-                                 .arg(timestamp,
-                                      i == 0 ? QStringLiteral("Diagnostic | ") : QStringLiteral("             "),
-                                      lines.at(i));
-        writeLogFileLine(line);
-    }
+    emit diagnosticMessage(statusText);
 }
 #endif
 
@@ -860,25 +764,10 @@ void CaptureController::logDeliveryStatus(int channelIndex, bool finalSnapshot)
     const auto &b = c.previewBaseline;
     const uint64_t failed = (previewOk ? p.failed - b.failed : 0) + c.videoFailed.load();
     uint64_t audioReleaseFailed, audioOutputFailed;
-    bool audioAccounted;
     {
         std::lock_guard<std::mutex> lock(c.audioQueueMutex);
         audioReleaseFailed = c.audioReleaseFailedFrames;
         audioOutputFailed = c.audioOutputFailedFrames;
-        audioAccounted = c.audioQueue.empty() && c.audioReceivedFrames ==
-            c.audioOutputFrames + c.audioDroppedFrames + c.audioCancelledFrames +
-            c.audioReleaseFailedFrames + c.audioOutputFailedFrames;
-    }
-    if (finalSnapshot)
-    {
-        const bool videoAccounted = previewOk && c.videoReceived.load() ==
-            c.videoSubmitted.load() + c.videoSkipped.load() + c.videoFailed.load() &&
-            c.videoSubmitted.load() == p.submitted - b.submitted;
-        if (!videoAccounted || !audioAccounted)
-            appendLog(QStringLiteral("CH%1 [APP] ERROR accounting mismatch | video=%2 audio=%3")
-                .arg(QString::number(channelIndex),
-                     videoAccounted ? QStringLiteral("OK") : QStringLiteral("MISMATCH"),
-                     audioAccounted ? QStringLiteral("OK") : QStringLiteral("MISMATCH")));
     }
     // Also flush any changes since the last aggregate when stopping.
     if (failed != c.lastLoggedPreviewFailures)
@@ -1029,7 +918,6 @@ void CaptureController::captureReadLoop(int channelIndex)
                 }
                 else
                 {
-                    ++channel.videoSubmitted;
                     if (!startupLatencyLogged)
                     {
                         startupLatencyLogged = true;
@@ -1073,8 +961,6 @@ void CaptureController::captureReadLoop(int channelIndex)
             }
             if (!channel.previewHandle)
                 ++channel.videoFailed;
-            else if (!attemptedPreview)
-                ++channel.videoSkipped;
             const gvfg_status_t releaseStatus = gvfg_release_channel_frame(handle_, channelIndex, &frame);
             if (releaseStatus != GVFG_OK)
             {
@@ -1194,15 +1080,9 @@ void CaptureController::audioReadLoop(int channelIndex)
             {
                 std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
                 if (channel.stopRequested.load(std::memory_order_acquire))
-                {
-                    ++channel.audioCancelledFrames;
                     break;
-                }
                 if (channel.audioQueue.size() >= kMaxQueuedAudioFrames)
-                {
-                    ++channel.audioDroppedFrames;
                     channel.audioQueue.pop_front();
-                }
                 channel.audioQueue.push_back({std::move(pcm)});
             }
             channel.audioQueueReady.notify_one();
@@ -1247,10 +1127,7 @@ void CaptureController::audioPlaybackLoop(int channelIndex)
             recovering = true;
             std::unique_lock<std::mutex> lock(channel.audioQueueMutex);
             while (!channel.audioQueue.empty())
-            {
-                ++channel.audioDroppedFrames;
                 channel.audioQueue.pop_front();
-            }
             channel.audioQueueReady.wait_for(lock, std::chrono::milliseconds(500), [&channel]() {
                 return channel.stopRequested.load(std::memory_order_acquire);
             });
@@ -1268,10 +1145,7 @@ void CaptureController::audioPlaybackLoop(int channelIndex)
             recovering = true;
             std::unique_lock<std::mutex> lock(channel.audioQueueMutex);
             while (!channel.audioQueue.empty())
-            {
-                ++channel.audioDroppedFrames;
                 channel.audioQueue.pop_front();
-            }
             channel.audioQueueReady.wait_for(lock, std::chrono::milliseconds(500), [&channel]() {
                 return channel.stopRequested.load(std::memory_order_acquire);
             });
@@ -1331,16 +1205,6 @@ void CaptureController::audioPlaybackLoop(int channelIndex)
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
-            if (written != static_cast<qint64>(pcm.size()) && !restartPlayback)
-            {
-                std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
-                ++channel.audioCancelledFrames;
-            }
-            else if (written == static_cast<qint64>(pcm.size()))
-            {
-                std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
-                ++channel.audioOutputFrames;
-            }
         }
         audioSink.stop();
         if (restartPlayback)
@@ -1348,10 +1212,7 @@ void CaptureController::audioPlaybackLoop(int channelIndex)
             recovering = true;
             std::unique_lock<std::mutex> lock(channel.audioQueueMutex);
             while (!channel.audioQueue.empty())
-            {
-                ++channel.audioDroppedFrames;
                 channel.audioQueue.pop_front();
-            }
             channel.audioQueueReady.wait_for(lock, std::chrono::milliseconds(500), [&channel]() {
                 return channel.stopRequested.load(std::memory_order_acquire);
             });
@@ -1367,6 +1228,5 @@ void CaptureController::joinAudioThread(int channel)
     if (channels_[channel].audioPlaybackThread.joinable())
         channels_[channel].audioPlaybackThread.join();
     std::lock_guard<std::mutex> lock(channels_[channel].audioQueueMutex);
-    channels_[channel].audioCancelledFrames += channels_[channel].audioQueue.size();
     channels_[channel].audioQueue.clear();
 }

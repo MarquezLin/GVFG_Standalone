@@ -1,12 +1,13 @@
 # GVFG SDK 錯誤處理架構
 
-本文說明目前 SDK 如何產生、傳遞與保存錯誤。重點不是只看回傳碼，而是同時保留「錯誤分類」與「實際失敗位置」。
+本文說明目前 SDK 如何產生、傳遞與保存錯誤。SDK 自身錯誤使用負數；
+GigabyteLib 的正數 `GVFG_HRESULT` 不轉換、不重新分類。
 
 ## 1. 三層錯誤資訊
 
 ```text
 公開 gvfg_status_t
-    用來讓 application 判斷錯誤類別
+    0 成功；負數為 SDK 錯誤；正數為原始 GigabyteLib GVFG_HRESULT
 
 ChannelErrorState 詳細字串
     用來指出哪個操作被拒絕，或哪個 Win32/driver 呼叫真正失敗
@@ -32,11 +33,12 @@ Win32 GetLastError()
 | `GVFG_EINVAL` | 參數錯誤 | null pointer、錯誤 channel、frame token 不符 |
 | `GVFG_ENODEV` | 找不到裝置 | device index 不存在 |
 | `GVFG_ESTATE` | 呼叫時機或狀態錯誤 | 尚未 open、尚未 start、上一張 frame 未 release |
-| `GVFG_EIO` | backend/driver/OS I/O 失敗 | event、register、IOCTL 失敗 |
+| `GVFG_EIO` | SDK 自身 I/O 失敗 | GPU、register extension 或 SDK 內部資料錯誤 |
 | `GVFG_ENOTSUP` | 不支援 | pixel format 或功能不支援 |
 | `GVFG_ETIMEOUT` | 等待超時 | deadline 前沒有 frame/event |
 
-`gvfg_strerror(status)` 只回傳固定分類文字，例如 `"I/O error"`。它不包含實際 Win32 error 或失敗函式。
+`gvfg_strerror(status)` 對 SDK 負數回傳固定分類文字；對 Lib 正數回傳對應的
+enum 名稱。只有 SDK 負數錯誤會另外保存 channel detail。
 
 ## 3. 每條 channel 的 `ChannelErrorState`
 
@@ -155,21 +157,17 @@ return fail(GIGABYTE_EIO, "wait DMA event", err);
 2. 透過 error diagnostic log 輸出。
 3. 回傳 backend status。
 
-## 6. Backend status 如何轉成公開 status
+## 6. GigabyteLib result 如何回到公開 API
 
-backend 使用 `gigabyte_status_t`，facade 透過 `map_status()` 轉成 `gvfg_status_t`：
+SDK 不推測或重分類主管 library 的錯誤：
 
 ```text
-GIGABYTE_OK       -> GVFG_OK
-GIGABYTE_EINVAL   -> GVFG_EINVAL
-GIGABYTE_ENODEV   -> GVFG_ENODEV
-GIGABYTE_ESTATE   -> GVFG_ESTATE
-GIGABYTE_ENOTSUP  -> GVFG_ENOTSUP
-GIGABYTE_ETIMEOUT -> GVFG_ETIMEOUT
-GIGABYTE_EIO      -> GVFG_EIO
+GVFG_HRESULT_OK -> GVFG_OK
+其他 GVFG_HRESULT -> 原始正數不修改，直接回傳
 ```
 
-轉換只改錯誤分類，不應覆蓋 backend 已寫入的詳細訊息。
+負數 `GVFG_E*` 只用於 SDK 自身的參數、lifecycle、timeout、GPU 或 extension
+錯誤，detail 保存 SDK 判定的具體原因。Lib API 的正數結果不會產生或覆寫 detail。
 
 ## 7. Application 正確取得錯誤的方式
 
@@ -177,10 +175,10 @@ GIGABYTE_EIO      -> GVFG_EIO
 const gvfg_status_t status =
     gvfg_read_channel_frame(handle, channel, &frame, 1000);
 
-if (status != GVFG_OK && status != GVFG_ETIMEOUT)
+if (status < 0 && status != GVFG_ETIMEOUT)
 {
     char detail[512] = {};
-    gvfg_get_channel_last_error_detail(
+    gvfg_get_channel_last_sdk_error_detail(
         handle,
         channel,
         detail,
@@ -202,8 +200,8 @@ if (status != GVFG_OK && status != GVFG_ETIMEOUT)
 | `GVFG_EIO` 且沒有成功 frame | 否 | caller 沒有取得 ownership token |
 | 第二次 read 被 `frameHeld` 拒絕 | 否 | 應先 release 原本成功取得的 frame |
 | release token 不符 | 不可清除 held state | 正確 token 仍需重試 release |
-| zero-copy release IOCTL 一般失敗 | 不可清除 held state | driver frame 可能仍被占用，必須保留 token 供 retry |
-| 已確認 unplug 後 release 回 `ERROR_BAD_COMMAND (22)` | 清除相符 held state | driver 已撤銷該 ownership；保留 token 會阻塞 unplug/replug lifecycle |
+| zero-copy 正確 token release | 清除 held state | 只結束 SDK pointer lifetime，不送 Lib/driver release |
+| stop 時仍持有 zero-copy token | 清除 held state | driver/Lib 不要求逐 frame release，stop 負責結束 capture lifecycle |
 
 ## 9. Transient retry 規則
 
@@ -236,19 +234,16 @@ transient error
 
 ```text
 facade running = false
-    -> 嘗試 release facade held frame
+    -> 清除 facade held frame
     -> backend stop_stream()
     -> 停 DMA／喚醒 wait
     -> 等 read 結束
-    -> release backend pending zero-copy frame
+    -> 清除 backend pending zero-copy token
     -> 停 event monitoring/thread
 ```
 
-一般 zero-copy release 失敗時，backend 不應假裝已經釋放；錯誤必須回傳並保留
-足以重試的狀態。若已確認 signal disconnected，且 release 回
-`ERROR_BAD_COMMAND (22)`，則表示 driver 已在拔線流程撤銷 ownership；backend 會
-清除相符的本地 held state 並完成 release，避免 event-monitor thread 永久等待。
-這個例外不可套用到 connected 狀態或其他錯誤碼。
+依目前 driver/Lib 契約，zero-copy 公開 release 不送底層 release command。Token 驗證
+仍由 SDK 執行；錯誤 token 不清除 held state，正確 token 或 stop 才結束 SDK lifetime。
 
 正常 `stop()` 為了結束 blocking read/event poll 而喚醒 waiter 時，只回傳 `GVFG_ESTATE`，不寫入
 永久錯誤；application 應以自己的 stop flag 判斷這是不是預期的結束流程。
@@ -258,7 +253,7 @@ facade running = false
 遇到錯誤時依序記錄：
 
 1. 公開 API 名稱與 `gvfg_status_t`。
-2. `gvfg_get_channel_last_error_detail()`。
+2. 負數 SDK error 再呼叫 `gvfg_get_channel_last_sdk_error_detail()`；正數 Lib result 不需要。
 3. channel index、copy/zero-copy mode、解析度與格式。
 4. 是否有成功 read 但尚未 release 的 frame。
 5. 是否正在 stop、拔插或 format change。

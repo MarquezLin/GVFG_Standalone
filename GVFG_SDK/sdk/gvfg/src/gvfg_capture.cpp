@@ -435,21 +435,8 @@ struct gvfg_channel_session_t
             if (!frameHeld)
                 return reject(GVFG_ESTATE, "gvfg_release_channel_frame rejected: no frame is currently held");
 
-            int expectedStride = 0;
-            if (native_row_stride_bytes(heldSessionFrame.width,
-                                        heldSessionFrame.pixel_format,
-                                        expectedStride) != GVFG_OK)
-                return reject(GVFG_ESTATE, "gvfg_release_channel_frame rejected: held frame has an invalid row stride");
-
             if (frameToken.data != heldSessionFrame.data ||
-                frameToken.data_size != static_cast<uint64_t>(heldSessionFrame.data_size) ||
-                frameToken.width != static_cast<int>(heldSessionFrame.width) ||
-                frameToken.height != static_cast<int>(heldSessionFrame.height) ||
-                frameToken.row_stride_bytes != expectedStride ||
-                frameToken.pixel_format != heldSessionFrame.pixel_format ||
-                frameToken.bit_depth != static_cast<int>(heldSessionFrame.bit_depth) ||
-                frameToken.frame_id != heldSessionFrame.frame_id ||
-                frameToken.timestamp_ns != heldSessionFrame.timestamp_ns)
+                frameToken.frame_id != heldSessionFrame.frame_id)
                 return reject(GVFG_EINVAL, "gvfg_release_channel_frame rejected: frame token does not match the held frame");
 
             const gvfg_status_t st = session->release_frame();
@@ -656,11 +643,7 @@ struct gvfg_channel_session_t
         std::lock_guard<std::mutex> lock(audioMutex);
         if (!audioFrameHeld)
             return reject(GVFG_ESTATE, "gvfg_release_channel_audio_frame rejected: no audio frame is currently held");
-        if (token.data != heldAudioFrame.data || token.data_size != heldAudioFrame.data_size ||
-            token.sample_rate != heldAudioFrame.sample_rate || token.channels != heldAudioFrame.channels ||
-            token.bits_per_sample != heldAudioFrame.bits_per_sample ||
-            token.reserved != heldAudioFrame.reserved || token.frame_id != heldAudioFrame.frame_id ||
-            token.timestamp_ns != heldAudioFrame.timestamp_ns)
+        if (token.data != heldAudioFrame.data || token.frame_id != heldAudioFrame.frame_id)
             return reject(GVFG_EINVAL, "gvfg_release_channel_audio_frame rejected: frame token does not match the held audio frame");
         heldAudioFrame = {};
         audioFrameHeld = false;
@@ -1249,15 +1232,29 @@ extern "C"
             return "Not supported";
         case GVFG_ETIMEOUT:
             return "Timeout";
+        case GVFG_HRESULT_ERROR:
+            return "GVFG_HRESULT_ERROR";
+        case GVFG_HRESULT_DEV_ERROR:
+            return "GVFG_HRESULT_DEV_ERROR";
+        case GVFG_HRESULT_DEV_BUSY:
+            return "GVFG_HRESULT_DEV_BUSY";
+        case GVFG_HRESULT_VIDEO_CHN_ERROR:
+            return "GVFG_HRESULT_VIDEO_CHN_ERROR";
+        case GVFG_HRESULT_CONTEXT_ERROR:
+            return "GVFG_HRESULT_CONTEXT_ERROR";
+        case GVFG_HRESULT_VIDEO_CHN_INVALID:
+            return "GVFG_HRESULT_VIDEO_CHN_INVALID";
+        case GVFG_HRESULT_API_ERROR:
+            return "GVFG_HRESULT_API_ERROR";
         default:
-            return "Unknown";
+            return status > 0 ? "GVFG_HRESULT_UNKNOWN" : "Unknown";
         }
     }
 
-    gvfg_status_t gvfg_get_channel_last_error_detail(gvfg_handle handle,
-                                                     int channel_index,
-                                                     char *out_message,
-                                                     uint32_t out_message_size)
+    gvfg_status_t gvfg_get_channel_last_sdk_error_detail(gvfg_handle handle,
+                                                         int channel_index,
+                                                         char *out_message,
+                                                         uint32_t out_message_size)
     {
         if (!handle)
             return GVFG_EINVAL;

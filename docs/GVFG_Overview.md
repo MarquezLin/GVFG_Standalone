@@ -211,7 +211,7 @@ struct gvfg_channel_session_t
     bool readInProgress;
     bool frameHeld;
 
-    gigabyte_frame_t heldBackendFrame;
+    GigabyteFrame heldSessionFrame;
 
     // FPS、signal、event queue 等其他狀態
 };

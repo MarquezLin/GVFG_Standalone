@@ -91,20 +91,10 @@ gvfg_set_channel_zero_copy_enabled(handle, GVFG_CHANNEL_0, 1);
 gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
 ```
 
-每個 channel 可在 open 前選擇要註冊／接收的事件：
-
-```c
-uint32_t events = GVFG_EVENT_MASK_SIGNAL_CONNECTED |
-                  GVFG_EVENT_MASK_SIGNAL_DISCONNECTED |
-                  GVFG_EVENT_MASK_FORMAT_CHANGE_BEGIN;
-gvfg_set_channel_event_mask(handle, GVFG_CHANNEL_0, events);
-gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
-```
-
-`VIDEO_DMA` 為 frame capture 必需，SDK 固定註冊。Plug-in、Unplug 與
-Format-change driver event 則依 mask 註冊；關閉它們也會停用對應的自動訊號恢復。
-Application 收到 `GVFG_EVENT_SIGNAL_DISCONNECTED` 後應暫停 video/audio read，
-等待 `GVFG_EVENT_SIGNAL_CONNECTED` 或 stop 再喚醒 worker，不應在已知無訊號時持續
+SDK 直接使用 GigabyteLib 建立的 video frame、format changed、input plug-in 與
+input unplug events；audio 開啟時才使用 audio frame events。Application 收到
+`GVFG_EVENT_VIDEO_INPUT_UNPLUG` 後應暫停 video/audio read，等待
+`GVFG_EVENT_VIDEO_INPUT_PLUGIN` 或 stop 再喚醒 worker，不應在已知無訊號時持續
 輪詢 timeout。
 
 每個成功取得的 video/audio frame 都包含 `timestamp_ns`。兩者使用相同的

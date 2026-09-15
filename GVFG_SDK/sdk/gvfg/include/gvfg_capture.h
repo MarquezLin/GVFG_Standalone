@@ -78,16 +78,20 @@ extern "C"
         GVFG_MAX_DEVICES = 16,
     };
 
-    typedef enum
+    typedef int32_t gvfg_status_t;
+
+    enum
     {
         GVFG_OK = 0,
         GVFG_EINVAL = -1,  /* Invalid argument, such as NULL handle/output pointer. */
         GVFG_ENODEV = -2,  /* No GVFG capture device, or the device cannot be opened. */
         GVFG_ESTATE = -3,  /* API was called in the wrong state. */
-        GVFG_EIO = -4,     /* Driver/backend I/O failure. */
+        GVFG_EIO = -4,     /* SDK-owned I/O, GPU, or internal extension failure. */
         GVFG_ENOTSUP = -5, /* Requested feature or format is not supported. */
         GVFG_ETIMEOUT = -6 /* Timed out waiting for driver/backend work. */
-    } gvfg_status_t;
+    };
+
+    /* Positive return values are unmodified GigabyteLib GVFG_HRESULT values. */
 
     typedef enum
     {
@@ -169,6 +173,7 @@ extern "C"
         int level_b;
         uint32_t st352_payload;
         uint32_t error_count;
+        char signal_lock_name[32];
         char mode_name[16];
         char resolution_name[64];
         char fps_name[24];
@@ -243,12 +248,9 @@ extern "C"
     typedef enum
     {
         GVFG_EVENT_UNKNOWN = 0,
-        GVFG_EVENT_SIGNAL_CONNECTED = 1,
-        GVFG_EVENT_SIGNAL_DISCONNECTED = 2,
-        /* First complete frame after stream start, plug-in, or format recovery is ready. */
-        GVFG_EVENT_STREAM_READY = 3,
-        /* Input format is changing; pause use of resources created for the old format. */
-        GVFG_EVENT_FORMAT_CHANGE_BEGIN = 4
+        GVFG_EVENT_VIDEO_FORMAT_CHANGED = 1,
+        GVFG_EVENT_VIDEO_INPUT_PLUGIN = 2,
+        GVFG_EVENT_VIDEO_INPUT_UNPLUG = 3
     } gvfg_event_type_t;
 
     typedef struct
@@ -324,7 +326,7 @@ extern "C"
      * - GVFG_OK on success.
      * - GVFG_EINVAL if handle is NULL or channel_index is invalid.
      * - GVFG_ENODEV if the device cannot be opened.
-     * - GVFG_EIO for driver/backend failures.
+     * - A positive, unmodified GVFG_HRESULT for GigabyteLib failures.
      */
     GVFG_API gvfg_status_t gvfg_open_channel(
         GVFG_PARAM_IN gvfg_handle handle,
@@ -413,7 +415,7 @@ extern "C"
      * - GVFG_ESTATE if capture is not running or a previous frame has not been
      *   released.
      * - GVFG_ETIMEOUT if no frame is ready before timeout_ms expires.
-     * - GVFG_EIO for driver/backend failures.
+     * - A positive, unmodified GVFG_HRESULT for GigabyteLib failures.
      *
      * In copy mode the returned data pointer is owned by the SDK. In zero-copy
      * mode it points to driver-owned memory. In both modes it remains valid
@@ -604,7 +606,7 @@ extern "C"
         GVFG_PARAM_IN int channel_index,
         GVFG_PARAM_OUT gvfg_runtime_info_t *out_info);
 
-    /* Return the loaded GVFG runtime DLL version, for example "0.3.0". */
+    /* Return the loaded GVFG runtime DLL version, for example "1.0.0". */
     GVFG_API const char *gvfg_get_version(void);
 
     /* Convert a gvfg_pixel_format_t value to a static English format name. */
@@ -624,11 +626,11 @@ extern "C"
         GVFG_PARAM_IN gvfg_status_t status);
 
     /*
-     * Copy the most recent detailed fault or rejected API call for one
-     * channel. Normal frame-read and event-poll timeouts are not stored.
+     * Copy the most recent SDK-owned detailed fault or rejected API call for
+     * one channel. Positive GigabyteLib results and normal timeouts are not stored.
      * A successful gvfg_start_channel() begins a new diagnostic lifetime.
      */
-    GVFG_API gvfg_status_t gvfg_get_channel_last_error_detail(
+    GVFG_API gvfg_status_t gvfg_get_channel_last_sdk_error_detail(
         GVFG_PARAM_IN gvfg_handle handle,
         GVFG_PARAM_IN int channel_index,
         GVFG_PARAM_OUT char *out_message,

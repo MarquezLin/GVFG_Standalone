@@ -83,6 +83,8 @@ set(GVFG_QT_PREVIEW_SOURCES
   main.cpp
   capture_controller.cpp
   capture_controller.h
+  sample_log.cpp
+  sample_log.h
   mainwindow.cpp
   mainwindow.h
   mainwindow.ui

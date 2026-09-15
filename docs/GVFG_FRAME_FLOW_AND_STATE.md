@@ -26,7 +26,7 @@ flowchart LR
     CH -->|gvfg_frame_t| APP
     APP -->|release_channel_frame| CH
     CH --> BE
-    BE -->|GvfgReleaseVideoFrameZeroCopy| IO
+    BE -->|clear SDK held token| CH
 ```
 
 `GvfgSdk.lib` 是主管提供的靜態 library。GVFG adapter 保留公開 API 的
@@ -52,7 +52,7 @@ frame ownership 與 timeout 契約，不再直接操作 driver IOCTL 或 FPGA re
 | `running` | `atomic<bool>` | facade 是否允許 read |
 | `readInProgress` | `frameMutex` | 是否已有一個 caller 正在 blocking read |
 | `frameHeld` | `frameMutex` | 是否已有成功 frame 尚未 release |
-| `heldBackendFrame` | `frameMutex` | release 時要交還 backend 的完整 token |
+| `heldSessionFrame` | `frameMutex` | 目前交付給 caller 的 frame 身分與 metadata |
 | `eventQueue` | `eventMutex` | facade 待 application poll 的 event queue |
 | signal 欄位 | `stateMutex` | width/height/format/connected cache |
 | delivered/FPS 欄位 | atomic | UI/debug runtime 統計 |
@@ -70,7 +70,6 @@ frame ownership 與 timeout 契約，不再直接操作 driver IOCTL 或 FPGA re
 | `capture_active_` | atomic | VIDEO_START 是否已送出 |
 | `reader_ready_` | atomic | application 是否已進入 read path |
 | `signal_probe_active_` | atomic | 有 signal，可在第一次 read 啟動 DMA |
-| `stream_ready_pending_` | atomic | 首張成功 frame 後是否要送 STREAM_READY |
 | `read_in_progress_` | `mutex_` | backend 是否已有 wait_frame 執行中 |
 | `frame_held_` | `mutex_` | backend 是否已交付一張尚未 release 的 frame |
 | `held_frame_` | `mutex_` | backend lifetime token |
@@ -172,7 +171,6 @@ copy_buffer_.clear();
         -> ResetEvent(dma_event_)
         -> VIDEO_START(channel)
         -> capture_active_ = true
-        -> stream_ready_pending_ = true
     -> read_in_progress_ = true
     -> WaitForSingleObject(dma_event_, remaining deadline)
 ```
@@ -191,7 +189,7 @@ DMA event
     -> driver 將資料複製到 SDK copy_buffer_
     -> held_frame_.data = copy_buffer_.data()
     -> backend frame_held_ = true
-    -> facade heldBackendFrame = frame
+    -> facade heldSessionFrame = frame
     -> facade frameHeld = true
     -> gvfg_frame_t.data 交給 application
 ```
@@ -222,10 +220,9 @@ Application 使用完成後：
 
 ```text
 gvfg_release_channel_frame
-    -> facade 驗證完整 token
-    -> backend 驗證完整 token
-    -> GvfgReleaseVideoFrameZeroCopy(context, channel)
-    -> release 成功後才清除 held state
+    -> facade 以 data + frame_id 確認 held frame
+    -> backend 清除 SDK held state
+    -> 不呼叫 GigabyteLib/driver release
 ```
 
 Zero-copy 的 `data` 不是 SDK memory。release 前不能保存 pointer 給非同步工作繼續使用。
@@ -239,7 +236,7 @@ stateDiagram-v2
     Reading --> Idle: timeout/error
     Reading --> Held: successful delivery
     Held --> Held: another read rejected
-    Held --> Held: wrong token/release failure
+    Held --> Held: wrong token
     Held --> Idle: release success
     Held --> Idle: stop releases frame successfully
 ```
@@ -247,37 +244,35 @@ stateDiagram-v2
 Facade 與 backend 各自保存一層狀態：
 
 ```text
-facade:  readInProgress / frameHeld / heldBackendFrame
-backend: read_in_progress_ / frame_held_ / held_frame_
+facade:  readInProgress / frameHeld / heldSessionFrame
+backend: frame_held_
 ```
 
 兩層的目的不同：
 
 - facade 保護公開 API contract 與 `gvfg_frame_t` token。
-- backend 保護 driver buffer／DMA ownership 與底層 concurrent read。
+- backend 阻止公開 release 前再次取得 frame；driver/Lib 不要求逐 frame release。
 
-## 10. Release token 為什麼要完整比對
+## 10. Release token 的最小身分確認
 
-Release 不是只看 `data` pointer。程式會比對：
+Release 只比對識別目前 held frame 所需的兩個欄位：
 
 - data pointer
-- data size
 - frame ID
-- width/height
-- stride
-- pixel format
-- bit depth
 
-這可避免 caller 把 CH0 token 用於 CH1、使用舊 frame、修改 descriptor，或重複 release。
+channel 已由 release API 的參數指定；`data + frame_id` 可避免舊 frame 或錯誤 frame
+結束目前 frame 的 lifetime，不額外驗證內容 metadata。
 
-重要規則：token 驗證失敗或一般 zero-copy release IOCTL 失敗時，不可先清除
-held state。唯一例外是 backend 已經收到 plug-out、確認 signal disconnected，且
-driver 對該 outstanding frame 回傳 `ERROR_BAD_COMMAND (22)`；此時 driver 已因拔線
-撤銷 ownership，SDK 會清除相符的本地 held token，避免 unplug handler 與後續
-replug 永久卡住。Application 仍必須對每次成功 read 呼叫一次 release，不應自行
-特判 error 22。
+重要規則：token 驗證失敗時不可清除 held state。依目前 driver/Lib 契約，zero-copy
+不需要送 release；Application 仍必須對每次成功 read 呼叫一次公開 release，明確結束
+pointer lifetime，SDK 驗證 token 後才允許下一次 read。
 
 ## 11. Signal 與 format-change 狀態
+
+Running 期間收到 `VIDEO_INPUT_PLUGIN` 時，SDK 標記 recovery 並喚醒 video/audio read。
+SDK event worker 等待已交付的 video frame release，並與進行中的 Lib frame call 同步後，執行一次
+`GvfgStopCapture()` → `GvfgStartCapture()`。Read 在恢復期間等待而不 busy-loop；public event
+仍送給 Application 更新狀態，但 Application 不需要重啟 capture。
 
 Backend 維護：
 
@@ -331,7 +326,7 @@ signal_probe_active_ = false
     -> VIDEO_STOP
     -> SetEvent(dma_event_) 喚醒 blocking wait
     -> 等 read_in_progress_ 結束
-    -> release pending zero-copy frame
+    -> clear pending SDK zero-copy token
     -> stop/join event monitoring thread
 ```
 
@@ -351,7 +346,7 @@ signal_probe_active_ = false
 - copy 與 zero-copy 各自的雙通道壓力測試。
 - stop while read is blocked。
 - stop while application holds a frame。
-- zero-copy release IOCTL 失敗後的 retry。
+- zero-copy 公開 release 後下一次 read，以及 stop-with-held-frame。
 - plug out/in 後重新啟動 DMA。
 - format change 時 buffer 重建與舊 pointer 失效邊界。
 

@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -69,9 +70,11 @@ namespace gvfg::internal
         void stop_event_monitoring();
         void event_thread_proc();
         void emit_event(gvfg_event_type_t type) const;
+        gvfg_status_t recover_stream_after_plugin();
+        gvfg_status_t wait_for_recovery(uint32_t timeoutMs);
         gvfg_status_t refresh_video_info() const;
         gvfg_status_t refresh_audio_info() const;
-        gvfg_status_t from_vendor(GVFG_HRESULT result, const char *operation) const;
+        static gvfg_status_t from_vendor(GVFG_HRESULT result);
         gvfg_status_t reject(gvfg_status_t status, const char *message) const;
         void record_get_frame_timing(double elapsedUs);
 
@@ -81,8 +84,11 @@ namespace gvfg::internal
         mutable PGVFG_CONTEXT context_ = nullptr;
         mutable GVFG_VIDEO_CHN_EVENT events_{};
         mutable HANDLE stop_event_ = nullptr;
+        mutable HANDLE recovery_event_ = nullptr;
         mutable bool events_created_ = false;
         mutable bool channel_open_ = false;
+        mutable bool video_info_valid_ = false;
+        mutable bool audio_info_valid_ = false;
         mutable gvfg_signal_status_t cached_signal_{};
         mutable GVFG_VIDEO_INFO video_info_{};
         mutable GVFG_AUDIO_INFO audio_info_{};
@@ -91,17 +97,22 @@ namespace gvfg::internal
         bool zero_copy_enabled_ = false;
         bool audio_enabled_ = false;
         std::atomic<bool> running_{false};
+        std::atomic<bool> recovery_pending_{false};
+        std::atomic<gvfg_status_t> recovery_status_{GVFG_OK};
         std::atomic<bool> monitoring_{false};
         std::thread event_thread_;
         mutable std::mutex callback_mutex_;
         GigabyteEventCallback event_callback_ = nullptr;
         void *event_callback_user_ = nullptr;
         mutable std::mutex state_mutex_;
+        std::condition_variable recovery_cv_;
+        mutable std::mutex capture_mutex_;
         std::vector<uint8_t> copy_buffer_;
         bool frame_held_ = false;
         uint64_t video_frames_from_lib_ = 0;
         uint64_t audio_frames_from_lib_ = 0;
-        uint64_t video_event_wakes_ = 0;
+        uint64_t video_dma_event_wakes_ = 0;
+        uint64_t extra_video_event_wakes_ = 0;
         uint64_t audio_event_wakes_ = 0;
         uint64_t extra_audio_event_wakes_ = 0;
         uint64_t get_frame_timing_samples_ = 0;

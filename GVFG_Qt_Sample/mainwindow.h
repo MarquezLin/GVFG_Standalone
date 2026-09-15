@@ -8,6 +8,7 @@
 class CaptureController;
 class QCloseEvent;
 class PreviewWindow;
+class SampleLog;
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -33,6 +34,7 @@ private:
 
     Ui::MainWindow *ui_ = nullptr;
     CaptureController *controller_ = nullptr;
+    SampleLog *log_ = nullptr;
     std::array<PreviewWindow *, 2> previewWindows_{};
 };
 

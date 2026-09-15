@@ -59,7 +59,7 @@
         <mxCell id="ring" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=14;" value="one outstanding frame per channel&lt;br&gt;copy_buffer_ or driver pointer&lt;br&gt;read / held / release" vertex="1">
           <mxGeometry height="58" width="270" x="880" y="610" as="geometry" />
         </mxCell>
-        <mxCell id="eventFlow" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=13;" value="Public event flow&lt;br&gt;driver format IRQ -&gt; FORMAT_CHANGE_BEGIN&lt;br&gt;first new frame published -&gt; STREAM_READY" vertex="1">
+        <mxCell id="eventFlow" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#ffffff;strokeColor=#d6b656;fontSize=13;" value="Public event flow&lt;br&gt;hVideoFormatChangedEvent -&gt; VIDEO_FORMAT_CHANGED&lt;br&gt;hVideoInputPluginEvent / hVideoInputUnplugEvent -&gt; matching public event" vertex="1">
           <mxGeometry height="82" width="330" x="850" y="690" as="geometry" />
         </mxCell>
         <mxCell id="externalBoundary" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;fontColor=#333333;fontSize=14;" value="vfg100.sys / FPGA / DMA frame and events" vertex="1">

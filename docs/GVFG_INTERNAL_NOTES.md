@@ -3,8 +3,9 @@
 ## GigabyteLib backend 邊界
 
 `gvfg.dll` 保留公開 API facade、裝置列舉、雙 channel session、frame ownership 與
-事件轉換。底層 capture lifecycle、video/audio frame access 及 zero-copy release
-全部透過主管提供的 `GvfgSdk.lib` API；舊 `giga_ioctl.dll` 與直接 register/IOCTL
+事件轉換。底層 capture lifecycle 與 video/audio frame access 全部透過主管提供的
+`GvfgSdk.lib` API；zero-copy 的公開 release 只結束 SDK token lifetime，不再呼叫 Lib
+release。舊 `giga_ioctl.dll` 與直接 register/IOCTL
 backend 已移除。`GvfgSdk.lib` 靜態連結進 `gvfg.dll`，不是客戶 runtime 相依。
 
 本文件只供 GVFG SDK、driver、FPGA 與內部診斷工具維護者使用。客戶行為與公開
@@ -48,6 +49,37 @@ customer/sample (optional)
 - `third_party/GigabyteLib`：主管提供的靜態 library 與其 private headers，只供 SDK build。
 - `src/gpu/*`：D3D11 同步轉換及 readback 到 caller buffer。
 
+### 2.1 公開 API 對 GigabyteLib 的包裝
+
+公開 API 不直接暴露 GigabyteLib handle、結構或 HRESULT。Facade 依功能分成以下三類：
+
+| 公開 API／資料 | 底層來源 | SDK 提供給上層前的處理 |
+|---|---|---|
+| `gvfg_enumerate_devices()` | Windows SetupAPI | 轉成 UTF-8、提供 fallback name，並附加 `#1`、`#2` 顯示序號；不呼叫 GigabyteLib |
+| `gvfg_create()`、`gvfg_destroy()` | SDK | 管理 opaque handle、雙 channel session、錯誤狀態與自動 stop/close |
+| `gvfg_open_channel()` | SDK + GigabyteLib | 先建立 logical channel；真正的 `GvfgOpenDev()`、events 與 `GvfgOpenVideoChn()` 延遲到第一次需要 vendor channel 時執行 |
+| zero-copy enable/getter | `GvfgOpenDev()` memory mode + SDK cache | 使用者只選模式；SDK 在 vendor open 時轉成 Lib memory-mode flags，getter 不詢問 Lib |
+| audio enable | `GvfgCreateEvents()` | 使用者只選是否啟用 audio；SDK 轉成 Lib 的 no-audio event 建立參數 |
+| `gvfg_set_channel_video_format()` | `GvfgSetVideoColorDepth()` | YUY2/Y210 轉成 8/10-bit color depth，成功後更新 video info |
+| `gvfg_get_channel_signal_status()` | `GVFG_VIDEO_INFO` cache | `VideoSignalLock` 轉 connected、FourCC 轉 SDK pixel format，並由格式推導 bit depth；正常 UI refresh 只讀 cache |
+| `gvfg_get_device_capabilities()` | `GvfgGetDevInfo()` | 只公開 video channel count 與 audio capability |
+| `gvfg_get_channel_sdi_info()` | `GvfgGetSdiVideoInputInfo()`、`GvfgStringifySdiVideoInputInfo()` | 同時提供 Lib 原始欄位的 SDK enum/value 與全部八個未改寫的 Lib 格式化字串，不公開 private struct |
+| `gvfg_get_channel_audio_format()` | `GvfgGetAudioInfo()` | 只公開 sample rate、channels、bits per sample；`cbBufSize` 留在 SDK 作為讀取 buffer 大小，忽略 Lib FrameCount |
+| `gvfg_start_channel()`、stop APIs | `GvfgStartCapture()`、`GvfgStopCapture()` | 驗證狀態、處理 wait cancellation、held frame、event queue、熱插拔恢復與 SDK counters |
+| `gvfg_read_channel_frame()` | Lib video events + GetFrame API | 驗證 read/held 狀態，加入 row stride、SDK delivery frame ID、monotonic timestamp 與 delivery FPS 統計 |
+| `gvfg_release_channel_frame()` | SDK | 以 `data + frame_id` 確認 held frame 並結束 pointer lifetime；zero-copy 不呼叫 Lib release |
+| `gvfg_read_channel_audio_frame()` | Lib audio events + `GvfgGetAudioFrame()` | SDK 配置 copy buffer，加入格式、SDK delivery frame ID 與 monotonic timestamp |
+| `gvfg_release_channel_audio_frame()` | SDK | 以 `data + frame_id` 確認 held audio frame 並解除 SDK copy buffer ownership，不呼叫 Lib release |
+| `gvfg_poll_channel_event()` | Lib event handles | Callback 轉成容量 64 的 thread-safe SDK queue，補上 non-blocking、timeout 與 stop wake semantics |
+| `gvfg_get_channel_runtime_info()` | SDK | FPS 與 delivered frame count 都在成功交付 frame 的 SDK 邊界計算，不是 driver/Lib counter |
+| GPU conversion APIs | SDK D3D11 | 驗證 layout/size，再轉成 BGRA8、RGB10A2 或 NV12；GigabyteLib 不參與 |
+| version/name/error APIs | SDK | SDK version、公開名稱與錯誤文字；Lib `GVFG_HRESULT` 正數原樣回傳，不產生 SDK detail |
+| register R/W debug APIs | direct driver extension | 不屬於 GigabyteLib 正式 API，只能留在 internal debug surface |
+
+資料來源必須對上層說清楚：video/audio `frame_id`、`timestamp_ns`、runtime FPS 與
+delivered frame count 都由 SDK 產生；width、height、buffer size、signal、audio format
+與 SDI info 來自 GigabyteLib。SDK 不應把 delivery counter 描述成 driver/FPGA counter。
+
 ## 3. 公開 facade 狀態
 
 概念狀態：
@@ -58,8 +90,9 @@ Created/Closed -> Opened -> Running -> Opened -> Destroyed
                     +----------+ stop
 ```
 
-- `open()` 會先 close 舊 backend、建立 session、設定 channel 並建立 event monitoring；
-  signal descriptor 在 start/configure 階段重新查詢。
+- `open()` 會先 close 舊 backend、建立 logical session 並設定 channel；此時尚未必呼叫
+  `GvfgOpenDev()`。Vendor channel、event handles 與初始 signal descriptor 在第一次
+  set-format/query/start 需要時才建立。
 - `start()` 先 `configureStream()`，清空 facade event queue，再啟動 backend。
 - 無訊號時使用最小 placeholder descriptor 進入 event-monitoring mode；訊號恢復後
   backend 依真實 descriptor 啟用 DMA。
@@ -68,7 +101,7 @@ Created/Closed -> Opened -> Running -> Opened -> Destroyed
 - `destroy()` 允許 NULL，並透過 destructor/close 保證 stop。
 
 每個 `gvfg_channel_session_t` 各有自己的 `readInProgress`、`frameHeld` 與
-`heldBackendFrame`；同一 handle 的 CH0、CH1 可由兩條 worker thread 分別 read。
+`heldSessionFrame`；同一 handle 的 CH0、CH1 可由兩條 worker thread 分別 read。
 Open/start/stop/destroy 等 handle lifecycle 仍應由 caller 序列化；若日後要宣告完整
 thread-safe，必須先補足這些操作彼此的同步與 handle lifetime 保護。
 
@@ -103,7 +136,7 @@ gvfg_create
 -> facade 回傳 driver-owned pointer
 -> customer/preview/conversion
 -> gvfg_release_channel_frame(channel)
--> IOCTL_GIGA_RELEASE_VIDEO_FRAME(channel)
+-> SDK 清除 held token；不送 Lib/driver release
 -> close/destroy 時 IOCTL_GIGA_DISABLE_FRAME_ZEROCOPY(channel)
 ```
 
@@ -142,10 +175,9 @@ Backend event 映射：
 
 | Backend | Public |
 |---|---|
-| `GIGABYTE_EVENT_PLUG_IN` | `GVFG_EVENT_SIGNAL_CONNECTED` |
-| `GIGABYTE_EVENT_PLUG_OUT` | `GVFG_EVENT_SIGNAL_DISCONNECTED` |
-| `GIGABYTE_EVENT_STREAM_READY` | `GVFG_EVENT_STREAM_READY` |
-| `GIGABYTE_EVENT_FORMAT_CHANGE_BEGIN` | `GVFG_EVENT_FORMAT_CHANGE_BEGIN` |
+| `hVideoFormatChangedEvent` | `GVFG_EVENT_VIDEO_FORMAT_CHANGED` |
+| `hVideoInputPluginEvent` | `GVFG_EVENT_VIDEO_INPUT_PLUGIN` |
+| `hVideoInputUnplugEvent` | `GVFG_EVENT_VIDEO_INPUT_UNPLUG` |
 
 依 GigabyteLib 行為，video、format-change、plug-in 與 unplug events 在 open channel
 時固定註冊；使用者只選擇是否啟用 audio，SDK 不再提供重複的 event mask 層。
@@ -153,9 +185,14 @@ Backend event 映射：
 Facade queue 上限為 64；滿時丟棄最舊事件。`pollEvent()` 只允許 running 狀態，支援
 non-blocking、有限 timeout 與 infinite wait；stop 透過 `eventCv` 喚醒 waiter。
 
-事件順序的維護目標：format change begin 後停止使用舊 descriptor，完成重新配置且
-第一個完整 frame 可用時才送 stream ready。更動 driver event mapping 或 recovery
-流程時，要同時驗證無訊號啟動、拔插、解析度切換及 stop-during-wait。
+目前 backend 在 format-changed／plug-in event 後更新 cached video info；unplug 則先清空
+cached signal，再送 public event。Running 期間的 plug-in event 會喚醒 read；SDK event worker
+等待 held video frame release，並以同一把 Lib capture lock 避開進行中的 video/audio frame call，
+再執行一次 `GvfgStopCapture()` → `GvfgStartCapture()`。Application 只處理事件顯示，不控制重啟；
+此恢復只由 plug-in event 驅動，不 polling。
+
+更動 driver event mapping 或 recovery 流程時，要同時驗證無訊號啟動、拔插、解析度
+切換及 stop-during-wait，並確認 consumer 收到事件時對應 cache 已經完成更新。
 
 ## 7. Internal debug API
 
@@ -170,8 +207,8 @@ non-blocking、有限 timeout 與 infinite wait；stop 透過 `eventCv` 喚醒 w
 GigabyteLib 未提供的 DMA error、IRQ 或 driver sequence counter。
 
 客戶診斷使用 `gvfg_get_channel_signal_status()`、`gvfg_get_channel_runtime_info()`、event、
-`gvfg_strerror()` 與 `gvfg_get_channel_last_error_detail()`。每個 channel 的 `ChannelErrorState`
-由 `gvfg_handle_t` 持有，facade 與 backend 共用同一份；因此 channel open 失敗後也能取得詳細錯誤。
+`gvfg_strerror()` 與 `gvfg_get_channel_last_sdk_error_detail()`。每個 channel 的 `ChannelErrorState`
+由 `gvfg_handle_t` 持有，只記錄 SDK 自己產生的負數錯誤；正數 Lib result 不會改寫它。
 
 ## 8. GPU conversion
 
@@ -213,3 +250,34 @@ frame、原生格式限 YUY2/Y210、event queue 非持久化且可能淘汰最�
 8. 驗證 x64 ABI static assertions、DLL exports、import library 與 customer sample。
 9. 用乾淨 install tree 編譯 customer sample，避免意外依賴 source tree。
 10. 確認客戶文件沒有 register、IOCTL、IRQ、ring slot 或未承諾的規格。
+
+## 11. 完成項目與後續維護
+
+### 本次已完成
+
+1. **Public event ABI 已同步。** 公開 enum、Qt Sample、SDI Info 更新條件與文件使用
+   `GVFG_EVENT_VIDEO_FORMAT_CHANGED`、`GVFG_EVENT_VIDEO_INPUT_PLUGIN`、
+   `GVFG_EVENT_VIDEO_INPUT_UNPLUG`，不得再引入另一套合成事件名稱。
+2. **Zero-copy release 契約已套用。** 正常 release 與 stop-with-held-frame 都只清除
+   SDK held state，不呼叫 `GvfgReleaseVideoFrameZeroCopy()`；caller 仍須呼叫公開
+   release，作為 pointer lifetime 的結束邊界。
+
+### Lib query 維護規則
+
+1. **VideoInfo query 已快取。** `GvfgSetVideoColorDepth()` 成功後更新一次；start/configure
+   只在 cache 尚未有效時查詢。format/plugin event 先更新 cache 再通知 consumer。
+2. **AudioInfo query 已快取。** 第一次需要 audio format 時更新；Sample getter 與 start
+   共用同一份 cache，Stop/Start 不重查。
+3. **SDI Info query 已改為事件驅動。** 第一次 channel open 可讀一次；之後只在 video format changed、
+   input plug-in 或 input unplug event 驅動更新。200 ms UI timer、一般 status render、
+   Stop/Start 都不得重查；新值與 cache 相同時不重設 UI。
+
+### 後續邊界維護
+
+1. 決定 SetupAPI enumerate 加 `#N` 是否為長期公開顯示契約；若只是 Sample 顯示需求，
+   應避免讓排序序號被誤認為硬體穩定 ID。
+2. register R/W 持續標記為 GigabyteLib gap 與 internal-only；主管提供正式 Lib API 後
+   移除 `gigabyte_driver_extensions.*`，不得讓 direct IOCTL 擴張回第二套 backend。
+3. 每次改公開 struct、event enum 或 frame lifetime，都必須同步
+   `gvfg_capture.h`、兩份 customer docs、internal notes、流程圖與 sample，再重新驗證
+   x64 ABI、DLL exports 及乾淨 install tree build。

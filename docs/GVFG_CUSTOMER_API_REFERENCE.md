@@ -21,7 +21,8 @@ register 與 DMA 實作不屬於本文件。
 
 ### 1.2 `gvfg_status_t`
 
-所有回傳 `gvfg_status_t` 的函式都使用以下狀態碼：
+`gvfg_status_t` 是 32-bit 整數。`0` 表示成功，負數是 SDK 自己產生的錯誤；
+GigabyteLib API 失敗時，正數回傳值是未修改的原始 `GVFG_HRESULT`。
 
 | 成員              | 值   | 說明                                             |
 | --------------- | ---:| ---------------------------------------------- |
@@ -29,9 +30,13 @@ register 與 DMA 實作不屬於本文件。
 | `GVFG_EINVAL`   | -1  | NULL pointer、無效 channel、buffer 大小或 token 等參數錯誤 |
 | `GVFG_ENODEV`   | -2  | 找不到裝置或裝置無法開啟                                   |
 | `GVFG_ESTATE`   | -3  | 呼叫順序或目前 session 狀態不允許此操作                       |
-| `GVFG_EIO`      | -4  | Driver、backend 或 GPU I/O 失敗                    |
+| `GVFG_EIO`      | -4  | SDK 自身 I/O、GPU 或 internal extension 失敗        |
 | `GVFG_ENOTSUP`  | -5  | 不支援指定功能或格式                                     |
 | `GVFG_ETIMEOUT` | -6  | 在期限內等不到 frame、event 或 backend 工作               |
+
+正數不可用 Windows `FAILED()`／`SUCCEEDED()` 判斷；統一以 `status != GVFG_OK`
+判斷失敗。`gvfg_strerror()` 會直接回傳對應的 GigabyteLib enum 名稱，例如
+`GVFG_HRESULT_DEV_BUSY`；未知正數顯示 `GVFG_HRESULT_UNKNOWN`。
 
 ### 1.3 `gvfg_pixel_format_t`
 
@@ -83,7 +88,7 @@ UI 應優先顯示 `gvfg_sdi_info_t` 的對應 `*_name`；程式邏輯則比較�
 ### 1.5b `gvfg_sdi_info_t`
 
 由 `gvfg_get_channel_sdi_info()` 填入。數值欄位直接來自
-`GVFG_SDI_VIDEO_INFO`；`mode_name`、`resolution_name`、`fps_name`、`scan_name`
+`GVFG_SDI_VIDEO_INFO`；`signal_lock_name`、`mode_name`、`resolution_name`、`fps_name`、`scan_name`
 以及 `st352_format_name`、`st352_fps_name`、`st352_chroma_name`、
 `st352_bit_depth_name` 直接來自 `GvfgStringifySdiVideoInputInfo()`。
 
@@ -115,7 +120,7 @@ timing 屬於內部診斷資訊，不放入客戶 runtime 結構。
 
 ### 1.8 `gvfg_frame_t`
 
-由 `gvfg_read_channel_frame()` 填入，也是稍後傳給 `gvfg_release_channel_frame()` 的完整 token。
+由 `gvfg_read_channel_frame()` 填入，也是稍後傳給 `gvfg_release_channel_frame()` 的 frame descriptor。
 
 | 欄位                 | 型別             | 說明                                           |
 | ------------------ | -------------- | -------------------------------------------- |
@@ -129,7 +134,7 @@ timing 屬於內部診斷資訊，不放入客戶 runtime 結構。
 | `frame_id`         | `uint64_t`     | SDK 成功交付序號；每次 channel Start 從 1 重新開始 |
 | `timestamp_ns`     | `uint64_t`     | SDK 交付時間；與 audio 共用 monotonic clock，單位 ns |
 
-Caller 不得修改任何欄位再 release。SDK 會將完整 token 與目前 held frame 比對。
+Caller 應把 read 取得的 descriptor 傳回 release；SDK 以 `data + frame_id` 確認目前 held frame。
 
 ### 1.8a `gvfg_audio_format_t`
 
@@ -148,7 +153,7 @@ Driver 一次傳回多少 bytes、buffer capacity 與 block alignment 均由 SDK
 ### 1.8b `gvfg_audio_frame_t`
 
 由 `gvfg_read_channel_audio_frame()` 填入，也是稍後傳給
-`gvfg_release_channel_audio_frame()` 的完整 token。
+`gvfg_release_channel_audio_frame()` 的 audio frame descriptor。
 
 | 欄位 | 型別 | 說明 |
 | --- | --- | --- |
@@ -160,8 +165,8 @@ Driver 一次傳回多少 bytes、buffer capacity 與 block alignment 均由 SDK
 | `frame_id` | `uint64_t` | SDK 成功交付序號；每次 channel Start 從 1 重新開始 |
 | `timestamp_ns` | `uint64_t` | SDK 交付時間；與 video 共用 monotonic clock，單位 ns |
 
-與 video 相同，每個 channel 同時只能持有一個 audio frame，且 caller 不得修改
-descriptor 後再 release。
+與 video 相同，每個 channel 同時只能持有一個 audio frame；release 以
+`data + frame_id` 確認目前 held frame。
 
 Video/audio 的 `timestamp_ns` 可在同一 process/session 內直接比較。它代表 SDK
 delivery timing，不是 driver 或硬體 capture timestamp。
@@ -190,10 +195,9 @@ delivery timing，不是 driver 或硬體 capture timestamp。
 | 成員                               | 值   | 說明                            |
 | -------------------------------- | ---:| ----------------------------- |
 | `GVFG_EVENT_UNKNOWN`             | 0   | 未知事件；正常流程不應依賴此值               |
-| `GVFG_EVENT_SIGNAL_CONNECTED`    | 1   | 指定 channel 偵測到輸入訊號          |
-| `GVFG_EVENT_SIGNAL_DISCONNECTED` | 2   | 輸入訊號中斷                        |
-| `GVFG_EVENT_STREAM_READY`        | 3   | 啟動、重新接線或格式恢復後，第一個完整 frame 已就緒 |
-| `GVFG_EVENT_FORMAT_CHANGE_BEGIN` | 4   | 輸入格式正在改變，應暫停使用舊格式資源           |
+| `GVFG_EVENT_VIDEO_FORMAT_CHANGED` | 1 | Lib 的 video format changed event |
+| `GVFG_EVENT_VIDEO_INPUT_PLUGIN`   | 2 | Lib 的 video input plug-in event  |
+| `GVFG_EVENT_VIDEO_INPUT_UNPLUG`   | 3 | Lib 的 video input unplug event   |
 
 `gvfg_event_t` 是 `gvfg_poll_channel_event()` 的輸出。呼叫前將結構清零並把
 `struct_size` 設為 `sizeof(gvfg_event_t)`。`type` 是上述事件型別。
@@ -331,7 +335,7 @@ gvfg_status_t gvfg_start_channel(gvfg_handle handle, int channel_index);
 - `GVFG_OK`：開始擷取、已經 running，或無訊號但成功進入訊號監看模式。
 - `GVFG_EINVAL`：handle 為 NULL。
 - `GVFG_ESTATE`：尚未 open 裝置。
-- 也可能回傳 backend 的 `GVFG_EIO`、`GVFG_ENOTSUP` 等錯誤。
+- GigabyteLib 失敗時回傳原始正數 `GVFG_HRESULT`。
 
 ### 1.21 `gvfg_read_channel_frame`
 
@@ -349,7 +353,7 @@ gvfg_status_t gvfg_read_channel_frame(gvfg_handle handle,
 - `GVFG_EINVAL`：handle 或 output pointer 為 NULL。
 - `GVFG_ESTATE`：未 running、已有 held frame、已有另一個 read，或等待時被 stop。
 - `GVFG_ETIMEOUT`：期限內沒有 frame。
-- `GVFG_EIO`／`GVFG_ENOTSUP`：frame/backend 無效或格式不支援。
+- 正數：GigabyteLib 原始 `GVFG_HRESULT`；`GVFG_ENOTSUP` 表示 SDK 不支援該格式。
 
 Copy mode 回傳 SDK 的單一 frame buffer；zero-copy mode 回傳 driver-owned buffer。兩者的
 pointer 都只保證有效到對應的 `gvfg_release_channel_frame()`。
@@ -507,7 +511,7 @@ gvfg_status_t gvfg_get_channel_runtime_info(
 const char *gvfg_get_version(void);
 ```
 
-- 回傳目前實際載入的 GVFG runtime DLL 版本，例如 `"0.3.0"`。
+- 回傳目前實際載入的 GVFG runtime DLL 版本，例如 `"1.0.0"`。
 - 回傳值是靜態 null-terminated 字串，caller 不可 free。
 - 可用於 log、問題回報，以及確認 header、LIB、DLL 是否來自同一版本。
 
@@ -530,14 +534,17 @@ const char *gvfg_strerror(gvfg_status_t status);
 - 回傳：靜態、null-terminated 英文說明字串；未知值回傳 unknown 類型說明。
   Caller 不可 free。
 
-### 1.35 `gvfg_get_channel_last_error_detail`
+### 1.35 `gvfg_get_channel_last_sdk_error_detail`
 
 ```c
-gvfg_status_t gvfg_get_channel_last_error_detail(gvfg_handle handle,
-                                                 int channel_index,
-                                                 char *out_message,
-                                                 uint32_t out_message_size);
+gvfg_status_t gvfg_get_channel_last_sdk_error_detail(gvfg_handle handle,
+                                                     int channel_index,
+                                                     char *out_message,
+                                                     uint32_t out_message_size);
 ```
+
+只供負數 `GVFG_E*` 使用。正數 GigabyteLib result 原樣回傳，不會產生或覆寫
+SDK error detail。
 
 - 複製指定 channel 最近一次 fault 或被拒絕操作的 UTF-8 詳細說明；即使該 channel open 失敗仍可查詢。
 - `gvfg_read_channel_frame()`／`gvfg_poll_channel_event()` 的 timeout、non-blocking 無資料，

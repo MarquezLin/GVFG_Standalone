@@ -6,7 +6,7 @@
 - `[SDK]`／`[SDK API]`：SDK read 邊界或 API 回傳的現象。
 - `[APP]`：Preview、audio output 或 Sample 自身核對的現象。
 - 累計數字最多每 5 秒彙整一次；Stop 會補記尚未輸出的變化。
-- Stop 不列印正常統計摘要。只有資料去向核對不一致時才印 `[APP] ERROR accounting mismatch`。正常停止清掉的待處理資料不算運行錯誤。
+- Stop 不列印正常統計摘要；只有實際 API、preview 或 audio output 錯誤才記錄。
 
 ## 拿到 Log 後怎麼處理
 
@@ -14,7 +14,7 @@ Log 只標示觀測層、現象與數值。Video/audio `frame_id` 是 SDK 每次
 
 預覽使用 Present(0, 0)，讓 DXGI 等待呈現相依條件，不做外部重試。SyncInterval 仍為 0，並非每張都保證顯示。預覽改成 FIFO，最多保留 3 張待處理影像（包含正在上傳的容量保留），另有 1 個處理中槽位，共 4 個 GPU 槽。60 FPS 下 3 張約 50 ms；這不是刻意等滿 50 ms 才顯示。從上傳完成入列開始計時，等待超過 50 ms 的影像才丟棄（expired）；容量滿時跳過新影像（busy），不替換仍在期限內的舊影像。50 ms 是開始處理前的等待期限，不含 GPU 執行／DXGI Present 等待，不保證端到端延遲或實體螢幕逐張呈現。Stop／關閉／鎖等待只處理 Windows 同步送達的視窗訊息，避免 DXGI 等待 UI 而 UI 又等待 worker；不處理一般排隊輸入或 Qt callbacks。
 
-Audio 保留原本最多 10 個 PCM 區塊的播放佇列（`kMaxQueuedAudioFrames`）；滿時丟掉最舊區塊，再加入新區塊。丟棄區塊、停滯與收音間隔仍保留為內部診斷計數，但不顯示在一般 Log；audio frame 不保證與 video frame 等長。
+Audio 保留原本最多 10 個 PCM 區塊的播放佇列（`kMaxQueuedAudioFrames`）；滿時丟掉最舊區塊，再加入新區塊。Sample 不統計輸出、丟棄或取消數量；audio frame 不保證與 video frame 等長。
 
 播放 write 失敗，或持續回傳 0、兩秒沒有進展，會記錄原因並停止通道；檢查音效裝置後重新 Start。此檢查無法中斷本身永不返回的 write 呼叫。
 

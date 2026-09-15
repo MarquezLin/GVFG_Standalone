@@ -104,7 +104,7 @@ int main(void)
   保存，必須先複製。
 - 每個 channel 同時最多持有一個 frame。尚未 release 又對同一 channel 呼叫
   `gvfg_read_channel_frame()`，會回傳 `GVFG_ESTATE`。
-- release 時必須傳回原本的完整 `gvfg_frame_t`，不可修改欄位。
+- release 時傳回 read 取得的 `gvfg_frame_t`；SDK 以 `data + frame_id` 確認目前 held frame。
 - `gvfg_stop()` 會中止等待並使尚未 release 的 frame 失效。
 - 同一個 handle 的 lifecycle 操作應由應用程式自行序列化；不要同時 open、
   start、stop 或 destroy。
@@ -116,7 +116,7 @@ Audio 採用相同的 pull 與 ownership 模型：
   `gvfg_release_channel_audio_frame()` 前有效。
 - 同一 channel 同時只能持有一個 audio frame；未 release 再 read 會回傳
   `GVFG_ESTATE`。
-- release 必須傳回未修改的完整 `gvfg_audio_frame_t` token。
+- release 時傳回 read 取得的 `gvfg_audio_frame_t`；SDK 以 `data + frame_id` 確認目前 held frame。
 - 若播放或錄音需要在 release 後繼續使用 PCM，Application 必須先複製。
 - SDK 只保有單一交付 buffer，不建立 audio ring；播放排程與 buffering 屬於
   Application／Qt／WASAPI。
@@ -136,16 +136,21 @@ Audio 採用相同的 pull 與 ownership 模型：
 | `GVFG_EINVAL`   | 參數、channel 或 frame token 無效 |
 | `GVFG_ENODEV`   | 找不到裝置或裝置無法開啟                |
 | `GVFG_ESTATE`   | 呼叫時機或 handle 狀態不正確          |
-| `GVFG_EIO`      | driver/backend I/O 失敗       |
+| `GVFG_EIO`      | SDK 自身 I/O、GPU 或 internal extension 失敗 |
 | `GVFG_ENOTSUP`  | 格式或功能不支援                    |
 | `GVFG_ETIMEOUT` | 等待逾時                        |
+
+GigabyteLib 呼叫失敗時，SDK 不重新分類；原始正數 `GVFG_HRESULT` 直接回傳給
+Application。負數只代表 SDK 自己檢查出的錯誤。所有結果都應使用
+`status != GVFG_OK` 判斷，不可套用 Windows `FAILED()`／`SUCCEEDED()`。
 
 可用 `gvfg_strerror()` 取得靜態英文說明字串；呼叫端不可釋放該字串。
 
 可用 `gvfg_get_version()` 查詢目前實際載入的 `gvfg.dll` 版本。回傳值為
-靜態字串，例如 `"0.3.0"`，呼叫端不可釋放。
+靜態字串，例如 `"1.0.0"`，呼叫端不可釋放。
 需要記錄最近一次失敗的詳細原因時，可在 API 失敗後立即呼叫
-`gvfg_get_channel_last_error_detail()`；driver/register 等內部診斷仍保留在 debug API。
+`gvfg_get_channel_last_sdk_error_detail()`；只保存負數 SDK error 的細節，正數 GigabyteLib
+result 原樣回傳且不寫入此狀態。driver/register 等內部診斷仍保留在 debug API。
 
 ## 5. 資料格式
 
@@ -206,10 +211,10 @@ audio API 不是 zero-copy，但上層仍使用和 video 相同的 read/release 
 - `gvfg_stop(handle)`：停止擷取；重複呼叫仍回傳成功。
 - `gvfg_destroy(handle)`：必要時先停止，再銷毀 handle。銷毀後不得再使用。
 
-Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，每次成功
-`gvfg_read_channel_frame()` 後由 `gvfg_release_channel_frame()` 歸還 driver frame，destroy/close
-前 disable。Device open 後不可直接切換；應 destroy session、重新 create、設定模式
-後再 open。
+Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，destroy/close 前 disable。
+每次成功 `gvfg_read_channel_frame()` 後仍須呼叫 `gvfg_release_channel_frame()`，用來結束
+公開 pointer/token lifetime；依目前 Lib 契約不送逐 frame driver release。Device open 後
+不可直接切換；應 destroy session、重新 create、設定模式後再 open。
 
 ### Frame
 
@@ -246,10 +251,9 @@ Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，每次成
 
 | Event                            | 應用程式動作                      |
 | -------------------------------- | --------------------------- |
-| `GVFG_EVENT_SIGNAL_CONNECTED`    | 訊號已接上；等待 stream ready/frame |
-| `GVFG_EVENT_SIGNAL_DISCONNECTED` | 停止使用目前影像內容                  |
-| `GVFG_EVENT_FORMAT_CHANGE_BEGIN` | 暫停使用依賴舊尺寸／格式的資源             |
-| `GVFG_EVENT_STREAM_READY`        | 第一個完整 frame 已就緒，可依新格式重建資源   |
+| `GVFG_EVENT_VIDEO_FORMAT_CHANGED` | Lib 的 video format changed event |
+| `GVFG_EVENT_VIDEO_INPUT_PLUGIN`   | Lib 的 video input plug-in event  |
+| `GVFG_EVENT_VIDEO_INPUT_UNPLUG`   | Lib 的 video input unplug event   |
 
 呼叫前應將 `gvfg_event_t` 清零並設定 `struct_size = sizeof(gvfg_event_t)`。
 事件是狀態通知，不取代 `gvfg_get_channel_signal_status()`；需要完整 metadata 時應重新查詢。
@@ -297,12 +301,12 @@ DXGI 成功接受的 Present；swapchain busy 而略過者記在 `skipped_presen
 ## 9. 錯誤處理建議
 
 - `GVFG_ETIMEOUT`：連線期間通常可重試，並檢查 signal status/event。收到
-  `GVFG_EVENT_SIGNAL_DISCONNECTED` 後，不應高速輪詢 read API；應等待
-  `GVFG_EVENT_SIGNAL_CONNECTED`（或 application stop）再恢復 video/audio read。
+  `GVFG_EVENT_VIDEO_INPUT_UNPLUG` 後，不應高速輪詢 read API；應等待
+  `GVFG_EVENT_VIDEO_INPUT_PLUGIN`（或 application stop）再恢復 video/audio read。
 - 每次成功取得的 frame 仍必須恰好 release 一次。若 release 與實體拔線競爭，
   SDK 會處理 driver 已撤銷 zero-copy ownership 的情況，application 不應特判
   `ERROR_BAD_COMMAND (22)`。
-- `GVFG_EVENT_FORMAT_CHANGE_BEGIN`：先停用舊格式資源；等 stream ready 後重建。
+- `GVFG_EVENT_VIDEO_FORMAT_CHANGED`：依 Lib 更新後的 video info 重建格式相關資源。
 - `GVFG_ESTATE`：檢查 lifecycle、是否重複 read、或是否已 stop。
 - `GVFG_EIO`／`GVFG_ENODEV`：停止 session，記錄 `gvfg_strerror()`，再由應用程式
   決定是否重新列舉與開啟。
