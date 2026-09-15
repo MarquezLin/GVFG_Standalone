@@ -205,7 +205,7 @@ extern "C"
         int row_stride_bytes; /* Byte distance between the starts of adjacent rows. */
         int pixel_format;     /* gvfg_pixel_format_t value. */
         int bit_depth;        /* Bits per color channel of the native frame. */
-        uint64_t frame_id;    /* GigabyteLib GVFG_VIDEO_INFO.FrameCount. */
+        uint64_t frame_id;    /* SDK delivery sequence; starts at 1 for each channel start. */
         uint64_t timestamp_ns; /* Monotonic SDK delivery time; same clock domain as audio. */
     } gvfg_frame_t;
 
@@ -217,7 +217,7 @@ extern "C"
         uint32_t channels;         /* Interleaved PCM channel count. */
         uint32_t bits_per_sample;  /* Bits in each native PCM sample. */
         uint32_t reserved;
-        uint64_t frame_id;         /* GigabyteLib GVFG_AUDIO_INFO.FrameCount. */
+        uint64_t frame_id;         /* SDK delivery sequence; starts at 1 for each channel start. */
         uint64_t timestamp_ns;     /* Monotonic SDK delivery time; same clock domain as video. */
     } gvfg_audio_frame_t;
 
@@ -625,9 +625,8 @@ extern "C"
 
     /*
      * Copy the most recent detailed fault or rejected API call for one
-     * channel. Event-poll timeouts are not stored; frame-read timeouts currently
-     * retain the backend timeout detail. A successful gvfg_start_channel()
-     * begins a new diagnostic lifetime.
+     * channel. Normal frame-read and event-poll timeouts are not stored.
+     * A successful gvfg_start_channel() begins a new diagnostic lifetime.
      */
     GVFG_API gvfg_status_t gvfg_get_channel_last_error_detail(
         GVFG_PARAM_IN gvfg_handle handle,

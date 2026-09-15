@@ -25,6 +25,7 @@ protected:
     void highlightBlock(const QString &text) override
     {
         if (text.contains(QStringLiteral("SIGNAL_DISCONNECTED")) ||
+            text.contains(QStringLiteral("No signal"), Qt::CaseInsensitive) ||
             text.contains(QStringLiteral("failed"), Qt::CaseInsensitive) ||
             text.contains(QStringLiteral("error"), Qt::CaseInsensitive))
             setFormat(0, text.size(), error_);
@@ -167,8 +168,8 @@ void MainWindow::showPreviewWindow(int channel, bool fullscreen)
     if (!controller_->applyPreview(channel))
         controller_->logUiMessage(
             fullscreen
-                ? QStringLiteral("CH%1 Fullscreen Preview failed: unable to update preview window").arg(channel)
-                : QStringLiteral("CH%1 Show Preview failed: unable to update preview window").arg(channel));
+                ? QStringLiteral("CH%1 [APP] Fullscreen preview failed | window update").arg(channel)
+                : QStringLiteral("CH%1 [APP] Show preview failed | window update").arg(channel));
 }
 
 void MainWindow::updateOutputFormatOptions(int changedChannel)

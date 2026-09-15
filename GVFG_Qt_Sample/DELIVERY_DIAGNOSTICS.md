@@ -2,15 +2,15 @@
 
 畫面保留原本狀態，不顯示完整交付統計，也不增加設定控制。正常的預覽與音訊佇列取捨不輸出 Log。
 
-- 預覽排隊逾時或容量不足是顯示節拍取捨，不輸出 Log。只有提交／渲染失敗或序號異常增加時，才記錄 `ERROR preview delivery`。
-- Audio 播放佇列滿而淘汰舊 PCM 區塊不輸出 Log。只有序號異常或寫入失敗時，才記錄 `ERROR audio delivery`。
-- 序號缺口、倒退／重複、音訊失敗位元組僅在有異常時附上。
-- 錯誤最多每 5 秒彙整一次；Stop 會補記尚未輸出的錯誤。
-- Stop 不列印正常統計摘要。只有資料去向核對不一致時才印 `ERROR delivery accounting mismatch`。正常停止清掉的待處理資料不算運行錯誤。
+- `[LIB]`：GigabyteLib 回傳的 signal 或 event 現象。
+- `[SDK]`／`[SDK API]`：SDK read 邊界或 API 回傳的現象。
+- `[APP]`：Preview、audio output 或 Sample 自身核對的現象。
+- 累計數字最多每 5 秒彙整一次；Stop 會補記尚未輸出的變化。
+- Stop 不列印正常統計摘要。只有資料去向核對不一致時才印 `[APP] ERROR accounting mismatch`。正常停止清掉的待處理資料不算運行錯誤。
 
 ## 拿到 Log 後怎麼處理
 
-`ERROR preview delivery` 表示提交／渲染失敗或 frame ID 異常，需查 Preview API、GPU 與來源序號。APP 持續讀取並釋放每張影像，沒有新增預覽降頻行為。
+Log 只標示觀測層、現象與數值。Video/audio `frame_id` 是 SDK 每次 Start 從 1 開始的成功交付序號，不再使用 GigabyteLib `FrameCount`；`[APP] Preview ...` 是 Sample 顯示路徑問題。
 
 預覽使用 Present(0, 0)，讓 DXGI 等待呈現相依條件，不做外部重試。SyncInterval 仍為 0，並非每張都保證顯示。預覽改成 FIFO，最多保留 3 張待處理影像（包含正在上傳的容量保留），另有 1 個處理中槽位，共 4 個 GPU 槽。60 FPS 下 3 張約 50 ms；這不是刻意等滿 50 ms 才顯示。從上傳完成入列開始計時，等待超過 50 ms 的影像才丟棄（expired）；容量滿時跳過新影像（busy），不替換仍在期限內的舊影像。50 ms 是開始處理前的等待期限，不含 GPU 執行／DXGI Present 等待，不保證端到端延遲或實體螢幕逐張呈現。Stop／關閉／鎖等待只處理 Windows 同步送達的視窗訊息，避免 DXGI 等待 UI 而 UI 又等待 worker；不處理一般排隊輸入或 Qt callbacks。
 

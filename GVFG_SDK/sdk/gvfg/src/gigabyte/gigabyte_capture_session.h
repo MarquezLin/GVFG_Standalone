@@ -23,9 +23,7 @@ namespace gvfg::internal
         uint32_t sample_rate = 0;
         uint32_t channels = 0;
         uint32_t bits_per_sample = 0;
-        uint32_t frames_per_second = 0;
         uint32_t frame_bytes = 0;
-        uint64_t frame_count = 0;
     };
 
     using GigabyteEventCallback = void (*)(gvfg_event_type_t event, void *user);
@@ -57,8 +55,7 @@ namespace gvfg::internal
         gvfg_status_t stop_stream();
         gvfg_status_t wait_frame(uint32_t timeoutMs, gvfg_frame_t &out);
         gvfg_status_t wait_audio(uint32_t timeoutMs, void *destination,
-                                    uint32_t destinationCapacity, uint32_t &outBytes,
-                                    uint64_t &outFrameCount);
+                                    uint32_t destinationCapacity, uint32_t &outBytes);
         gvfg_status_t release_frame();
         void fill_debug_stats(gvfg_debug_backend_stats_t &out) const;
         gvfg_status_t debug_read_register(uint32_t offset, uint32_t &outValue) const;
@@ -73,6 +70,7 @@ namespace gvfg::internal
         void event_thread_proc();
         void emit_event(gvfg_event_type_t type) const;
         gvfg_status_t refresh_video_info() const;
+        gvfg_status_t refresh_audio_info() const;
         gvfg_status_t from_vendor(GVFG_HRESULT result, const char *operation) const;
         gvfg_status_t reject(gvfg_status_t status, const char *message) const;
         void record_get_frame_timing(double elapsedUs);
@@ -101,12 +99,11 @@ namespace gvfg::internal
         mutable std::mutex state_mutex_;
         std::vector<uint8_t> copy_buffer_;
         bool frame_held_ = false;
-        uint64_t audio_frames_from_driver_ = 0;
-        uint64_t audio_bytes_from_driver_ = 0;
+        uint64_t video_frames_from_lib_ = 0;
+        uint64_t audio_frames_from_lib_ = 0;
         uint64_t video_event_wakes_ = 0;
         uint64_t audio_event_wakes_ = 0;
         uint64_t extra_audio_event_wakes_ = 0;
-        uint64_t wait_timeout_count_ = 0;
         uint64_t get_frame_timing_samples_ = 0;
         uint32_t get_frame_timing_window_samples_ = 0;
         double get_frame_timing_total_us_ = 0.0;

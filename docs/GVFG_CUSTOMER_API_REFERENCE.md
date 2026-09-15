@@ -126,7 +126,7 @@ timing 屬於內部診斷資訊，不放入客戶 runtime 結構。
 | `row_stride_bytes` | `int`          | 相鄰兩列起點間距，單位 byte；處理每列時必須使用此值                 |
 | `pixel_format`     | `int`          | `gvfg_pixel_format_t` 值                      |
 | `bit_depth`        | `int`          | 原生 frame 每色彩 channel 的 bit depth             |
-| `frame_id`         | `uint64_t`     | GigabyteLib `GVFG_VIDEO_INFO.FrameCount` |
+| `frame_id`         | `uint64_t`     | SDK 成功交付序號；每次 channel Start 從 1 重新開始 |
 | `timestamp_ns`     | `uint64_t`     | SDK 交付時間；與 audio 共用 monotonic clock，單位 ns |
 
 Caller 不得修改任何欄位再 release。SDK 會將完整 token 與目前 held frame 比對。
@@ -157,7 +157,7 @@ Driver 一次傳回多少 bytes、buffer capacity 與 block alignment 均由 SDK
 | `sample_rate` | `uint32_t` | 每秒 sample 數 |
 | `channels` | `uint32_t` | interleaved PCM channel 數 |
 | `bits_per_sample` | `uint32_t` | 每個 PCM sample 的 bit 數 |
-| `frame_id` | `uint64_t` | GigabyteLib `GVFG_AUDIO_INFO.FrameCount` |
+| `frame_id` | `uint64_t` | SDK 成功交付序號；每次 channel Start 從 1 重新開始 |
 | `timestamp_ns` | `uint64_t` | SDK 交付時間；與 video 共用 monotonic clock，單位 ns |
 
 與 video 相同，每個 channel 同時只能持有一個 audio frame，且 caller 不得修改

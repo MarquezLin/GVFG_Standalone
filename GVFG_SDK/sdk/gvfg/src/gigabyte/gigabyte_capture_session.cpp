@@ -196,8 +196,9 @@ gvfg_status_t GigabyteCaptureSession::set_video_format(gvfg_pixel_format_t forma
     const ULONG colorDepth = format == GVFG_PIXFMT_Y210
                                  ? GVFG_VIDEO_COLOR_DEPTH_10_BITS
                                  : GVFG_VIDEO_COLOR_DEPTH_8_BITS;
-    return from_vendor(GvfgSetVideoColorDepth(context_, channel_, colorDepth),
-                       "GvfgSetVideoColorDepth");
+    const gvfg_status_t status = from_vendor(
+        GvfgSetVideoColorDepth(context_, channel_, colorDepth), "GvfgSetVideoColorDepth");
+    return status == GVFG_OK ? refresh_video_info() : status;
 }
 
 gvfg_status_t GigabyteCaptureSession::refresh_video_info() const
@@ -230,13 +231,9 @@ gvfg_status_t GigabyteCaptureSession::get_signal_status(gvfg_signal_status_t &ou
     const gvfg_status_t openStatus = ensure_vendor_channel_open();
     if (openStatus != GVFG_OK)
         return openStatus;
-    const gvfg_status_t status = refresh_video_info();
-    if (status == GVFG_OK)
-    {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        out = cached_signal_;
-    }
-    return status;
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    out = cached_signal_;
+    return GVFG_OK;
 }
 
 gvfg_status_t GigabyteCaptureSession::get_device_capabilities(
@@ -296,17 +293,27 @@ gvfg_status_t GigabyteCaptureSession::get_audio_format(GigabyteAudioInfo &out) c
     const gvfg_status_t openStatus = ensure_vendor_channel_open();
     if (openStatus != GVFG_OK)
         return openStatus;
-    const gvfg_status_t status = from_vendor(
-        GvfgGetAudioInfo(context_, channel_, &audio_info_), "GvfgGetAudioInfo");
+    const gvfg_status_t status = refresh_audio_info();
     if (status != GVFG_OK)
         return status;
+    std::lock_guard<std::mutex> lock(state_mutex_);
     out = {};
     out.sample_rate = audio_info_.SamplesPerSec;
     out.channels = audio_info_.Channels;
     out.bits_per_sample = audio_info_.BitsPerSample;
-    out.frames_per_second = audio_info_.FramesPerSec;
     out.frame_bytes = audio_info_.cbBufSize;
-    out.frame_count = audio_info_.FrameCount;
+    return GVFG_OK;
+}
+
+gvfg_status_t GigabyteCaptureSession::refresh_audio_info() const
+{
+    GVFG_AUDIO_INFO info{};
+    const gvfg_status_t status = from_vendor(
+        GvfgGetAudioInfo(context_, channel_, &info), "GvfgGetAudioInfo");
+    if (status != GVFG_OK)
+        return status;
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    audio_info_ = info;
     return GVFG_OK;
 }
 
@@ -326,6 +333,9 @@ gvfg_status_t GigabyteCaptureSession::configure_stream()
     const gvfg_status_t openStatus = ensure_vendor_channel_open();
     if (openStatus != GVFG_OK)
         return openStatus;
+    const gvfg_status_t infoStatus = refresh_video_info();
+    if (infoStatus != GVFG_OK)
+        return infoStatus;
     configured_ = true;
     return GVFG_OK;
 }
@@ -393,11 +403,7 @@ gvfg_status_t GigabyteCaptureSession::wait_frame(uint32_t timeoutMs, gvfg_frame_
     const DWORD waitMs = timeoutMs == UINT32_MAX ? INFINITE : timeoutMs;
     const DWORD wait = WaitForMultipleObjects(count, handles.data(), FALSE, waitMs);
     if (wait == WAIT_TIMEOUT)
-    {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        ++wait_timeout_count_;
         return GVFG_ETIMEOUT;
-    }
     if (wait == WAIT_OBJECT_0)
         return GVFG_ESTATE;
     if (wait != WAIT_OBJECT_0 + 1 && wait != WAIT_OBJECT_0 + 2)
@@ -407,10 +413,6 @@ gvfg_status_t GigabyteCaptureSession::wait_frame(uint32_t timeoutMs, gvfg_frame_
         ++video_event_wakes_;
     }
 
-    const auto begin = std::chrono::steady_clock::now();
-    const gvfg_status_t infoStatus = refresh_video_info();
-    if (infoStatus != GVFG_OK)
-        return infoStatus;
     gvfg_signal_status_t signal{};
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
@@ -420,32 +422,34 @@ gvfg_status_t GigabyteCaptureSession::wait_frame(uint32_t timeoutMs, gvfg_frame_
         return GVFG_ETIMEOUT;
 
     size_t bytes = 0;
-    uint64_t frameCount = 0;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         bytes = video_info_.cbBufSize;
-        frameCount = video_info_.FrameCount;
     }
     const void *data = nullptr;
     gvfg_status_t status = GVFG_OK;
     if (zero_copy_enabled_)
     {
         void *buffer = nullptr;
+        const auto begin = std::chrono::steady_clock::now();
         status = from_vendor(GvfgGetVideoFrameZeroCopy(context_, channel_, &buffer),
                              "GvfgGetVideoFrameZeroCopy");
+        const auto end = std::chrono::steady_clock::now();
+        record_get_frame_timing(std::chrono::duration<double, std::micro>(end - begin).count());
         data = buffer;
     }
     else
     {
         if (copy_buffer_.size() != bytes)
             copy_buffer_.assign(bytes, 0);
+        const auto begin = std::chrono::steady_clock::now();
         status = from_vendor(GvfgGetVideoFrame(context_, channel_, copy_buffer_.data(),
                                                static_cast<ULONG>(copy_buffer_.size())),
                              "GvfgGetVideoFrame");
+        const auto end = std::chrono::steady_clock::now();
+        record_get_frame_timing(std::chrono::duration<double, std::micro>(end - begin).count());
         data = copy_buffer_.data();
     }
-    const auto end = std::chrono::steady_clock::now();
-    record_get_frame_timing(std::chrono::duration<double, std::micro>(end - begin).count());
     if (status != GVFG_OK)
         return status;
     if (!data || bytes == 0)
@@ -454,13 +458,14 @@ gvfg_status_t GigabyteCaptureSession::wait_frame(uint32_t timeoutMs, gvfg_frame_
     std::lock_guard<std::mutex> lock(state_mutex_);
     out.data = data;
     out.data_size = bytes;
-    out.frame_id = frameCount;
+    out.frame_id = 0;
     out.timestamp_ns = monotonic_ns();
     out.width = signal.width;
     out.height = signal.height;
     out.row_stride_bytes = static_cast<int>(bytes / signal.height);
     out.pixel_format = signal.pixel_format;
     out.bit_depth = signal.bit_depth;
+    ++video_frames_from_lib_;
     frame_held_ = true;
     return GVFG_OK;
 }
@@ -482,18 +487,17 @@ gvfg_status_t GigabyteCaptureSession::release_frame()
 }
 
 gvfg_status_t GigabyteCaptureSession::wait_audio(
-    uint32_t timeoutMs, void *destination, uint32_t destinationCapacity, uint32_t &outBytes,
-    uint64_t &outFrameCount)
+    uint32_t timeoutMs, void *destination, uint32_t destinationCapacity, uint32_t &outBytes)
 {
     outBytes = 0;
-    outFrameCount = 0;
     if (!running_ || !audio_enabled_ || !destination)
         return reject(GVFG_ESTATE, "GigabyteLib audio read rejected");
-    GigabyteAudioInfo format{};
-    const gvfg_status_t formatStatus = get_audio_format(format);
-    if (formatStatus != GVFG_OK)
-        return formatStatus;
-    if (format.frame_bytes == 0 || format.frame_bytes > destinationCapacity)
+    uint32_t frameBytes = 0;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        frameBytes = audio_info_.cbBufSize;
+    }
+    if (frameBytes == 0 || frameBytes > destinationCapacity)
         return reject(GVFG_EINVAL, "GigabyteLib audio destination is too small");
     if (!events_.hAudioFrameInEvent)
         return reject(GVFG_EIO, "GigabyteLib did not provide an audio-frame event");
@@ -503,11 +507,7 @@ gvfg_status_t GigabyteCaptureSession::wait_audio(
     const DWORD waitMs = timeoutMs == UINT32_MAX ? INFINITE : timeoutMs;
     const DWORD wait = WaitForMultipleObjects(count, handles.data(), FALSE, waitMs);
     if (wait == WAIT_TIMEOUT)
-    {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        ++wait_timeout_count_;
         return GVFG_ETIMEOUT;
-    }
     if (wait == WAIT_OBJECT_0)
         return GVFG_ESTATE;
     if (wait != WAIT_OBJECT_0 + 1 && wait != WAIT_OBJECT_0 + 2)
@@ -519,21 +519,14 @@ gvfg_status_t GigabyteCaptureSession::wait_audio(
         else
             ++extra_audio_event_wakes_;
     }
-    const uint32_t frameBytes = format.frame_bytes;
     const gvfg_status_t status = from_vendor(
         GvfgGetAudioFrame(context_, channel_, destination, frameBytes), "GvfgGetAudioFrame");
     if (status != GVFG_OK)
         return status;
-    GigabyteAudioInfo latestInfo{};
-    const gvfg_status_t infoStatus = get_audio_format(latestInfo);
-    if (infoStatus != GVFG_OK)
-        return infoStatus;
     outBytes = frameBytes;
-    outFrameCount = latestInfo.frame_count;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        ++audio_frames_from_driver_;
-        audio_bytes_from_driver_ += outBytes;
+        ++audio_frames_from_lib_;
     }
     return GVFG_OK;
 }
@@ -615,12 +608,11 @@ void GigabyteCaptureSession::emit_event(gvfg_event_type_t type) const
 void GigabyteCaptureSession::fill_debug_stats(gvfg_debug_backend_stats_t &out) const
 {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    out.frame_wait_timeouts = wait_timeout_count_;
     out.video_event_wakes = video_event_wakes_;
+    out.video_frames_from_lib = video_frames_from_lib_;
     out.audio_dma_event_wakes = audio_event_wakes_;
     out.extra_audio_event_wakes = extra_audio_event_wakes_;
-    out.audio_frames_from_driver = audio_frames_from_driver_;
-    out.audio_bytes_from_driver = audio_bytes_from_driver_;
+    out.audio_frames_from_lib = audio_frames_from_lib_;
     out.get_frame_timing_samples = get_frame_timing_samples_;
     out.get_frame_timing_average_us = get_frame_timing_samples_
         ? get_frame_timing_total_us_ / static_cast<double>(get_frame_timing_samples_) : 0.0;

@@ -20,12 +20,11 @@ typedef struct
     int running;
     int frame_held;
     uint32_t event_queue_depth;
-    uint64_t frame_wait_timeouts;
     uint64_t video_event_wakes;
+    uint64_t video_frames_from_lib;
     uint64_t audio_dma_event_wakes;
     uint64_t extra_audio_event_wakes;
-    uint64_t audio_frames_from_driver;
-    uint64_t audio_bytes_from_driver;
+    uint64_t audio_frames_from_lib;
     uint64_t get_frame_timing_samples;
     double get_frame_timing_average_us;
     double get_frame_timing_max300_us;

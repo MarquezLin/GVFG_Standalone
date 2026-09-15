@@ -189,6 +189,12 @@ struct gvfg_channel_session_t
         const gvfg_status_t cfg = configureStream();
         if (cfg != GVFG_OK)
             return cfg;
+        if (audioEnabled)
+        {
+            const gvfg_status_t audioStatus = session->get_audio_format(cachedAudioFormat);
+            if (audioStatus != GVFG_OK)
+                return audioStatus;
+        }
 
         resetRuntimeCounters();
         {
@@ -326,14 +332,10 @@ struct gvfg_channel_session_t
         if (!session)
             return reject(GVFG_ESTATE, "configure stream rejected: channel is not open");
 
-        const gvfg_status_t signalStatus = querySignal();
-        if (signalStatus != GVFG_OK)
-            return signalStatus;
-
         const gvfg_status_t st = session->configure_stream();
         if (st != GVFG_OK)
             return st;
-        return GVFG_OK;
+        return querySignal();
     }
 
     gvfg_status_t readFrame(gvfg_frame_t &out, uint32_t timeoutMs)
@@ -386,6 +388,7 @@ struct gvfg_channel_session_t
             }
             else
             {
+                frame.frame_id = ++videoFrameId;
                 heldSessionFrame = frame;
                 readInProgress = false;
                 frameHeld = true;
@@ -594,6 +597,7 @@ struct gvfg_channel_session_t
         const gvfg_status_t status = session->get_audio_format(format);
         if (status != GVFG_OK)
             return status;
+        cachedAudioFormat = format;
         out.sample_rate = format.sample_rate;
         out.channels = format.channels;
         out.bits_per_sample = format.bits_per_sample;
@@ -617,16 +621,14 @@ struct gvfg_channel_session_t
             audioReadInProgress = true;
         }
 
-        GigabyteAudioInfo format{};
-        gvfg_status_t status = session->get_audio_format(format);
+        const GigabyteAudioInfo format = cachedAudioFormat;
+        gvfg_status_t status = format.frame_bytes != 0 ? GVFG_OK : GVFG_ESTATE;
         uint32_t bytes = 0;
-        uint64_t frameCount = 0;
         if (status == GVFG_OK)
         {
             audioBuffer.resize(format.frame_bytes);
             status = session->wait_audio(timeoutMs, audioBuffer.data(),
-                                         static_cast<uint32_t>(audioBuffer.size()), bytes,
-                                         frameCount);
+                                         static_cast<uint32_t>(audioBuffer.size()), bytes);
         }
 
         {
@@ -642,7 +644,7 @@ struct gvfg_channel_session_t
             out.sample_rate = format.sample_rate;
             out.channels = format.channels;
             out.bits_per_sample = format.bits_per_sample;
-            out.frame_id = frameCount;
+            out.frame_id = ++audioFrameId;
             out.timestamp_ns = now_ns();
             heldAudioFrame = out;
         }
@@ -711,6 +713,8 @@ struct gvfg_channel_session_t
         deliveredBitDepth.store(0, std::memory_order_relaxed);
         deliveredPixelFormat.store(GVFG_PIXFMT_UNKNOWN, std::memory_order_relaxed);
         runtimeFps.store(0.0, std::memory_order_relaxed);
+        videoFrameId = 0;
+        audioFrameId = 0;
     }
 
     void noteDeliveredFrame(int frameWidth, int frameHeight, int bitDepth, int pixelFormat)
@@ -728,6 +732,7 @@ struct gvfg_channel_session_t
     uint32_t selectedChannel = GVFG_CHANNEL_0;
     bool zeroCopyRequested = false;
     bool audioEnabled = false;
+    GigabyteAudioInfo cachedAudioFormat{};
 
     uint32_t width = 0;
     uint32_t height = 0;
@@ -748,11 +753,13 @@ struct gvfg_channel_session_t
     std::mutex frameMutex;
     bool readInProgress = false;
     bool frameHeld = false;
+    uint64_t videoFrameId = 0;
     gvfg_frame_t heldSessionFrame{};
     std::mutex audioMutex;
     std::vector<uint8_t> audioBuffer;
     bool audioReadInProgress = false;
     bool audioFrameHeld = false;
+    uint64_t audioFrameId = 0;
     gvfg_audio_frame_t heldAudioFrame{};
     std::mutex eventMutex;
     std::condition_variable eventCv;

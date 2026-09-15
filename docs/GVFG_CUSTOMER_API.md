@@ -166,7 +166,7 @@ Audio 採用相同的 pull 與 ownership 模型：
 - `width`、`height`：影像尺寸。
 - `row_stride_bytes`：相鄰兩列起點的 byte 距離。
 - `pixel_format`、`bit_depth`：原生 payload 格式。
-- `frame_id`：GigabyteLib `GVFG_VIDEO_INFO.FrameCount`。
+- `frame_id`：SDK 成功交付序號；每次 channel Start 從 1 重新開始。
 - `timestamp_ns`：SDK monotonic delivery timestamp，與 audio 使用相同 clock domain。
 
 ### PCM audio
@@ -179,7 +179,7 @@ Audio 採用相同的 pull 與 ownership 模型：
 
 - `data`、`data_size`：SDK-owned PCM 與本次有效 byte 數。
 - `sample_rate`、`channels`、`bits_per_sample`：此 frame 的 PCM 格式。
-- `frame_id`：GigabyteLib `GVFG_AUDIO_INFO.FrameCount`。
+- `frame_id`：SDK 成功交付序號；每次 channel Start 從 1 重新開始。
 - `timestamp_ns`：SDK monotonic delivery timestamp，與 video 使用相同 clock domain。
 
 `timestamp_ns` 用於比較同一 process/session 內的 video/audio delivery timing；它
