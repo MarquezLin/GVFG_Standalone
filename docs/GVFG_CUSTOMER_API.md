@@ -206,8 +206,9 @@ audio API 不是 zero-copy，但上層仍使用和 video 相同的 read/release 
   channel 選擇的模式。
 - `gvfg_open_channel(handle, device_index, channel)`：開啟列舉所得裝置，channel
   必須為 `GVFG_CHANNEL_0` 或 `GVFG_CHANNEL_1`。
-- `gvfg_start_channel(handle, channel)`：開始指定 channel 擷取。若目前無訊號，成功進入訊號監看模式；此時
-  frame read 會 timeout，訊號接上後 SDK 會自動開始擷取。
+- `gvfg_start_channel(handle, channel)`：開始指定 channel 擷取。每次明確 Start 都會重新查詢一次
+  signal；若目前沒有 lock，回傳 `GVFG_ETIMEOUT`，channel 維持 stopped，接上訊號後須由
+  Application 再次呼叫 Start。
 - `gvfg_stop(handle)`：停止擷取；重複呼叫仍回傳成功。
 - `gvfg_destroy(handle)`：必要時先停止，再銷毀 handle。銷毀後不得再使用。
 
@@ -240,7 +241,8 @@ Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，destroy/c
 
 - `gvfg_get_channel_signal_status(handle, channel, &status)`：查詢指定 channel 的連線、尺寸、
   原生格式與 bit depth。沒有輸入訊號是正常狀態：回傳 `GVFG_OK` 且
-  `connected == 0`。
+  `connected == 0`。Channel 尚未 running 時會向 GigabyteLib 更新；running 期間則回傳
+  SDK cache，不再額外讀取硬體。
 - `gvfg_get_channel_runtime_info(handle, channel, &info)`：取得指定 channel 已交付 frame 數與
   依 read 間隔估算的 `capture_fps`。start 時統計值重設。
 
@@ -256,7 +258,9 @@ Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，destroy/c
 | `GVFG_EVENT_VIDEO_INPUT_UNPLUG`   | Lib 的 video input unplug event   |
 
 呼叫前應將 `gvfg_event_t` 清零並設定 `struct_size = sizeof(gvfg_event_t)`。
-事件是狀態通知，不取代 `gvfg_get_channel_signal_status()`；需要完整 metadata 時應重新查詢。
+SDK 會在 format changed、input plug-in 或 input unplug event 放入 public queue 前先同步
+signal cache。Application 收到事件後可呼叫 `gvfg_get_channel_signal_status()` 取得對應的新狀態；
+running 期間此查詢讀取 cache，不會再次向 driver 查詢。
 
 ## 7. GPU 同步轉換
 

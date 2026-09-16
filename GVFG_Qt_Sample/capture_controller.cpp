@@ -234,12 +234,10 @@ bool CaptureController::openChannel(int channel)
 
     if (newlyOpened)
     {
-        refreshSdiInfo(channel);
         appendLog(QStringLiteral("Opened device index %1 CH%2 | mode=%3")
                       .arg(selectedDeviceIndex_)
                       .arg(channel)
                       .arg(zeroCopyEnabled ? QStringLiteral("zero-copy") : QStringLiteral("copy")));
-        updateSignalStatus();
     }
     return true;
 }
@@ -265,6 +263,29 @@ bool CaptureController::applyOutputFormat(int channel)
 
 void CaptureController::closeDevice()
 {
+    closeDeviceSession(true);
+}
+
+void CaptureController::closeDeviceIfIdle()
+{
+    if (closingDevice_ || handle_ == nullptr)
+        return;
+
+    for (const ChannelRuntime &channel : channels_)
+    {
+        if (channel.running.load(std::memory_order_acquire))
+            return;
+    }
+
+    closeDeviceSession(false);
+}
+
+void CaptureController::closeDeviceSession(bool clearSelection)
+{
+    if (closingDevice_)
+        return;
+    closingDevice_ = true;
+
     if (runtimeStatusTimer_)
         runtimeStatusTimer_->stop();
 
@@ -288,7 +309,8 @@ void CaptureController::closeDevice()
     emit statusChanged(QStringLiteral("Idle"));
     lastSignalStatusText_.clear();
     emit sdiInfoChanged(QStringLiteral("SDI Info: --"));
-    selectedDeviceIndex_ = -1;
+    if (clearSelection)
+        selectedDeviceIndex_ = -1;
     for (ChannelRuntime &channel : channels_)
     {
         channel.opened = false;
@@ -297,6 +319,7 @@ void CaptureController::closeDevice()
         channel.cachedSdiInfoText.clear();
         channel.lastLoggedInputStatus.clear();
     }
+    closingDevice_ = false;
     emit stateChanged();
 }
 
@@ -307,17 +330,14 @@ void CaptureController::startCapture(int channelIndex)
         return;
 
     if (!openChannel(channelIndex))
-        return;
-
-    // Consume queued events, then query the current Lib signal state once for
-    // this explicit Start request. The periodic UI update only uses the cache.
-    processPendingEvents();
-    updateSignalStatus();
-    if (!channel.haveCachedSignalStatus || !channel.cachedSignalStatus.connected)
     {
-        appendLog(QStringLiteral("CH%1 [LIB] No input signal; start skipped").arg(channelIndex));
+        closeDeviceIfIdle();
         return;
     }
+
+    // Consume queued events, then let gvfg_start_channel perform the single
+    // fresh signal query used to accept or reject this explicit Start.
+    processPendingEvents();
 
     const bool audioEnabled = channel.requestedAudio;
     channel.audioFormat = {};
@@ -328,6 +348,7 @@ void CaptureController::startCapture(int channelIndex)
         if (audioStatus != GVFG_OK)
         {
             reportError(QStringLiteral("gvfg_get_channel_audio_format"), audioStatus, channelIndex);
+            closeDeviceIfIdle();
             return;
         }
         if (channel.audioFormat.channels == 0 || channel.audioFormat.sample_rate == 0 ||
@@ -340,8 +361,37 @@ void CaptureController::startCapture(int channelIndex)
                           .arg(channel.audioFormat.sample_rate)
                           .arg(channel.audioFormat.channels)
                           .arg(channel.audioFormat.bits_per_sample));
+            closeDeviceIfIdle();
             return;
         }
+    }
+
+    channel.startupStartTime = std::chrono::steady_clock::now();
+    const gvfg_status_t st = gvfg_start_channel(handle_, channelIndex);
+    const auto startupStartCallEnd = std::chrono::steady_clock::now();
+    channel.startupStartCallMs =
+        std::chrono::duration<double, std::milli>(
+            startupStartCallEnd - channel.startupStartTime)
+            .count();
+    if (st != GVFG_OK)
+    {
+        reportError(QStringLiteral("gvfg_start_channel"), st, channelIndex);
+        emit previewCloseRequested(channelIndex);
+        emit stateChanged();
+        closeDeviceIfIdle();
+        return;
+    }
+
+    // While the SDK channel is running this returns the signal state cached by
+    // gvfg_start_channel, without another GigabyteLib/driver read.
+    updateSignalStatus();
+    refreshSdiInfo(channelIndex);
+    if (!channel.haveCachedSignalStatus || !channel.cachedSignalStatus.connected)
+    {
+        appendLog(QStringLiteral("CH%1 [SDK] Started without cached signal state; stopping")
+                      .arg(channelIndex));
+        closeDeviceIfIdle();
+        return;
     }
 
     channel.frameAvailable.store(false, std::memory_order_release);
@@ -351,6 +401,7 @@ void CaptureController::startCapture(int channelIndex)
     if (!applyPreview(channelIndex))
     {
         emit previewCloseRequested(channelIndex);
+        closeDeviceIfIdle();
         return;
     }
 
@@ -369,24 +420,10 @@ void CaptureController::startCapture(int channelIndex)
     if (gvfg_preview_wait_idle(channel.previewHandle, 2000) != GVFG_PREVIEW_OK)
     {
         appendLog(QStringLiteral("CH%1 [APP] WARNING preview busy from previous run; start skipped").arg(channelIndex));
-        return;
-    }
-    channel.startupStartTime = std::chrono::steady_clock::now();
-    const gvfg_status_t st = gvfg_start_channel(handle_, channelIndex);
-    const auto startupStartCallEnd = std::chrono::steady_clock::now();
-    channel.startupStartCallMs =
-        std::chrono::duration<double, std::milli>(
-            startupStartCallEnd - channel.startupStartTime)
-            .count();
-    if (st != GVFG_OK)
-    {
-        reportError(QStringLiteral("gvfg_start_channel"), st, channelIndex);
         emit previewCloseRequested(channelIndex);
-        updateSignalStatus();
-        emit stateChanged();
+        closeDeviceIfIdle();
         return;
     }
-
     channel.previewFailureCount = 0;
     channel.getFrameAverageMs.store(0.0, std::memory_order_relaxed);
     channel.getFrameMaximumMs.store(0.0, std::memory_order_relaxed);
@@ -451,11 +488,15 @@ void CaptureController::stopCapture(int channelIndex)
         channel.audioEnabled = false;
         emit previewCloseRequested(channelIndex);
         appendLog(QStringLiteral("CH%1 Stopped capture").arg(channelIndex));
-        updateSignalStatus();
     }
 
     channel.frameAvailable.store(false, std::memory_order_release);
-    emit stateChanged();
+    closeDeviceIfIdle();
+    if (handle_ != nullptr)
+    {
+        updateSignalStatus();
+        emit stateChanged();
+    }
 }
 
 void CaptureController::stopAllCaptures()

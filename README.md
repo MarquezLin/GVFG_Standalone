@@ -97,6 +97,11 @@ input unplug events；audio 開啟時才使用 audio frame events。Application 
 `GVFG_EVENT_VIDEO_INPUT_PLUGIN` 或 stop 再喚醒 worker，不應在已知無訊號時持續
 輪詢 timeout。
 
+每次明確呼叫 `gvfg_start_channel()` 都會重新查詢一次 signal；沒有 lock 時回傳
+`GVFG_ETIMEOUT`，channel 不會進入 running。Running 期間的 signal status 由 SDK
+cache 提供，format changed、input plug-in 與 input unplug event 會先同步 cache，
+再讓 Application poll 到對應事件，因此一般狀態顯示不會重複讀取硬體。
+
 每個成功取得的 video/audio frame 都包含 `timestamp_ns`。兩者使用相同的
 monotonic SDK delivery clock，可供 Application 做 soft A/V sync；它不是硬體
 capture timestamp，也不能跨 process 或 session 比較。
@@ -162,6 +167,9 @@ runtime API 都明確要求 `channel_index`；不再保留隱含 selected-channe
 `gvfg_qt_preview.exe` 只使用 public API，主畫面只顯示 input 與 Preview
 狀態；CH0、CH1 各自有 Start、Stop 與獨立 Preview 視窗，可單獨測試，
 也可同時啟動。第二個 channel open/start 失敗時不會停止已運作的 channel。
+Sample 的 Start 會在需要時 open device；Stop 指定 channel 後，若另一個 channel 也未
+running，Sample 會 destroy handle 並釋放 device，但保留 UI 的裝置選擇，供下次 Start
+重新 open。這是 Sample lifecycle policy；公開 `gvfg_stop_channel()` 本身不會 destroy handle。
 關閉獨立 Preview 視窗只會停止該視窗的 frame submission；capture/audio 仍可繼續，
 未顯示的 frame 不計為 preview delivery failure。重新開啟 Preview 或 Fullscreen 會
 恢復 frame submission。

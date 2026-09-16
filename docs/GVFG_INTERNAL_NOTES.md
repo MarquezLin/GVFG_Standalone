@@ -91,11 +91,9 @@ Created/Closed -> Opened -> Running -> Opened -> Destroyed
 ```
 
 - `open()` 會先 close 舊 backend、建立 logical session 並設定 channel；此時尚未必呼叫
-  `GvfgOpenDev()`。Vendor channel、event handles 與初始 signal descriptor 在第一次
-  set-format/query/start 需要時才建立。
-- `start()` 先 `configureStream()`，清空 facade event queue，再啟動 backend。
-- 無訊號時使用最小 placeholder descriptor 進入 event-monitoring mode；訊號恢復後
-  backend 依真實 descriptor 啟用 DMA。
+  `GvfgOpenDev()`。Vendor channel 與 event handles 在第一次 set-format/query/start 需要時建立。
+- `start()` 先執行一次新的 `querySignal()`；沒有 lock 時回 `GVFG_ETIMEOUT`，不進入 running。
+  Signal 有效時才以該 descriptor 執行 `configureStream()`、清空 facade event queue 並啟動 backend。
 - `stop()` 先清除 running、釋放 facade held frame、停止 backend，最後清空 event queue
   並喚醒 event poll。
 - `destroy()` 允許 NULL，並透過 destructor/close 保證 stop。
@@ -186,12 +184,13 @@ Facade queue 上限為 64；滿時丟棄最舊事件。`pollEvent()` 只允許 r
 non-blocking、有限 timeout 與 infinite wait；stop 透過 `eventCv` 喚醒 waiter。
 
 目前 backend 在 format-changed／plug-in event 後更新 cached video info；unplug 則先清空
-cached signal，再送 public event。Running 期間的 plug-in event 會喚醒 read；SDK event worker
+cached signal。Facade callback 會先將 backend cache 同步到 channel cache，再把 public event
+放入 queue。Running 期間的 plug-in event 會喚醒 read；SDK event worker
 等待 held video frame release，並以同一把 Lib capture lock 避開進行中的 video/audio frame call，
 再執行一次 `GvfgStopCapture()` → `GvfgStartCapture()`。Application 只處理事件顯示，不控制重啟；
 此恢復只由 plug-in event 驅動，不 polling。
 
-更動 driver event mapping 或 recovery 流程時，要同時驗證無訊號啟動、拔插、解析度
+更動 driver event mapping 或 recovery 流程時，要同時驗證無訊號 Start 回傳、拔插、解析度
 切換及 stop-during-wait，並確認 consumer 收到事件時對應 cache 已經完成更新。
 
 ## 7. Internal debug API
@@ -264,13 +263,14 @@ frame、原生格式限 YUY2/Y210、event queue 非持久化且可能淘汰最�
 
 ### Lib query 維護規則
 
-1. **VideoInfo query 已快取。** `GvfgSetVideoColorDepth()` 成功後更新一次；start/configure
-   只在 cache 尚未有效時查詢。format/plugin event 先更新 cache 再通知 consumer。
+1. **VideoInfo query 已快取。** `GvfgSetVideoColorDepth()` 只使 cache 失效，不立即查詢；每次明確
+   Start 由 `configureStream()` 前執行一次新的 signal query。Running 期間 status getter 只讀 cache；
+   format/plugin/unplug event 先同步 backend 與 facade cache，再通知 consumer。
 2. **AudioInfo query 已快取。** 第一次需要 audio format 時更新；Sample getter 與 start
    共用同一份 cache，Stop/Start 不重查。
-3. **SDI Info query 已改為事件驅動。** 第一次 channel open 可讀一次；之後只在 video format changed、
-   input plug-in 或 input unplug event 驅動更新。200 ms UI timer、一般 status render、
-   Stop/Start 都不得重查；新值與 cache 相同時不重設 UI。
+3. **Sample 的 SDI Info query 以 Start/event 為邊界。** Start 成功後讀一次；之後只在 video
+   format changed、input plug-in 或 input unplug event 更新。200 ms UI timer 與一般 status
+   render 不得重查；新值與 cache 相同時不重設 UI。
 
 ### 後續邊界維護
 

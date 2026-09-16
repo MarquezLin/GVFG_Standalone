@@ -254,7 +254,7 @@ struct gvfg_channel_session_t
         if (!session)
             return reject(GVFG_ESTATE, "gvfg_get_channel_signal_status rejected: channel is not open");
         std::memset(&out, 0, sizeof(out));
-        const gvfg_status_t status = querySignal();
+        const gvfg_status_t status = running ? syncCachedSignal() : querySignal();
         {
             std::lock_guard<std::mutex> lock(stateMutex);
             out.connected = signalConnected ? 1 : 0;
@@ -263,6 +263,7 @@ struct gvfg_channel_session_t
             out.height = static_cast<int>(height);
             out.pixel_format = static_cast<int>(pixelFormat);
             out.bit_depth = static_cast<int>(bitDepth);
+            out.video_interface = videoInterface;
         }
         return status;
     }
@@ -291,6 +292,7 @@ struct gvfg_channel_session_t
         auto *self = static_cast<gvfg_channel_session_t *>(user);
         if (!self)
             return;
+        self->syncCachedSignal();
         self->emitEvent(event);
     }
 
@@ -323,8 +325,27 @@ struct gvfg_channel_session_t
         pixelFormat = status == GVFG_OK
                           ? static_cast<gvfg_pixel_format_t>(sig.pixel_format)
                           : GVFG_PIXFMT_UNKNOWN;
+        videoInterface = status == GVFG_OK ? sig.video_interface : 0;
         signalConnected = status == GVFG_OK && sig.connected != 0;
         return status;
+    }
+
+    gvfg_status_t syncCachedSignal()
+    {
+        if (!session)
+            return GVFG_ESTATE;
+
+        gvfg_signal_status_t sig{};
+        session->get_cached_signal_status(sig);
+
+        std::lock_guard<std::mutex> lock(stateMutex);
+        width = sig.width > 0 ? static_cast<uint32_t>(sig.width) : 0;
+        height = sig.height > 0 ? static_cast<uint32_t>(sig.height) : 0;
+        bitDepth = sig.bit_depth > 0 ? static_cast<uint32_t>(sig.bit_depth) : 0;
+        pixelFormat = static_cast<gvfg_pixel_format_t>(sig.pixel_format);
+        videoInterface = sig.video_interface;
+        signalConnected = sig.connected != 0;
+        return GVFG_OK;
     }
 
     gvfg_status_t configureStream()
@@ -335,7 +356,16 @@ struct gvfg_channel_session_t
         const gvfg_status_t st = session->configure_stream();
         if (st != GVFG_OK)
             return st;
-        return querySignal();
+        const gvfg_status_t signalStatus = querySignal();
+        if (signalStatus != GVFG_OK)
+            return signalStatus;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex);
+            if (!signalConnected)
+                return reject(GVFG_ETIMEOUT,
+                              "gvfg_start_channel rejected: no input signal");
+        }
+        return GVFG_OK;
     }
 
     gvfg_status_t readFrame(gvfg_frame_t &out, uint32_t timeoutMs)
@@ -721,6 +751,7 @@ struct gvfg_channel_session_t
     uint32_t height = 0;
     uint32_t bitDepth = 0;
     gvfg_pixel_format_t pixelFormat = GVFG_PIXFMT_UNKNOWN;
+    int videoInterface = 0;
     bool signalConnected = false;
     mutable std::mutex stateMutex;
     std::atomic<uint64_t> fpsWindowStartNs{0};

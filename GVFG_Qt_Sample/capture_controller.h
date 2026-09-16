@@ -64,6 +64,8 @@ signals:
 private:
     bool openDevice();
     bool applyOutputFormat(int channel);
+    void closeDeviceSession(bool clearSelection);
+    void closeDeviceIfIdle();
 
     struct ChannelRuntime
     {
@@ -125,4 +127,5 @@ private:
     std::array<bool, 2> channelStatusVisible_{{true, true}};
     QTimer *runtimeStatusTimer_ = nullptr;
     QString lastSignalStatusText_;
+    bool closingDevice_ = false;
 };

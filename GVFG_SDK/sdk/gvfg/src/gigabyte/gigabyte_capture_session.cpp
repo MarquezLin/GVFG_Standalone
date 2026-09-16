@@ -139,6 +139,10 @@ void GigabyteCaptureSession::close_vendor_channel() const
         std::lock_guard<std::mutex> lock(state_mutex_);
         video_info_valid_ = false;
         audio_info_valid_ = false;
+        cached_signal_ = {};
+        cached_signal_.channel = channel_;
+        video_info_ = {};
+        audio_info_ = {};
     }
     if (context_)
         GvfgCloseDev(&context_);
@@ -214,7 +218,12 @@ gvfg_status_t GigabyteCaptureSession::set_video_format(gvfg_pixel_format_t forma
                                  : GVFG_VIDEO_COLOR_DEPTH_8_BITS;
     const gvfg_status_t status = from_vendor(
         GvfgSetVideoColorDepth(context_, channel_, colorDepth));
-    return status == GVFG_OK ? refresh_video_info() : status;
+    if (status == GVFG_OK)
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        video_info_valid_ = false;
+    }
+    return status;
 }
 
 gvfg_status_t GigabyteCaptureSession::refresh_video_info() const
@@ -364,17 +373,6 @@ gvfg_status_t GigabyteCaptureSession::configure_stream()
     const gvfg_status_t openStatus = ensure_vendor_channel_open();
     if (openStatus != GVFG_OK)
         return openStatus;
-    bool refresh = false;
-    {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        refresh = !video_info_valid_;
-    }
-    if (refresh)
-    {
-        const gvfg_status_t status = refresh_video_info();
-        if (status != GVFG_OK)
-            return status;
-    }
     configured_ = true;
     return GVFG_OK;
 }
@@ -535,6 +533,12 @@ gvfg_status_t GigabyteCaptureSession::release_frame()
     }
     recovery_cv_.notify_all();
     return GVFG_OK;
+}
+
+void GigabyteCaptureSession::get_cached_signal_status(gvfg_signal_status_t &out) const
+{
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    out = cached_signal_;
 }
 
 gvfg_status_t GigabyteCaptureSession::wait_audio(

@@ -136,13 +136,14 @@ currentIndex = -1
 
 ## 5. Start 與 buffer 配置
 
-`gvfg_start_channel()` 先執行 `configureStream()`：
+`gvfg_start_channel()` 先執行一次新的 signal query，再進入 `configureStream()`：
 
-1. 讀取 signal status。
-2. 決定 width、height、pixel format。
-3. 呼叫 backend `configure_stream()`。
-4. 使用 GigabyteLib `GVFG_VIDEO_INFO.cbBufSize` 作為 frame buffer size。
-5. 清除上一份 held/read/timing state。
+1. 透過 GigabyteLib 讀取當下 signal status，不沿用停止前的 cache。
+2. 沒有 lock 時回傳 `GVFG_ETIMEOUT`，channel 不進入 running。
+3. 決定 width、height、pixel format。
+4. 呼叫 backend `configure_stream()`。
+5. 使用 GigabyteLib `GVFG_VIDEO_INFO.cbBufSize` 作為 frame buffer size。
+6. 清除上一份 held/read/timing state。
 
 Copy mode：
 
@@ -158,7 +159,7 @@ copy_buffer_.clear();
 
 因為影像記憶體由 driver/DMA 提供，SDK 不需要配置完整 frame storage。
 
-當沒有輸入訊號時，configure 使用最小 placeholder 讓 event monitoring 可以運作；訊號恢復後會依真實格式重建 buffer。
+只有 signal 有效才配置 stream buffer 並啟動；沒有輸入訊號不建立 placeholder stream。
 
 ## 6. 第一次 read 如何啟動 DMA
 
@@ -300,7 +301,9 @@ Event thread 監聽：
 - plug in
 - plug out
 
-Event 會更新 backend state，並透過 callback 放進 facade `eventQueue`。Application 使用 `gvfg_poll_channel_event()` 消費。
+Event 會先更新 backend state；callback 再把 backend signal cache 同步到 facade channel cache，
+最後才放進 `eventQueue`。因此 Application poll 到事件後讀到的是同一事件對應的 cache，
+running 期間 `gvfg_get_channel_signal_status()` 不會再觸發硬體查詢。
 
 事件不是 frame data；它們只改變控制狀態與觸發重新確認／重建流程。
 

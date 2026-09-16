@@ -332,10 +332,14 @@ gvfg_status_t gvfg_start_channel(gvfg_handle handle, int channel_index);
 ```
 
 - `handle`：已成功 open 的 session handle。
-- `GVFG_OK`：開始擷取、已經 running，或無訊號但成功進入訊號監看模式。
+- `GVFG_OK`：開始擷取，或 channel 已經 running。
 - `GVFG_EINVAL`：handle 為 NULL。
 - `GVFG_ESTATE`：尚未 open 裝置。
+- `GVFG_ETIMEOUT`：本次 Start 的即時 signal query 顯示沒有 lock；channel 不會進入 running。
 - GigabyteLib 失敗時回傳原始正數 `GVFG_HRESULT`。
+
+每次明確 Start 都會執行一次新的 signal query，不沿用停止前的 signal cache。無訊號時
+Application 應等待輸入恢復後再次呼叫 Start。
 
 ### 1.21 `gvfg_read_channel_frame`
 
@@ -489,6 +493,10 @@ gvfg_status_t gvfg_get_channel_signal_status(
 - `GVFG_EINVAL`：handle 或 output pointer 為 NULL。
 - `GVFG_ESTATE`：尚未 open 裝置。
 - 也可能回傳其他 backend I/O 狀態。
+
+Channel 尚未 running 時，此 API 會透過 GigabyteLib 更新 signal status；running 期間回傳
+SDK cache，不進行另一筆硬體查詢。Format changed、input plug-in 與 input unplug event
+都會先同步此 cache，再放入 `gvfg_poll_channel_event()` 使用的 public queue。
 
 ### 1.31 `gvfg_get_channel_runtime_info`
 

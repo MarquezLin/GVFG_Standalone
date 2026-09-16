@@ -385,16 +385,16 @@ extern "C"
      * - handle: Running session handle.
      *
      * Returns:
-     * - GVFG_OK on success, including when capture is already running or the SDK
-     *   has entered signal-monitoring mode while no input is connected.
+     * - GVFG_OK on success, including when capture is already running.
      * - GVFG_EINVAL if handle is NULL.
      * - GVFG_ESTATE if no device is open.
+     * - GVFG_ETIMEOUT if a fresh signal query reports no connected input.
      * - GVFG_EIO or another status code if stream configuration/start fails.
      *
      * After success, call gvfg_read_channel_frame() to receive frames and
      * gvfg_poll_channel_event()
-     * to receive capture events. With no input signal, frame reads time out; capture
-     * starts automatically after a signal-connected event.
+     * to receive capture events. Each explicit start performs one fresh signal
+     * query; a no-signal result does not leave the channel running.
      */
     GVFG_API gvfg_status_t gvfg_start_channel(
         GVFG_PARAM_IN gvfg_handle handle,
@@ -569,7 +569,10 @@ extern "C"
      * - GVFG_ESTATE if no capture device is open.
      *
      * No input signal is a normal state: the function returns GVFG_OK with
-     * out_status->connected set to 0.
+     * out_status->connected set to 0. Before capture starts, this function
+     * refreshes the status from GigabyteLib. While capture is running, it returns
+     * the SDK cache; format-change, input-plug and input-unplug processing updates
+     * that cache before the corresponding public event is queued.
      */
     GVFG_API gvfg_status_t gvfg_get_channel_signal_status(
         GVFG_PARAM_IN gvfg_handle handle,
