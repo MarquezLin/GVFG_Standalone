@@ -21,6 +21,8 @@
 namespace
 {
     constexpr size_t kMaxQueuedAudioFrames = 10;
+    constexpr int kAudioSampleRate = 48000;
+    constexpr int kAudioChannelCount = 2;
 
 #if GVFG_INTERNAL_DIAGNOSTICS
     QString boolText(int value) { return value ? QStringLiteral("yes") : QStringLiteral("no"); }
@@ -306,18 +308,23 @@ void CaptureController::closeDeviceSession(bool clearSelection)
         appendLog(QStringLiteral("Closed device"));
     }
 
-    emit statusChanged(QStringLiteral("Idle"));
-    lastSignalStatusText_.clear();
-    emit sdiInfoChanged(QStringLiteral("SDI Info: --"));
     if (clearSelection)
+    {
+        emit statusChanged(QStringLiteral("Idle"));
+        lastSignalStatusText_.clear();
+        emit sdiInfoChanged(QStringLiteral("SDI Info: --"));
         selectedDeviceIndex_ = -1;
+    }
     for (ChannelRuntime &channel : channels_)
     {
         channel.opened = false;
-        channel.cachedSignalStatus = {};
-        channel.haveCachedSignalStatus = false;
-        channel.cachedSdiInfoText.clear();
-        channel.lastLoggedInputStatus.clear();
+        if (clearSelection)
+        {
+            channel.cachedSignalStatus = {};
+            channel.haveCachedSignalStatus = false;
+            channel.cachedSdiInfoText.clear();
+            channel.lastLoggedInputStatus.clear();
+        }
     }
     closingDevice_ = false;
     emit stateChanged();
@@ -351,10 +358,9 @@ void CaptureController::startCapture(int channelIndex)
             closeDeviceIfIdle();
             return;
         }
-        if (channel.audioFormat.channels == 0 || channel.audioFormat.sample_rate == 0 ||
-            (channel.audioFormat.bits_per_sample != 8 &&
-             channel.audioFormat.bits_per_sample != 16 &&
-             channel.audioFormat.bits_per_sample != 32))
+        if (channel.audioFormat.sample_rate != kAudioSampleRate ||
+            channel.audioFormat.channels != kAudioChannelCount ||
+            channel.audioFormat.bits_per_sample != 16)
         {
             appendLog(QStringLiteral("CH%1 [APP] ERROR audio format unsupported | %2 Hz %3 ch %4-bit")
                           .arg(channelIndex)
@@ -376,6 +382,11 @@ void CaptureController::startCapture(int channelIndex)
     if (st != GVFG_OK)
     {
         reportError(QStringLiteral("gvfg_start_channel"), st, channelIndex);
+        if (st == GVFG_ETIMEOUT)
+        {
+            updateSignalStatus();
+            refreshSdiInfo(channelIndex);
+        }
         emit previewCloseRequested(channelIndex);
         emit stateChanged();
         closeDeviceIfIdle();
@@ -485,6 +496,7 @@ void CaptureController::stopCapture(int channelIndex)
         gvfg_stop_channel(handle_, channelIndex);
         channel.running.store(false, std::memory_order_release);
         channel.frameAvailable.store(false, std::memory_order_release);
+        updateSignalStatus(false);
         channel.audioEnabled = false;
         emit previewCloseRequested(channelIndex);
         appendLog(QStringLiteral("CH%1 Stopped capture").arg(channelIndex));
