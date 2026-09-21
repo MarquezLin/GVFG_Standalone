@@ -88,6 +88,9 @@ public:
         int sourceBitDepth = frame.bit_depth > 0 ? frame.bit_depth : 8;
         if (frame.pixel_format == GVFG_PREVIEW_PIXFMT_Y210)
             sourceBitDepth = 10;
+        else if (frame.pixel_format == GVFG_PREVIEW_PIXFMT_GRAY16 ||
+                 frame.pixel_format == GVFG_PREVIEW_PIXFMT_RGBA16)
+            sourceBitDepth = 16;
         if (!ensureDevice() || !ensureWorkerLocked() ||
             !ensureUploadSlotsLocked(frame.width, frame.height, frame.pixel_format))
             return false;
@@ -125,6 +128,12 @@ public:
         }
         const size_t rowBytes = frame.pixel_format == GVFG_PREVIEW_PIXFMT_Y210
                                     ? static_cast<size_t>(frame.width) * 4u
+                                : frame.pixel_format == GVFG_PREVIEW_PIXFMT_GRAY16
+                                    ? static_cast<size_t>(frame.width) * 2u
+                                : frame.pixel_format == GVFG_PREVIEW_PIXFMT_RGBA16
+                                    ? static_cast<size_t>(frame.width) * 8u
+                                : frame.pixel_format == GVFG_PREVIEW_PIXFMT_DICOM_YBR_FULL_422
+                                    ? static_cast<size_t>((frame.width + 1) / 2) * 8u
                                     : static_cast<size_t>((frame.width + 1) / 2) * 4u;
         if (mapped.RowPitch == rowBytes && static_cast<size_t>(frame.row_bytes) == rowBytes)
         {
@@ -519,10 +528,33 @@ private:
             if (slot.state == SlotState::Uploading || slot.state == SlotState::Presenting)
                 return false;
 
-        const DXGI_FORMAT format = pixelFormat == GVFG_PREVIEW_PIXFMT_Y210
-                                       ? DXGI_FORMAT_R16G16B16A16_UINT
-                                       : DXGI_FORMAT_R8G8B8A8_UINT;
-        const UINT textureWidth = static_cast<UINT>((width + 1) / 2);
+        DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+        UINT textureWidth = 0;
+        switch (pixelFormat)
+        {
+        case GVFG_PREVIEW_PIXFMT_YUY2:
+            format = DXGI_FORMAT_R8G8B8A8_UINT;
+            textureWidth = static_cast<UINT>((width + 1) / 2);
+            break;
+        case GVFG_PREVIEW_PIXFMT_Y210:
+            format = DXGI_FORMAT_R16G16B16A16_UINT;
+            textureWidth = static_cast<UINT>((width + 1) / 2);
+            break;
+        case GVFG_PREVIEW_PIXFMT_GRAY16:
+            format = DXGI_FORMAT_R16_UNORM;
+            textureWidth = static_cast<UINT>(width);
+            break;
+        case GVFG_PREVIEW_PIXFMT_RGBA16:
+            format = DXGI_FORMAT_R16G16B16A16_UNORM;
+            textureWidth = static_cast<UINT>(width);
+            break;
+        case GVFG_PREVIEW_PIXFMT_DICOM_YBR_FULL_422:
+            format = DXGI_FORMAT_R16G16B16A16_UINT;
+            textureWidth = static_cast<UINT>((width + 1) / 2);
+            break;
+        default:
+            return false;
+        }
         std::array<UploadSlot, kUploadSlotCount> replacement{};
         for (UploadSlot &slot : replacement)
         {
@@ -601,10 +633,16 @@ private:
                     if (!expired)
                     {
                         d3d_->context->ExecuteCommandList(work.commands.Get(), FALSE);
-                        const gvfg::internal::gvfg_render_pixfmt_t renderFmt =
-                            work.pixelFormat == GVFG_PREVIEW_PIXFMT_Y210
-                                ? gvfg::internal::GVFG_RENDER_FMT_Y210
-                                : gvfg::internal::GVFG_RENDER_FMT_YUY2;
+                        gvfg::internal::gvfg_render_pixfmt_t renderFmt =
+                            gvfg::internal::GVFG_RENDER_FMT_YUY2;
+                        if (work.pixelFormat == GVFG_PREVIEW_PIXFMT_Y210)
+                            renderFmt = gvfg::internal::GVFG_RENDER_FMT_Y210;
+                        else if (work.pixelFormat == GVFG_PREVIEW_PIXFMT_GRAY16)
+                            renderFmt = gvfg::internal::GVFG_RENDER_FMT_GRAY16;
+                        else if (work.pixelFormat == GVFG_PREVIEW_PIXFMT_RGBA16)
+                            renderFmt = gvfg::internal::GVFG_RENDER_FMT_RGBA16;
+                        else if (work.pixelFormat == GVFG_PREVIEW_PIXFMT_DICOM_YBR_FULL_422)
+                            renderFmt = gvfg::internal::GVFG_RENDER_FMT_DICOM_YBR_FULL_422;
                         rendered = pipeline_->render_texture_to_fp16(work.texture.Get(), renderFmt,
                                                                       work.width, work.height, work.view.Get());
                         if (rendered)
@@ -786,6 +824,15 @@ extern "C"
             break;
         case GVFG_PREVIEW_PIXFMT_Y210:
             minimumRowBytes = static_cast<uint64_t>(frame->width) * 4u;
+            break;
+        case GVFG_PREVIEW_PIXFMT_GRAY16:
+            minimumRowBytes = static_cast<uint64_t>(frame->width) * 2u;
+            break;
+        case GVFG_PREVIEW_PIXFMT_RGBA16:
+            minimumRowBytes = static_cast<uint64_t>(frame->width) * 8u;
+            break;
+        case GVFG_PREVIEW_PIXFMT_DICOM_YBR_FULL_422:
+            minimumRowBytes = static_cast<uint64_t>((frame->width + 1) / 2) * 8u;
             break;
         default:
             return GVFG_PREVIEW_ENOTSUP;

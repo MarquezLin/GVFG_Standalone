@@ -198,6 +198,10 @@ bin/gvfg_preview.dll
 
 GPU snapshot/export conversion 已整合在 `gvfg.dll`，不需要額外 helper DLL。
 
+Debug 與 Release Sample package 都部署 SDK Release build 的 `gvfg.dll` 與
+`gvfg_preview.dll`；Debug package 只保留 Debug Sample executable、PDB 與 Qt Debug
+runtime。這可確保兩種 package 使用同一組正式 SDK runtime，並避免誤包舊的 SDK Debug DLL。
+
 Customer/demo package 不應包含 `gvfg_debug.h`、SDK source、GigabyteLib session
 headers、IRQ details 或 helper source。這些只屬於 internal
 debug/full application package。

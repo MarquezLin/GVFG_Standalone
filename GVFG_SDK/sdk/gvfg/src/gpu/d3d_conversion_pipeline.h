@@ -11,7 +11,10 @@ namespace gvfg::internal
 typedef enum
 {
     GVFG_RENDER_FMT_Y210,
-    GVFG_RENDER_FMT_YUY2
+    GVFG_RENDER_FMT_YUY2,
+    GVFG_RENDER_FMT_GRAY16,
+    GVFG_RENDER_FMT_RGBA16,
+    GVFG_RENDER_FMT_DICOM_YBR_FULL_422
 } gvfg_render_pixfmt_t;
 
 typedef enum
@@ -114,6 +117,9 @@ public:
     Microsoft::WRL::ComPtr<ID3D11VertexShader> vs_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_yuy2_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_y210_;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_gray16_;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_rgba16_;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_dicom_ybr_full_422_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_fp16_to_rgba8_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_fp16_to_nv12_y_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> ps_fp16_to_nv12_uv_;
@@ -136,6 +142,7 @@ public:
     bool preview_only_ = false;
     int params_w_ = 0;
     int params_h_ = 0;
+    int params_source_bit_depth_ = 0;
 
     Microsoft::WRL::ComPtr<IDXGISwapChain1> preview_swapchain_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> preview_backbuf_;

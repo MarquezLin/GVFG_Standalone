@@ -4,7 +4,7 @@ setlocal EnableExtensions
 set "PROJECT_DIR=%~dp0"
 set "PROJECT_DIR=%PROJECT_DIR:~0,-1%"
 
-if not defined SDK_SOURCE_BIN set "SDK_SOURCE_BIN=%PROJECT_DIR%\GVFG_SDK\build\Desktop_Qt_6_10_2_MSVC2022_64bit-Debug\bin"
+if not defined SDK_SOURCE_BIN set "SDK_SOURCE_BIN=%PROJECT_DIR%\GVFG_SDK\build\Desktop_Qt_6_10_2_MSVC2022_64bit-Release\bin"
 if not defined SAMPLE_SOURCE_BIN set "SAMPLE_SOURCE_BIN=%PROJECT_DIR%\GVFG_Qt_Sample\build\Desktop_Qt_6_10_2_MSVC2022_64bit-Debug\bin"
 if not defined QT_BIN set "QT_BIN=C:\Qt\6.10.2\msvc2022_64\bin"
 if not defined VSDEVCMD set "VSDEVCMD=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat"

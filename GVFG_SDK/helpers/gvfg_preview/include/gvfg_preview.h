@@ -38,7 +38,15 @@ typedef struct gvfg_preview_handle_t *gvfg_preview_handle;
 typedef enum
 {
     GVFG_PREVIEW_PIXFMT_Y210 = 2,
-    GVFG_PREVIEW_PIXFMT_YUY2 = 3
+    GVFG_PREVIEW_PIXFMT_YUY2 = 3,
+    GVFG_PREVIEW_PIXFMT_GRAY16 = 4,
+
+    /* Four interleaved 16-bit UNORM components per pixel: R, G, B, A. */
+    GVFG_PREVIEW_PIXFMT_RGBA16 = 5,
+
+    /* DICOM native YBR_FULL_422: four 16-bit words per pixel pair,
+     * ordered Y0, Y1, Cb, Cr.  Values are right-aligned to bit_depth. */
+    GVFG_PREVIEW_PIXFMT_DICOM_YBR_FULL_422 = 6
 } gvfg_preview_pixel_format_t;
 
 typedef struct

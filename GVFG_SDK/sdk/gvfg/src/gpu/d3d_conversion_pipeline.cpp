@@ -168,6 +168,59 @@ float4 main(float4 pos:SV_Position, float2 uv:TEXCOORD0) : SV_Target
 }
 )";
 
+// Windowed DICOM display buffer. R16_UNORM normalizes 0..65535 to 0.0..1.0
+// before the value is replicated to RGB in the FP16 intermediate target.
+static const char *g_ps_gray16 = R"(
+Texture2D<float> texGray : register(t0);
+
+float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
+{
+    int2 ip = int2(pos.xy);
+    float gray = texGray.Load(int3(ip, 0));
+    return float4(gray, gray, gray, 1.0);
+}
+)";
+
+static const char *g_ps_rgba16 = R"(
+Texture2D<float4> texRgba : register(t0);
+
+float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
+{
+    return texRgba.Load(int3(int2(pos.xy), 0));
+}
+)";
+
+// Native DICOM YBR_FULL_422.  Each R16G16B16A16_UINT texel contains
+// Y0, Y1, Cb, Cr for two horizontal pixels.  Unlike video YUY2/Y210 this
+// photometric interpretation is full range and uses the DICOM YBR_FULL
+// conversion coefficients.
+static const char *g_ps_dicom_ybr_full_422 = R"(
+Texture2D<uint4> texP : register(t0);
+
+cbuffer ProcAmp : register(b0)
+{
+    uint width; uint height; float invW; float invH;
+    float br; float ct; float sat; float hueSin;
+    float hueCos; float sharpAmt; float sourceBits; float pad1;
+};
+
+float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target
+{
+    int2 ip = int2(pos.xy);
+    uint4 p = texP.Load(int3(ip.x >> 1, ip.y, 0));
+    float bits = clamp(sourceBits, 1.0, 16.0);
+    float sampleMax = exp2(bits) - 1.0;
+    float center = exp2(bits - 1.0);
+    float y = (float)(((ip.x & 1) != 0) ? p.g : p.r) / sampleMax;
+    float cb = ((float)p.b - center) / sampleMax;
+    float cr = ((float)p.a - center) / sampleMax;
+    float3 rgb = float3(y + 1.402 * cr,
+                        y - 0.344136 * cb - 0.714136 * cr,
+                        y + 1.772 * cb);
+    return float4(saturate(rgb), 1.0);
+}
+)";
+
 static const char *g_ps_fp16_to_rgba8 = R"(
 Texture2D<float4> tex0 : register(t0);
 SamplerState samL : register(s0);
@@ -297,7 +350,8 @@ void D3DPreviewPipeline::set_source_bit_depth(int bits)
 bool D3DPreviewPipeline::create_shaders_and_states()
 {
     if (vs_ && il_ &&
-        ps_yuy2_ && ps_y210_ &&
+        ps_yuy2_ && ps_y210_ && ps_gray16_ && ps_rgba16_ &&
+        ps_dicom_ybr_full_422_ &&
         (preview_only_ || (ps_fp16_to_rgba8_ &&
                           ps_fp16_to_nv12_y_ && ps_fp16_to_nv12_uv_)) &&
         ps_fp16_to_preview_ && ps_rgba8_to_preview_ &&
@@ -330,6 +384,32 @@ bool D3DPreviewPipeline::create_shaders_and_states()
                           "main", "ps_5_0", 0, 0, &psbY210, &err)))
         return false;
     if (FAILED(d3d_->CreatePixelShader(psbY210->GetBufferPointer(), psbY210->GetBufferSize(), nullptr, &ps_y210_)))
+        return false;
+
+    ComPtr<ID3DBlob> psbGray16;
+    if (FAILED(D3DCompile(g_ps_gray16, strlen(g_ps_gray16), nullptr, nullptr, nullptr,
+                          "main", "ps_5_0", 0, 0, &psbGray16, &err)))
+        return false;
+    if (FAILED(d3d_->CreatePixelShader(psbGray16->GetBufferPointer(), psbGray16->GetBufferSize(),
+                                       nullptr, &ps_gray16_)))
+        return false;
+
+    ComPtr<ID3DBlob> psbRgba16;
+    if (FAILED(D3DCompile(g_ps_rgba16, strlen(g_ps_rgba16), nullptr, nullptr, nullptr,
+                          "main", "ps_5_0", 0, 0, &psbRgba16, &err)))
+        return false;
+    if (FAILED(d3d_->CreatePixelShader(psbRgba16->GetBufferPointer(), psbRgba16->GetBufferSize(),
+                                       nullptr, &ps_rgba16_)))
+        return false;
+
+    ComPtr<ID3DBlob> psbDicomYbr422;
+    if (FAILED(D3DCompile(g_ps_dicom_ybr_full_422, strlen(g_ps_dicom_ybr_full_422),
+                          nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0,
+                          &psbDicomYbr422, &err)))
+        return false;
+    if (FAILED(d3d_->CreatePixelShader(psbDicomYbr422->GetBufferPointer(),
+                                       psbDicomYbr422->GetBufferSize(), nullptr,
+                                       &ps_dicom_ybr_full_422_)))
         return false;
 
     if (!preview_only_)
@@ -938,6 +1018,48 @@ bool D3DPreviewPipeline::render_texture_to_fp16(ID3D11Texture2D *texture,
         if (!ps)
             return false;
     }
+    else if (fmt == GVFG_RENDER_FMT_GRAY16)
+    {
+        if (!texture)
+            return false;
+        D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = DXGI_FORMAT_R16_UNORM;
+        sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        sd.Texture2D.MipLevels = 1;
+        if (!srv0 && FAILED(d3d_->CreateShaderResourceView(texture, &sd, &srv0)))
+            return false;
+        ps = ps_gray16_.Get();
+        if (!ps)
+            return false;
+    }
+    else if (fmt == GVFG_RENDER_FMT_RGBA16)
+    {
+        if (!texture)
+            return false;
+        D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = DXGI_FORMAT_R16G16B16A16_UNORM;
+        sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        sd.Texture2D.MipLevels = 1;
+        if (!srv0 && FAILED(d3d_->CreateShaderResourceView(texture, &sd, &srv0)))
+            return false;
+        ps = ps_rgba16_.Get();
+        if (!ps)
+            return false;
+    }
+    else if (fmt == GVFG_RENDER_FMT_DICOM_YBR_FULL_422)
+    {
+        if (!texture)
+            return false;
+        D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = DXGI_FORMAT_R16G16B16A16_UINT;
+        sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        sd.Texture2D.MipLevels = 1;
+        if (!srv0 && FAILED(d3d_->CreateShaderResourceView(texture, &sd, &srv0)))
+            return false;
+        ps = ps_dicom_ybr_full_422_.Get();
+        if (!ps)
+            return false;
+    }
     else
     {
         return false;
@@ -968,11 +1090,12 @@ bool D3DPreviewPipeline::render_texture_to_fp16(ID3D11Texture2D *texture,
     cb.hueSin = 0.0f;
     cb.hueCos = 1.0f;
     cb.sharpAmount = 0.0f;
-    cb.pad0 = 0.0f;
+    cb.pad0 = static_cast<float>(preview_source_bit_depth_);
 
     if (cs_params_)
     {
-        if (params_w_ != frame_w || params_h_ != frame_h)
+        if (params_w_ != frame_w || params_h_ != frame_h ||
+            params_source_bit_depth_ != preview_source_bit_depth_)
         {
             D3D11_MAPPED_SUBRESOURCE mapped{};
             if (FAILED(ctx_->Map(cs_params_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
@@ -981,6 +1104,7 @@ bool D3DPreviewPipeline::render_texture_to_fp16(ID3D11Texture2D *texture,
             ctx_->Unmap(cs_params_.Get(), 0);
             params_w_ = frame_w;
             params_h_ = frame_h;
+            params_source_bit_depth_ = preview_source_bit_depth_;
         }
         ID3D11Buffer *cb0[1] = {cs_params_.Get()};
         ctx_->PSSetConstantBuffers(0, 1, cb0);

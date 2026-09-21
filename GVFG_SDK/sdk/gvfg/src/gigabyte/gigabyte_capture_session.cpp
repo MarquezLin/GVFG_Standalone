@@ -70,7 +70,7 @@ gvfg_status_t GigabyteCaptureSession::open_device(const GigabyteDevice &device)
     return GVFG_OK;
 }
 
-gvfg_status_t GigabyteCaptureSession::ensure_vendor_channel_open() const
+gvfg_status_t GigabyteCaptureSession::ensure_vendor_channel_open()
 {
     if (channel_open_)
         return GVFG_OK;
@@ -130,7 +130,7 @@ gvfg_status_t GigabyteCaptureSession::ensure_vendor_channel_open() const
     return GVFG_OK;
 }
 
-void GigabyteCaptureSession::close_vendor_channel() const
+void GigabyteCaptureSession::close_vendor_channel()
 {
     if (channel_open_ && context_)
         GvfgCloseVideoChn(context_, channel_);
@@ -226,7 +226,7 @@ gvfg_status_t GigabyteCaptureSession::set_video_format(gvfg_pixel_format_t forma
     return status;
 }
 
-gvfg_status_t GigabyteCaptureSession::refresh_video_info() const
+gvfg_status_t GigabyteCaptureSession::refresh_video_info()
 {
     if (!context_)
         return reject(GVFG_ESTATE, "GigabyteLib video info requested before open");
@@ -255,7 +255,7 @@ gvfg_status_t GigabyteCaptureSession::refresh_video_info() const
     return GVFG_OK;
 }
 
-gvfg_status_t GigabyteCaptureSession::get_signal_status(gvfg_signal_status_t &out) const
+gvfg_status_t GigabyteCaptureSession::get_signal_status(gvfg_signal_status_t &out)
 {
     const gvfg_status_t openStatus = ensure_vendor_channel_open();
     if (openStatus != GVFG_OK)
@@ -269,7 +269,7 @@ gvfg_status_t GigabyteCaptureSession::get_signal_status(gvfg_signal_status_t &ou
 }
 
 gvfg_status_t GigabyteCaptureSession::get_device_capabilities(
-    gvfg_device_capabilities_t &out) const
+    gvfg_device_capabilities_t &out)
 {
     const gvfg_status_t openStatus = ensure_vendor_channel_open();
     if (openStatus != GVFG_OK)
@@ -284,7 +284,7 @@ gvfg_status_t GigabyteCaptureSession::get_device_capabilities(
     return GVFG_OK;
 }
 
-gvfg_status_t GigabyteCaptureSession::get_sdi_info(gvfg_sdi_info_t &out) const
+gvfg_status_t GigabyteCaptureSession::get_sdi_info(gvfg_sdi_info_t &out)
 {
     const gvfg_status_t openStatus = ensure_vendor_channel_open();
     if (openStatus != GVFG_OK)
@@ -319,7 +319,7 @@ gvfg_status_t GigabyteCaptureSession::get_sdi_info(gvfg_sdi_info_t &out) const
     return GVFG_OK;
 }
 
-gvfg_status_t GigabyteCaptureSession::get_audio_format(GigabyteAudioInfo &out) const
+gvfg_status_t GigabyteCaptureSession::get_audio_format(GigabyteAudioInfo &out)
 {
     const gvfg_status_t openStatus = ensure_vendor_channel_open();
     if (openStatus != GVFG_OK)
@@ -344,7 +344,7 @@ gvfg_status_t GigabyteCaptureSession::get_audio_format(GigabyteAudioInfo &out) c
     return GVFG_OK;
 }
 
-gvfg_status_t GigabyteCaptureSession::refresh_audio_info() const
+gvfg_status_t GigabyteCaptureSession::refresh_audio_info()
 {
     GVFG_AUDIO_INFO info{};
     const gvfg_status_t status = from_vendor(
@@ -688,7 +688,7 @@ void GigabyteCaptureSession::fill_debug_stats(gvfg_debug_backend_stats_t &out) c
     out.get_frame_timing_max_us = get_frame_timing_lifetime_max_us_;
 }
 
-gvfg_status_t GigabyteCaptureSession::debug_read_register(uint32_t offset, uint32_t &outValue) const
+gvfg_status_t GigabyteCaptureSession::debug_read_register(uint32_t offset, uint32_t &outValue)
 {
     const gvfg_status_t openStatus = ensure_vendor_channel_open();
     if (openStatus != GVFG_OK)
@@ -699,7 +699,7 @@ gvfg_status_t GigabyteCaptureSession::debug_read_register(uint32_t offset, uint3
     return GVFG_OK;
 }
 
-gvfg_status_t GigabyteCaptureSession::debug_write_register(uint32_t offset, uint32_t value) const
+gvfg_status_t GigabyteCaptureSession::debug_write_register(uint32_t offset, uint32_t value)
 {
     const gvfg_status_t openStatus = ensure_vendor_channel_open();
     if (openStatus != GVFG_OK)
