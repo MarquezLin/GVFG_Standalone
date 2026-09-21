@@ -76,8 +76,10 @@ MainWindow::MainWindow(QWidget *parent)
     connect(controller_, &CaptureController::statusChanged, ui_->statusLabel, &QLabel::setText);
     connect(controller_, &CaptureController::sdiInfoChanged, ui_->sdiInfoLabel, &QLabel::setText);
     connect(controller_, &CaptureController::logMessage, log_, &SampleLog::append, Qt::QueuedConnection);
+#if GVFG_INTERNAL_DIAGNOSTICS
     connect(controller_, &CaptureController::diagnosticMessage, log_, &SampleLog::appendDiagnostic,
             Qt::QueuedConnection);
+#endif
     connect(log_, &SampleLog::lineReady, this, &MainWindow::appendLogLine);
     connect(controller_, &CaptureController::previewSourceSizeChanged, this,
             [this](int channel, int width, int height) {

@@ -7,7 +7,6 @@
 #include <QStringList>
 #include <QTimer>
 
-#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <utility>
@@ -23,11 +22,6 @@ namespace
     constexpr size_t kMaxQueuedAudioFrames = 10;
     constexpr int kAudioSampleRate = 48000;
     constexpr int kAudioChannelCount = 2;
-
-#if GVFG_INTERNAL_DIAGNOSTICS
-    QString boolText(int value) { return value ? QStringLiteral("yes") : QStringLiteral("no"); }
-
-#endif
 
     QString frameText(bool valid, int width, int height, const char *pixelFormat, int bitDepth)
     {
@@ -372,13 +366,13 @@ void CaptureController::startCapture(int channelIndex)
         }
     }
 
-    channel.startupStartTime = std::chrono::steady_clock::now();
+#if GVFG_INTERNAL_DIAGNOSTICS
+    internalDiagnostics_.beginStart(channelIndex);
+#endif
     const gvfg_status_t st = gvfg_start_channel(handle_, channelIndex);
-    const auto startupStartCallEnd = std::chrono::steady_clock::now();
-    channel.startupStartCallMs =
-        std::chrono::duration<double, std::milli>(
-            startupStartCallEnd - channel.startupStartTime)
-            .count();
+#if GVFG_INTERNAL_DIAGNOSTICS
+    internalDiagnostics_.finishStartCall(channelIndex);
+#endif
     if (st != GVFG_OK)
     {
         reportError(QStringLiteral("gvfg_start_channel"), st, channelIndex);
@@ -436,19 +430,16 @@ void CaptureController::startCapture(int channelIndex)
         return;
     }
     channel.previewFailureCount = 0;
-    channel.getFrameAverageMs.store(0.0, std::memory_order_relaxed);
-    channel.getFrameMaximumMs.store(0.0, std::memory_order_relaxed);
-    channel.getFrameWindowMaximumMs.store(0.0, std::memory_order_relaxed);
-    channel.getFrameSamples.store(0, std::memory_order_relaxed);
     channel.audioEnabled = audioEnabled;
-    channel.videoReceived = 0; channel.videoFailed = 0;
+    channel.videoFailed = 0;
     channel.lastLoggedPreviewFailures = 0;
     channel.lastLoggedAudioReleaseFailures = channel.lastLoggedAudioOutputFailures = 0;
     channel.lastDeliveryLogMs = 0;
     channel.previewBaseline = {};
     gvfg_preview_get_delivery_stats(channel.previewHandle, &channel.previewBaseline);
-    channel.backendBaseline = {};
-    gvfg_debug_get_channel_backend_stats(handle_, channelIndex, &channel.backendBaseline);
+#if GVFG_INTERNAL_DIAGNOSTICS
+    internalDiagnostics_.resetChannel(handle_, channelIndex);
+#endif
     {
         std::lock_guard<std::mutex> lock(channel.audioQueueMutex);
         channel.audioQueue.clear();
@@ -708,54 +699,17 @@ void CaptureController::updateSignalStatus(bool queryHardware)
                                .arg(channel.audioFormat.bits_per_sample)
                                .arg(static_cast<qulonglong>(receivedFrames));
 #if GVFG_INTERNAL_DIAGNOSTICS
-            gvfg_debug_backend_stats_t audioStats{};
-            if (gvfg_debug_get_channel_backend_stats(handle_, channelIndex, &audioStats) == GVFG_OK)
-            {
-                statusLines << QStringLiteral("CH%1 Audio Debug | LIB events DMA=%2 Extra=%3 | LIB->SDK %4 frames | SDK->APP %5 frames")
-                                   .arg(channelIndex)
-                                   .arg(static_cast<qulonglong>(audioStats.audio_dma_event_wakes - channel.backendBaseline.audio_dma_event_wakes))
-                                   .arg(static_cast<qulonglong>(audioStats.extra_audio_event_wakes - channel.backendBaseline.extra_audio_event_wakes))
-                                   .arg(static_cast<qulonglong>(audioStats.audio_frames_from_lib - channel.backendBaseline.audio_frames_from_lib))
-                                   .arg(static_cast<qulonglong>(receivedFrames));
-            }
+            internalDiagnostics_.appendAudioStatusLine(
+                statusLines, handle_, channelIndex, receivedFrames);
 #endif
         }
         statusLines << QStringLiteral("CH%1 Preview | %2 FPS | %3")
                            .arg(channelIndex)
                            .arg(previewFps, previewFrame);
         logDeliveryStatus(channelIndex);
-        const uint64_t readSamples = channel.getFrameSamples.load(std::memory_order_relaxed);
-        statusLines << (readSamples >= 300
-                            ? QStringLiteral("CH%1 Read | avg=%2 max300=%3 max=%4 ms samples=%5")
-                                  .arg(channelIndex)
-                                  .arg(channel.getFrameAverageMs.load(std::memory_order_relaxed), 0, 'f', 3)
-                                  .arg(channel.getFrameWindowMaximumMs.load(std::memory_order_relaxed), 0, 'f', 3)
-                                  .arg(channel.getFrameMaximumMs.load(std::memory_order_relaxed), 0, 'f', 3)
-                                  .arg(static_cast<qulonglong>(readSamples))
-                            : QStringLiteral("CH%1 Read | measuring").arg(channelIndex));
-
 #if GVFG_INTERNAL_DIAGNOSTICS
-        gvfg_debug_backend_stats_t channelStats{};
-        if (gvfg_debug_get_channel_backend_stats(handle_, channelIndex, &channelStats) == GVFG_OK)
-        {
-            statusLines << (channelStats.get_frame_timing_samples >= 300
-                                ? QStringLiteral("CH%1 %2 | avg=%3 max300=%4 max=%5 us samples=%6")
-                                      .arg(channelIndex)
-                                      .arg(channel.zeroCopy
-                                               ? QStringLiteral("[LIB] GvfgGetVideoFrameZeroCopy")
-                                               : QStringLiteral("[LIB] GvfgGetVideoFrame"))
-                                      .arg(channelStats.get_frame_timing_average_us, 0, 'f', 3)
-                                      .arg(channelStats.get_frame_timing_max300_us, 0, 'f', 3)
-                                      .arg(channelStats.get_frame_timing_max_us, 0, 'f', 3)
-                                      .arg(static_cast<qulonglong>(channelStats.get_frame_timing_samples))
-                                : QStringLiteral("CH%1 [LIB] GetVideoFrame | measuring").arg(channelIndex));
-            statusLines << QStringLiteral("CH%1 Video Debug | LIB events DMA=%2 Extra=%3 | LIB->SDK %4 frames | SDK->APP %5 frames")
-                               .arg(channelIndex)
-                               .arg(static_cast<qulonglong>(channelStats.video_dma_event_wakes - channel.backendBaseline.video_dma_event_wakes))
-                               .arg(static_cast<qulonglong>(channelStats.extra_video_event_wakes - channel.backendBaseline.extra_video_event_wakes))
-                               .arg(static_cast<qulonglong>(channelStats.video_frames_from_lib - channel.backendBaseline.video_frames_from_lib))
-                               .arg(static_cast<qulonglong>(channel.videoReceived.load()));
-        }
+        internalDiagnostics_.appendVideoStatusLines(
+            statusLines, handle_, channelIndex, channel.zeroCopy);
 #endif
     }
 
@@ -852,16 +806,9 @@ void CaptureController::logDeliveryStatus(int channelIndex, bool finalSnapshot)
 
 void CaptureController::captureReadLoop(int channelIndex)
 {
-    constexpr uint64_t kTimingWarmupFrames = 30;
-    constexpr uint64_t kGetFrameTimingSampleFrames = 300;
-
     std::chrono::steady_clock::time_point noFrameSince{};
     std::chrono::steady_clock::time_point nextNoFrameReport{};
     bool captureStalledLogged = false;
-    bool startupLatencyLogged = false;
-    uint64_t successfulFrameCount = 0;
-    uint64_t getFrameTimingSampleCount = 0;
-    double getFrameTimingMaximumMs = 0.0;
     ChannelRuntime &channel = channels_[channelIndex];
     while (!channel.stopRequested.load(std::memory_order_acquire))
     {
@@ -876,40 +823,21 @@ void CaptureController::captureReadLoop(int channelIndex)
             break;
 
         gvfg_frame_t frame{};
+#if GVFG_INTERNAL_DIAGNOSTICS
         const auto getFrameStart = std::chrono::steady_clock::now();
+#endif
         const gvfg_status_t st = gvfg_read_channel_frame(handle_, channelIndex, &frame, 200);
+#if GVFG_INTERNAL_DIAGNOSTICS
         const double getFrameElapsedMs =
             std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - getFrameStart)
                 .count();
+#endif
         if (st == GVFG_OK)
         {
-            channel.videoReceived.fetch_add(1);
-            const bool timingWarmupComplete = ++successfulFrameCount > kTimingWarmupFrames;
-            if (timingWarmupComplete)
-            {
-                ++getFrameTimingSampleCount;
-                getFrameTimingMaximumMs = (std::max)(getFrameTimingMaximumMs, getFrameElapsedMs);
-                const uint64_t totalSamples = channel.getFrameSamples.fetch_add(1, std::memory_order_relaxed) + 1;
-                const double previousAverage = channel.getFrameAverageMs.load(std::memory_order_relaxed);
-                channel.getFrameAverageMs.store(
-                    previousAverage + (getFrameElapsedMs - previousAverage) / static_cast<double>(totalSamples),
-                    std::memory_order_relaxed);
-                double observedMaximum = channel.getFrameMaximumMs.load(std::memory_order_relaxed);
-                while (getFrameElapsedMs > observedMaximum &&
-                       !channel.getFrameMaximumMs.compare_exchange_weak(
-                           observedMaximum, getFrameElapsedMs, std::memory_order_relaxed))
-                {
-                }
-                if (totalSamples <= kGetFrameTimingSampleFrames)
-                    channel.getFrameWindowMaximumMs.store(getFrameTimingMaximumMs, std::memory_order_relaxed);
-                if (getFrameTimingSampleCount >= kGetFrameTimingSampleFrames)
-                {
-                    channel.getFrameWindowMaximumMs.store(getFrameTimingMaximumMs, std::memory_order_relaxed);
-                    getFrameTimingSampleCount = 0;
-                    getFrameTimingMaximumMs = 0.0;
-                }
-            }
+#if GVFG_INTERNAL_DIAGNOSTICS
+            internalDiagnostics_.recordVideoRead(channelIndex, getFrameElapsedMs);
+#endif
             noFrameSince = {};
             nextNoFrameReport = {};
             if (!channel.frameAvailable.exchange(true, std::memory_order_acq_rel))
@@ -950,12 +878,17 @@ void CaptureController::captureReadLoop(int channelIndex)
                     break;
                 }
 
+#if GVFG_INTERNAL_DIAGNOSTICS
                 const auto previewStart = std::chrono::steady_clock::now();
+#endif
                 const gvfg_preview_status_t previewStatus =
                     gvfg_preview_render_frame(channel.previewHandle, &previewFrame);
-                const auto previewEnd = std::chrono::steady_clock::now();
+#if GVFG_INTERNAL_DIAGNOSTICS
                 const double previewElapsedMs =
-                    std::chrono::duration<double, std::milli>(previewEnd - previewStart).count();
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - previewStart)
+                        .count();
+#endif
                 if (previewStatus != GVFG_PREVIEW_OK)
                 {
                     ++channel.videoFailed;
@@ -971,35 +904,17 @@ void CaptureController::captureReadLoop(int channelIndex)
                 }
                 else
                 {
-                    if (!startupLatencyLogged)
+#if GVFG_INTERNAL_DIAGNOSTICS
+                    const QString startupLine = internalDiagnostics_.takeStartupLatencyLine(
+                        channelIndex, getFrameElapsedMs, previewElapsedMs, frame.frame_id);
+                    if (!startupLine.isEmpty())
                     {
-                        startupLatencyLogged = true;
-                        const double startupLatencyMs =
-                            std::chrono::duration<double, std::milli>(
-                                previewEnd - channel.startupStartTime)
-                                .count();
-                        const double startCallMs = channel.startupStartCallMs;
-                        const double firstReadMs = getFrameElapsedMs;
-                        const double firstRenderFrameMs = previewElapsedMs;
-                        const uint64_t startupFrameId = frame.frame_id;
                         QMetaObject::invokeMethod(
                             this,
-                            [this, channelIndex, startCallMs, firstReadMs,
-                             firstRenderFrameMs, startupLatencyMs, startupFrameId]()
-                            {
-                                appendLog(QStringLiteral("CH%1 Startup latency | Start -> start_channel return=%2 ms | "
-                                                         "first read_frame call -> return=%3 ms | "
-                                                         "first render_frame call -> return=%4 ms | "
-                                                         "Start -> first render_frame return=%5 ms | SDK_frame_id=%6")
-                                              .arg(channelIndex)
-                                              .arg(startCallMs, 0, 'f', 3)
-                                              .arg(firstReadMs, 0, 'f', 3)
-                                              .arg(firstRenderFrameMs, 0, 'f', 3)
-                                              .arg(startupLatencyMs, 0, 'f', 3)
-                                              .arg(static_cast<qulonglong>(startupFrameId)));
-                            },
+                            [this, startupLine]() { appendLog(startupLine); },
                             Qt::QueuedConnection);
                     }
+#endif
                     if (channel.previewFailureCount != 0)
                     {
                         const uint64_t failures = channel.previewFailureCount;

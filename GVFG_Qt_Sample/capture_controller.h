@@ -1,7 +1,10 @@
 #pragma once
 
+#if GVFG_INTERNAL_DIAGNOSTICS
+#include "internal_diagnostics.h"
+#endif
+
 #include <gvfg_capture.h>
-#include <gvfg_debug.h>
 #include <gvfg_preview.h>
 
 #include <QObject>
@@ -56,7 +59,9 @@ signals:
     void statusChanged(const QString &text);
     void sdiInfoChanged(const QString &text);
     void logMessage(const QString &message);
+#if GVFG_INTERNAL_DIAGNOSTICS
     void diagnosticMessage(const QString &message);
+#endif
     void previewSourceSizeChanged(int channel, int width, int height);
     void previewShowRequested(int channel);
     void previewCloseRequested(int channel);
@@ -88,16 +93,11 @@ private:
         gvfg_audio_format_t audioFormat{};
         uint64_t audioReceivedFrames = 0;
         uint64_t audioReleaseFailedFrames = 0, audioOutputFailedFrames = 0;
-        std::atomic<uint64_t> videoReceived{0}, videoFailed{0};
+        std::atomic<uint64_t> videoFailed{0};
         gvfg_preview_delivery_stats_t previewBaseline{};
-        gvfg_debug_backend_stats_t backendBaseline{};
-        std::chrono::steady_clock::time_point startupStartTime{};
-        double startupStartCallMs = 0.0;
         uint64_t lastLoggedPreviewFailures = 0;
         uint64_t lastLoggedAudioReleaseFailures = 0, lastLoggedAudioOutputFailures = 0;
         qint64 lastDeliveryLogMs = 0;
-        std::atomic<double> getFrameAverageMs{0.0}, getFrameMaximumMs{0.0}, getFrameWindowMaximumMs{0.0};
-        std::atomic<uint64_t> getFrameSamples{0};
         uint64_t previewFailureCount = 0;
         gvfg_signal_status_t cachedSignalStatus{};
         bool haveCachedSignalStatus = false;
@@ -124,6 +124,9 @@ private:
     gvfg_handle handle_ = nullptr;
     int selectedDeviceIndex_ = -1;
     std::array<ChannelRuntime, 2> channels_{};
+#if GVFG_INTERNAL_DIAGNOSTICS
+    InternalDiagnostics internalDiagnostics_;
+#endif
     std::array<bool, 2> channelStatusVisible_{{true, true}};
     QTimer *runtimeStatusTimer_ = nullptr;
     QString lastSignalStatusText_;

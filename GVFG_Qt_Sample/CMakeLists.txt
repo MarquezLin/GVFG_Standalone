@@ -93,6 +93,11 @@ set(GVFG_QT_PREVIEW_SOURCES
   previewwindow.ui
 )
 
+list(APPEND GVFG_QT_PREVIEW_SOURCES
+  $<$<CONFIG:Debug>:${CMAKE_CURRENT_SOURCE_DIR}/internal_diagnostics.cpp>
+  $<$<CONFIG:Debug>:${CMAKE_CURRENT_SOURCE_DIR}/internal_diagnostics.h>
+)
+
 if (QT_VERSION_MAJOR GREATER_EQUAL 6)
   qt_add_executable(gvfg_qt_preview ${GVFG_QT_PREVIEW_SOURCES})
 else()
