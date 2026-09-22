@@ -37,8 +37,8 @@ typedef struct gvfg_preview_handle_t *gvfg_preview_handle;
 
 typedef enum
 {
+    GVFG_PREVIEW_PIXFMT_YUY2 = 1,
     GVFG_PREVIEW_PIXFMT_Y210 = 2,
-    GVFG_PREVIEW_PIXFMT_YUY2 = 3,
     GVFG_PREVIEW_PIXFMT_GRAY16 = 4,
 
     /* Four interleaved 16-bit UNORM components per pixel: R, G, B, A. */

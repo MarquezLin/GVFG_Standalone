@@ -75,7 +75,7 @@ extern "C"
 
     enum
     {
-        GVFG_MAX_DEVICES = 16,
+        GVFG_MAX_DEVICES = 16, /* Maximum entries accepted by gvfg_enumerate_devices(). */
     };
 
     typedef int32_t gvfg_status_t;
@@ -94,61 +94,61 @@ extern "C"
 
     typedef enum
     {
-        GVFG_PIXFMT_UNKNOWN = 0,
-        GVFG_PIXFMT_Y210 = 2,
-        GVFG_PIXFMT_YUY2 = 3
+        GVFG_PIXFMT_UNKNOWN = 0, /* Unknown format or no valid video signal. */
+        GVFG_PIXFMT_YUY2 = 1,   /* Packed 8-bit YUV 4:2:2: Y0, U0, Y1, V0. */
+        GVFG_PIXFMT_Y210 = 2    /* Packed 10-bit YUV 4:2:2 in 16-bit containers. */
     } gvfg_pixel_format_t;
 
     typedef enum
     {
-        GVFG_CHANNEL_0 = 0,
-        GVFG_CHANNEL_1 = 1
+        GVFG_CHANNEL_0 = 0, /* First video capture channel. */
+        GVFG_CHANNEL_1 = 1  /* Second video capture channel, when available. */
     } gvfg_channel_t;
 
     typedef enum
     {
-        GVFG_INPUT_INTERFACE_SDI = 0,
-        GVFG_INPUT_INTERFACE_HDMI = 1
+        GVFG_INPUT_INTERFACE_SDI = 0, /* Serial Digital Interface input. */
+        GVFG_INPUT_INTERFACE_HDMI = 1 /* HDMI input. */
     } gvfg_video_interface_t;
 
     typedef enum
     {
-        GVFG_SDI_INPUT_MODE_HD = 0,
-        GVFG_SDI_INPUT_MODE_SD = 1,
-        GVFG_SDI_INPUT_MODE_3G = 2
+        GVFG_SDI_INPUT_MODE_HD = 0, /* HD-SDI input. */
+        GVFG_SDI_INPUT_MODE_SD = 1, /* SD-SDI input. */
+        GVFG_SDI_INPUT_MODE_3G = 2  /* 3G-SDI input. */
     } gvfg_sdi_mode_t;
 
     typedef enum
     {
-        GVFG_SDI_INPUT_RESOLUTION_SMPTE_ST_274_1920X1080 = 0x0,
-        GVFG_SDI_INPUT_RESOLUTION_SMPTE_ST_296_1280X720 = 0x1,
-        GVFG_SDI_INPUT_RESOLUTION_SMPTE_2048_2048X1080 = 0x2,
-        GVFG_SDI_INPUT_RESOLUTION_SMPTE_295_1920X1080 = 0x3,
-        GVFG_SDI_INPUT_RESOLUTION_NTSC_720X486 = 0x8,
-        GVFG_SDI_INPUT_RESOLUTION_PAL_720X576 = 0x9,
-        GVFG_SDI_INPUT_RESOLUTION_UNKNOWN = 0xF
+        GVFG_SDI_INPUT_RESOLUTION_SMPTE_ST_274_1920X1080 = 0x0, /* SMPTE ST 274, 1920 x 1080. */
+        GVFG_SDI_INPUT_RESOLUTION_SMPTE_ST_296_1280X720 = 0x1,  /* SMPTE ST 296, 1280 x 720. */
+        GVFG_SDI_INPUT_RESOLUTION_SMPTE_2048_2048X1080 = 0x2,   /* SMPTE 2048, 2048 x 1080. */
+        GVFG_SDI_INPUT_RESOLUTION_SMPTE_295_1920X1080 = 0x3,    /* SMPTE 295, 1920 x 1080. */
+        GVFG_SDI_INPUT_RESOLUTION_NTSC_720X486 = 0x8,            /* NTSC, 720 x 486. */
+        GVFG_SDI_INPUT_RESOLUTION_PAL_720X576 = 0x9,             /* PAL, 720 x 576. */
+        GVFG_SDI_INPUT_RESOLUTION_UNKNOWN = 0xF                  /* Unknown or unsupported resolution code. */
     } gvfg_sdi_resolution_t;
 
     typedef enum
     {
-        GVFG_SDI_INPUT_FPS_NONE = 0x0,
-        GVFG_SDI_INPUT_FPS_23_98 = 0x2,
-        GVFG_SDI_INPUT_FPS_24 = 0x3,
-        GVFG_SDI_INPUT_FPS_47_95 = 0x4,
-        GVFG_SDI_INPUT_FPS_25 = 0x5,
-        GVFG_SDI_INPUT_FPS_29_97 = 0x6,
-        GVFG_SDI_INPUT_FPS_30 = 0x7,
-        GVFG_SDI_INPUT_FPS_48 = 0x8,
-        GVFG_SDI_INPUT_FPS_50 = 0x9,
-        GVFG_SDI_INPUT_FPS_59_94 = 0xA,
-        GVFG_SDI_INPUT_FPS_60 = 0xB
+        GVFG_SDI_INPUT_FPS_NONE = 0x0,  /* Frame rate is unavailable. */
+        GVFG_SDI_INPUT_FPS_23_98 = 0x2, /* 23.98 frames per second. */
+        GVFG_SDI_INPUT_FPS_24 = 0x3,    /* 24 frames per second. */
+        GVFG_SDI_INPUT_FPS_47_95 = 0x4, /* 47.95 frames per second. */
+        GVFG_SDI_INPUT_FPS_25 = 0x5,    /* 25 frames per second. */
+        GVFG_SDI_INPUT_FPS_29_97 = 0x6, /* 29.97 frames per second. */
+        GVFG_SDI_INPUT_FPS_30 = 0x7,    /* 30 frames per second. */
+        GVFG_SDI_INPUT_FPS_48 = 0x8,    /* 48 frames per second. */
+        GVFG_SDI_INPUT_FPS_50 = 0x9,    /* 50 frames per second. */
+        GVFG_SDI_INPUT_FPS_59_94 = 0xA, /* 59.94 frames per second. */
+        GVFG_SDI_INPUT_FPS_60 = 0xB     /* 60 frames per second. */
     } gvfg_sdi_fps_t;
 
     typedef struct
     {
-        uint32_t sample_rate;
-        uint32_t channels;
-        uint32_t bits_per_sample;
+        uint32_t sample_rate;     /* PCM samples per second; currently 48000. */
+        uint32_t channels;        /* Interleaved PCM channel count; currently 2. */
+        uint32_t bits_per_sample; /* Bits per signed PCM sample; currently 16. */
     } gvfg_audio_format_t;
 
     typedef struct
@@ -158,29 +158,29 @@ extern "C"
 
     typedef struct
     {
-        uint32_t video_channel_count;
-        int has_audio;
+        uint32_t video_channel_count; /* Number of video capture channels exposed by the device. */
+        int has_audio;                /* Non-zero when audio capture is available. */
     } gvfg_device_capabilities_t;
 
     typedef struct
     {
-        int connected;
-        gvfg_sdi_mode_t mode;
-        gvfg_sdi_resolution_t resolution;
-        gvfg_sdi_fps_t fps;
-        int progressive;
-        int level_b;
-        uint32_t st352_payload;
-        uint32_t error_count;
-        char signal_lock_name[32];
-        char mode_name[16];
-        char resolution_name[64];
-        char fps_name[24];
-        char scan_name[16];
-        char st352_format_name[64];
-        char st352_fps_name[24];
-        char st352_chroma_name[36];
-        char st352_bit_depth_name[24];
+        int connected;                       /* Non-zero when the SDI input signal is locked. */
+        gvfg_sdi_mode_t mode;                /* Detected SDI link mode. */
+        gvfg_sdi_resolution_t resolution;    /* Detected SDI resolution code. */
+        gvfg_sdi_fps_t fps;                  /* Detected SDI frame-rate code. */
+        int progressive;                     /* Non-zero for progressive scan; zero for interlaced. */
+        int level_b;                         /* Non-zero for 3G-SDI Level B. */
+        uint32_t st352_payload;               /* Raw SMPTE ST 352 payload identifier. */
+        uint32_t error_count;                 /* Signal error count reported by the capture device. */
+        char signal_lock_name[32];            /* Null-terminated signal-lock description. */
+        char mode_name[16];                   /* Null-terminated SDI mode description. */
+        char resolution_name[64];             /* Null-terminated resolution description. */
+        char fps_name[24];                    /* Null-terminated frame-rate description. */
+        char scan_name[16];                   /* Null-terminated scan-mode description. */
+        char st352_format_name[64];           /* Null-terminated ST 352 format description. */
+        char st352_fps_name[24];              /* Null-terminated ST 352 frame-rate description. */
+        char st352_chroma_name[36];           /* Null-terminated ST 352 chroma description. */
+        char st352_bit_depth_name[24];        /* Null-terminated ST 352 bit-depth description. */
     } gvfg_sdi_info_t;
 
     typedef struct
@@ -246,10 +246,10 @@ extern "C"
 
     typedef enum
     {
-        GVFG_EVENT_UNKNOWN = 0,
-        GVFG_EVENT_VIDEO_FORMAT_CHANGED = 1,
-        GVFG_EVENT_VIDEO_INPUT_PLUGIN = 2,
-        GVFG_EVENT_VIDEO_INPUT_UNPLUG = 3
+        GVFG_EVENT_UNKNOWN = 0,              /* Unknown or unspecified event. */
+        GVFG_EVENT_VIDEO_FORMAT_CHANGED = 1, /* Input video format changed. */
+        GVFG_EVENT_VIDEO_INPUT_PLUGIN = 2,   /* Video input cable or signal was connected. */
+        GVFG_EVENT_VIDEO_INPUT_UNPLUG = 3    /* Video input cable or signal was disconnected. */
     } gvfg_event_type_t;
 
     typedef struct
@@ -333,19 +333,15 @@ extern "C"
         GVFG_PARAM_IN int device_index,
         GVFG_PARAM_IN int channel_index);
 
-    /*
-     * A handle may open both channels of the same device. The first call opens
-     * the Windows device; the second channel shares that device connection and
-     * owns independent capture, event, frame, and zero-copy state.
-     */
+    /* A handle may open both channels of the same device. */
 
     /*
-     * Select driver zero-copy frame delivery.
+     * Select zero-copy frame delivery.
      *
      * Call after gvfg_create() and before opening the selected channel. The
      * default is disabled independently for each channel. Once that channel is
      * open its mode cannot be changed. In zero-copy
-     * mode, gvfg_read_channel_frame() returns driver-owned memory and every
+     * mode, gvfg_read_channel_frame() returns borrowed memory and every
      * successful read must be paired with gvfg_release_channel_frame().
      */
     GVFG_API gvfg_status_t gvfg_set_channel_zero_copy_enabled(
@@ -358,7 +354,11 @@ extern "C"
         GVFG_PARAM_IN int channel_index,
         GVFG_PARAM_OUT int *out_enabled);
 
-    /* Select the hardware output format before capture starts. */
+    /*
+     * Select the capture output format before capture starts. Only one channel
+     * on a handle may select Y210 at a time; a conflicting request returns
+     * GVFG_EBUSY. Applications may request either channel first.
+     */
     GVFG_API gvfg_status_t gvfg_set_channel_video_format(
         GVFG_PARAM_IN gvfg_handle handle,
         GVFG_PARAM_IN int channel_index,

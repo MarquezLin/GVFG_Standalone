@@ -885,7 +885,23 @@ struct gvfg_handle_t
             return rejectChannel(channelIndex, GVFG_EINVAL,
                                  "gvfg_set_channel_video_format rejected: pixel format is invalid");
 
-        return channel->setVideoFormat(format);
+        const size_t slot = static_cast<size_t>(channelIndex);
+        const size_t otherSlot = static_cast<size_t>(
+            channelIndex == GVFG_CHANNEL_0 ? GVFG_CHANNEL_1 : GVFG_CHANNEL_0);
+        std::lock_guard<std::mutex> lock(formatMutex);
+        if (format == GVFG_PIXFMT_Y210 &&
+            requestedVideoFormats[otherSlot] == GVFG_PIXFMT_Y210)
+        {
+            return rejectChannel(
+                channelIndex,
+                GVFG_EBUSY,
+                "gvfg_set_channel_video_format rejected: Y210 is already selected by the other channel");
+        }
+
+        const gvfg_status_t status = channel->setVideoFormat(format);
+        if (status == GVFG_OK)
+            requestedVideoFormats[slot] = format;
+        return status;
     }
 
     gvfg_status_t stopAll()
@@ -923,6 +939,9 @@ struct gvfg_handle_t
     std::array<std::unique_ptr<gvfg_channel_session_t>, 2> channels;
     int currentIndex = -1;
     std::array<bool, 2> zeroCopyRequested{false, false};
+    std::mutex formatMutex;
+    std::array<gvfg_pixel_format_t, 2> requestedVideoFormats{
+        GVFG_PIXFMT_UNKNOWN, GVFG_PIXFMT_UNKNOWN};
 };
 
 extern "C"

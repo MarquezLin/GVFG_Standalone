@@ -1,14 +1,8 @@
 # GVFG 客戶 API Reference
 
-本文件是 GVFG 客戶公開 API 的逐項參考。快速使用流程、執行緒、frame ownership、
-錯誤處理與範例，請先閱讀 [`GVFG_CUSTOMER_API.md`](GVFG_CUSTOMER_API.md)。
-
-客戶核心 API 以 `sdk/gvfg/include/gvfg_capture.h` 為準；選用 preview API 以
-`helpers/gvfg_preview/include/gvfg_preview.h` 為準。
-
 ## 1. Core API 完整參考
 
-本節逐一說明 `gvfg_capture.h` 的所有公開常數、型別、結構與函式。除非特別註明，
+說明 `gvfg_capture.h` 的所有公開常數、型別、結構與函式。除非特別註明，
 所有輸出結構都建議先用 `{0}` 初始化。
 
 ### 1.1 公開常數
@@ -21,7 +15,7 @@
 ### 1.2 `gvfg_status_t`
 
 `gvfg_status_t` 是 32-bit 整數。`0` 表示成功，失敗時回傳負數的 `GVFG_E*` 狀態。
-底層 capture library 的錯誤型別與原始錯誤碼不屬於公開 API。
+應用程式只需處理本節列出的公開狀態碼。
 
 | 成員              | 值   | 說明                                             |
 | --------------- | ---:| ---------------------------------------------- |
@@ -29,10 +23,10 @@
 | `GVFG_EINVAL`   | -1  | NULL pointer、無效 channel、buffer 大小或 token 等參數錯誤 |
 | `GVFG_ENODEV`   | -2  | 找不到裝置或裝置無法開啟                                   |
 | `GVFG_ESTATE`   | -3  | 呼叫順序或目前 session 狀態不允許此操作                       |
-| `GVFG_EIO`      | -4  | SDK 自身 I/O、GPU 或 internal extension 失敗         |
+| `GVFG_EIO`      | -4  | SDK I/O、GPU 或其他處理失敗                          |
 | `GVFG_ENOTSUP`  | -5  | 不支援指定功能或格式                                     |
-| `GVFG_ETIMEOUT` | -6  | 在期限內等不到 frame、event 或 backend 工作               |
-| `GVFG_EBUSY`    | -7  | 裝置或 capture resource 正在使用中                         |
+| `GVFG_ETIMEOUT` | -6  | 在期限內等不到 frame、event 或操作完成                     |
+| `GVFG_EBUSY`    | -7  | 裝置或 capture resource 正在使用中                     |
 
 統一以 `status != GVFG_OK` 判斷失敗，不可使用 Windows `FAILED()`／`SUCCEEDED()`。
 `gvfg_strerror()` 回傳對應的公開英文錯誤說明。
@@ -42,8 +36,8 @@
 | 成員                    | 值   | 說明                                                            |
 | --------------------- | ---:| ------------------------------------------------------------- |
 | `GVFG_PIXFMT_UNKNOWN` | 0   | 未知或尚無有效訊號格式                                                   |
+| `GVFG_PIXFMT_YUY2`    | 1   | 8-bit packed YUV 4:2:2；byte order Y0 U0 Y1 V0，每 pixel 2 bytes |
 | `GVFG_PIXFMT_Y210`    | 2   | 10-bit packed YUV 4:2:2；目前每 pixel 4 bytes                     |
-| `GVFG_PIXFMT_YUY2`    | 3   | 8-bit packed YUV 4:2:2；byte order Y0 U0 Y1 V0，每 pixel 2 bytes |
 
 ### 1.4 `gvfg_channel_t`
 
@@ -54,8 +48,8 @@
 
 ### 1.4a `gvfg_video_interface_t`
 
-| 成員                          | 值   | 說明                        |
-| --------------------------- | ---:| ------------------------- |
+| 成員                          | 值   | 說明         |
+| --------------------------- | ---:| ---------- |
 | `GVFG_INPUT_INTERFACE_SDI`  | 0   | SDI input  |
 | `GVFG_INPUT_INTERFACE_HDMI` | 1   | HDMI input |
 
@@ -67,9 +61,6 @@
   2048x1080、SMPTE 295 1920x1080、NTSC 720x486、PAL 720x576 與 UNKNOWN。
 - FPS：NONE、23.98、24、47.95、25、29.97、30、48、50、59.94 與 60。
 
-UI 應優先顯示 `gvfg_sdi_info_t` 的對應 `*_name`；程式邏輯則比較上述 enum，
-不要比較顯示字串或自行寫 magic number。
-
 ### 1.5 `gvfg_device_info_t`
 
 由 `gvfg_enumerate_devices()` 填入。
@@ -80,29 +71,27 @@ UI 應優先顯示 `gvfg_sdi_info_t` 的對應 `*_name`；程式邏輯則比較�
 
 ### 1.5a `gvfg_device_capabilities_t`
 
-由 `gvfg_get_device_capabilities()` 填入；`video_channel_count` 與 `has_audio`
-由 SDK 查詢 capture backend 後回傳。
+由 `gvfg_get_device_capabilities()` 填入，提供裝置可用的 video channel 數量與
+audio capture 支援狀態。
 
 ### 1.5b `gvfg_sdi_info_t`
 
-由 `gvfg_get_channel_sdi_info()` 填入。數值欄位直接來自
-`GVFG_SDI_VIDEO_INFO`；`signal_lock_name`、`mode_name`、`resolution_name`、`fps_name`、`scan_name`
-以及 `st352_format_name`、`st352_fps_name`、`st352_chroma_name`、
-`st352_bit_depth_name` 直接來自 `GvfgStringifySdiVideoInputInfo()`。
+由 `gvfg_get_channel_sdi_info()` 填入。數值欄位可供程式判斷；對應的 `*_name`
+欄位是可直接用於 UI 或 log 的 null-terminated 英文字串。
 
 ### 1.6 `gvfg_signal_status_t`
 
 由 `gvfg_get_channel_signal_status()` 填入。
 
-| 欄位                | 型別    | 說明                                                    |
-| ----------------- | ----- | ----------------------------------------------------- |
-| `connected`       | `int` | 非 0 表示查詢的 channel 目前有有效輸入訊號                           |
-| `channel`         | `int` | 本次查詢對應的 `gvfg_channel_t` 值                            |
-| `width`           | `int` | 連線時的輸入寬度；未連線時為 0                                      |
-| `height`          | `int` | 連線時的輸入高度；未連線時為 0                                      |
-| `pixel_format`    | `int` | 實際 frame payload 的 `gvfg_pixel_format_t` 值            |
-| `bit_depth`       | `int` | 從 payload 格式取得的每色彩 channel bit depth                  |
-| `video_interface` | `int` | `gvfg_video_interface_t`，為 SDI 或 HDMI |
+| 欄位                | 型別    | 說明                                         |
+| ----------------- | ----- | ------------------------------------------ |
+| `connected`       | `int` | 非 0 表示查詢的 channel 目前有有效輸入訊號                |
+| `channel`         | `int` | 本次查詢對應的 `gvfg_channel_t` 值                 |
+| `width`           | `int` | 連線時的輸入寬度；未連線時為 0                           |
+| `height`          | `int` | 連線時的輸入高度；未連線時為 0                           |
+| `pixel_format`    | `int` | 實際 frame payload 的 `gvfg_pixel_format_t` 值 |
+| `bit_depth`       | `int` | 從 payload 格式取得的每色彩 channel bit depth       |
+| `video_interface` | `int` | `gvfg_video_interface_t`，為 SDI 或 HDMI      |
 
 ### 1.7 `gvfg_runtime_info_t`
 
@@ -113,8 +102,7 @@ UI 應優先顯示 `gvfg_sdi_info_t` 的對應 `*_name`；程式邏輯則比較�
 | `capture_fps`      | `double`   | 依 `gvfg_read_channel_frame()` 成功交付時間估算並平滑化的 FPS；尚無足夠 frame 時為 0 |
 | `delivered_frames` | `uint64_t` | 此次 running session 中成功交付給 caller 的 frame 數                      |
 
-Zero-copy 模式另由 `gvfg_get_channel_zero_copy_enabled()` 查詢；driver read/acquire
-timing 屬於內部診斷資訊，不放入客戶 runtime 結構。
+Zero-copy 模式另由 `gvfg_get_channel_zero_copy_enabled()` 查詢。
 
 ### 1.8 `gvfg_frame_t`
 
@@ -122,7 +110,7 @@ timing 屬於內部診斷資訊，不放入客戶 runtime 結構。
 
 | 欄位                 | 型別             | 說明                                                                |
 | ------------------ | -------------- | ----------------------------------------------------------------- |
-| `data`             | `const void *` | Copy mode 為 SDK-owned、zero-copy 為 driver-owned；release 或 stop 後失效 |
+| `data`             | `const void *` | 借用的 frame buffer；release 或 stop 後失效                          |
 | `data_size`        | `uint64_t`     | 此 frame payload 的總 byte 數                                         |
 | `width`            | `int`          | frame 寬度，單位 pixel                                                 |
 | `height`           | `int`          | frame 高度，單位 pixel                                                 |
@@ -145,8 +133,7 @@ Caller 應把 read 取得的 descriptor 傳回 release；SDK 以 `data + frame_i
 | `channels`        | `uint32_t` | interleaved PCM channel 數 |
 | `bits_per_sample` | `uint32_t` | 每個 PCM sample 的 bit 數     |
 
-Driver 一次傳回多少 bytes、buffer capacity 與 block alignment 均由 SDK/backend
-管理，不是公開格式的一部分。
+每個 audio frame 的有效資料長度由 `gvfg_audio_frame_t.data_size` 提供。
 
 ### 1.8b `gvfg_audio_frame_t`
 
@@ -155,7 +142,7 @@ Driver 一次傳回多少 bytes、buffer capacity 與 block alignment 均由 SDK
 
 | 欄位                | 型別             | 說明                                           |
 | ----------------- | -------------- | -------------------------------------------- |
-| `data`            | `const void *` | SDK-owned interleaved PCM；release 或 stop 後失效 |
+| `data`            | `const void *` | 借用的 interleaved PCM；release 或 stop 後失效   |
 | `data_size`       | `uint64_t`     | 此 frame 的有效 PCM byte 數                       |
 | `sample_rate`     | `uint32_t`     | 每秒 sample 數                                  |
 | `channels`        | `uint32_t`     | interleaved PCM channel 數                    |
@@ -167,7 +154,7 @@ Driver 一次傳回多少 bytes、buffer capacity 與 block alignment 均由 SDK
 `data + frame_id` 確認目前 held frame。
 
 Video/audio 的 `timestamp_ns` 可在同一 process/session 內直接比較。它代表 SDK
-delivery timing，不是 driver 或硬體 capture timestamp。
+交付時間，不代表訊號來源端產生 frame 的時間。
 
 ### 1.9 `gvfg_gpu_output_format_t`
 
@@ -192,10 +179,10 @@ delivery timing，不是 driver 或硬體 capture timestamp。
 
 | 成員                                | 值   | 說明                               |
 | --------------------------------- | ---:| -------------------------------- |
-| `GVFG_EVENT_UNKNOWN`              | 0   | 未知事件；正常流程不應依賴此值                  |
-| `GVFG_EVENT_VIDEO_FORMAT_CHANGED` | 1   | Lib 的 video format changed event |
-| `GVFG_EVENT_VIDEO_INPUT_PLUGIN`   | 2   | Lib 的 video input plug-in event  |
-| `GVFG_EVENT_VIDEO_INPUT_UNPLUG`   | 3   | Lib 的 video input unplug event   |
+| `GVFG_EVENT_UNKNOWN`              | 0   | 未知事件；正常流程不應依賴此值        |
+| `GVFG_EVENT_VIDEO_FORMAT_CHANGED` | 1   | 輸入 video format 已變更           |
+| `GVFG_EVENT_VIDEO_INPUT_PLUGIN`   | 2   | Video input 已連接                |
+| `GVFG_EVENT_VIDEO_INPUT_UNPLUG`   | 3   | Video input 已中斷                |
 
 `gvfg_event_t` 是 `gvfg_poll_channel_event()` 的輸出。呼叫前將結構清零並把
 `struct_size` 設為 `sizeof(gvfg_event_t)`。`type` 是上述事件型別。
@@ -260,8 +247,8 @@ gvfg_status_t gvfg_open_channel(gvfg_handle handle,
 - `channel_index`：`GVFG_CHANNEL_0` 或 `GVFG_CHANNEL_1`。
 - 可能回傳：`GVFG_OK`、`GVFG_EINVAL`、`GVFG_ENODEV`、`GVFG_EIO`。
 
-對同一 handle 可分別 open CH0、CH1；第二個 channel 共用同一個 Windows device
-handle，但擁有獨立 backend stream 狀態。已開啟 channel 時不可切換 device index。
+對同一 handle 可分別 open CH0、CH1。已開啟任一 channel 後，不可使用同一 handle
+切換至其他 device index。
 
 ### 1.18 Zero-copy mode selection
 
@@ -274,9 +261,8 @@ gvfg_status_t gvfg_get_channel_zero_copy_enabled(gvfg_handle handle, int channel
 - `enabled` 只接受 0（copy）或 1（zero-copy）；每個 channel 預設為 0。
 - 指定 channel 已 open 時呼叫 `set` 會回傳 `GVFG_ESTATE`；不影響另一條 channel。
 - `get` 可查詢指定 channel 的模式；`out_enabled` 不可為 NULL。
-- Zero-copy mode 的 `frame.data` 為 driver-owned pointer；仍必須以相同 descriptor
+- Zero-copy mode 的 `frame.data` 是借用的 pointer；仍必須以相同 descriptor
   呼叫 `gvfg_release_channel_frame()`，且每個 channel 同時最多持有一張 frame。
-- SDK 在 open 時 enable driver zero-copy，在 destroy/close 前 disable。
 
 ### 1.19 `gvfg_set_channel_video_format`
 
@@ -288,8 +274,10 @@ gvfg_status_t gvfg_set_channel_video_format(gvfg_handle handle,
 
 - 支援 `GVFG_PIXFMT_YUY2` 與 `GVFG_PIXFMT_Y210`。
 - Channel 必須已 open，且 capture 必須尚未 start 或已 stop。
-- YUY2 對應 8-bit color depth，Y210 對應 10-bit；由 SDK 設定 capture backend，
-  Application 不需操作硬體 register。
+- 同一 handle 同時只能有一個 channel 選擇 Y210；衝突的要求回傳 `GVFG_EBUSY`。
+  Application 不需要預先判斷哪個 channel 可以使用 Y210。
+- YUY2 對應 8-bit color depth，Y210 對應 10-bit；Application 只需指定公開格式，
+  不需執行其他格式設定。
 
 ### 1.20 Audio capture selection and frame ownership
 
@@ -311,8 +299,8 @@ gvfg_status_t gvfg_release_channel_audio_frame(gvfg_handle handle,
 
 - 預設只擷取 video。CH0 可在 start 前用 `gvfg_set_channel_audio_enabled()`
   啟用 audio；audio-only 與 CH1 audio 尚未支援。
-- `gvfg_start_channel()` 依 audio enabled 狀態選擇 video-only 或 video + audio driver start。
-- `gvfg_read_channel_audio_frame()` 取得下一個 PCM frame 並交付 SDK-owned
+- `gvfg_start_channel()` 會依 audio enabled 狀態開始 video-only 或 video + audio capture。
+- `gvfg_read_channel_audio_frame()` 取得下一個 PCM frame 並交付借用的
   descriptor。使用完成後必須呼叫 `gvfg_release_channel_audio_frame()`。
 - 未 release 前再次 read 會回傳 `GVFG_ESTATE`。
 - `out_frame` 為 NULL 或 release token 被修改時回傳 `GVFG_EINVAL`。
@@ -321,7 +309,6 @@ gvfg_status_t gvfg_release_channel_audio_frame(gvfg_handle handle,
 - Video 與 audio 應由不同 worker thread read；同一 channel 不可同時執行兩個
   audio read。
 - Stop/close 後 descriptor 立即失效；要跨越 release/stop 保存 PCM 必須先複製。
-- SDK 不建立 audio ring，也不提供尚未完成的 audio zero-copy。
 
 ### 1.20 `gvfg_start_channel`
 
@@ -335,7 +322,7 @@ gvfg_status_t gvfg_start_channel(gvfg_handle handle, int channel_index);
 - `GVFG_ESTATE`：尚未 open 裝置。
 - `GVFG_ETIMEOUT`：本次 Start 的即時 signal query 顯示沒有 lock；channel 不會進入 running。
 - `GVFG_EBUSY`：裝置或 capture resource 正在使用中。
-- `GVFG_EIO`：其他 capture backend 失敗。
+- `GVFG_EIO`：capture 啟動或 I/O 失敗。
 
 每次明確 Start 都會執行一次新的 signal query，不沿用停止前的 signal cache。無訊號時
 Application 應等待輸入恢復後再次呼叫 Start。
@@ -356,11 +343,11 @@ gvfg_status_t gvfg_read_channel_frame(gvfg_handle handle,
 - `GVFG_EINVAL`：handle 或 output pointer 為 NULL。
 - `GVFG_ESTATE`：未 running、已有 held frame、已有另一個 read，或等待時被 stop。
 - `GVFG_ETIMEOUT`：期限內沒有 frame。
-- `GVFG_EBUSY` 表示 capture resource 正在使用中；`GVFG_EIO` 表示其他 backend 失敗；
+- `GVFG_EBUSY` 表示 capture resource 正在使用中；`GVFG_EIO` 表示 capture 或 I/O 失敗；
   `GVFG_ENOTSUP` 表示 SDK 不支援該格式。
 
-Copy mode 回傳 SDK 的單一 frame buffer；zero-copy mode 回傳 driver-owned buffer。兩者的
-pointer 都只保證有效到對應的 `gvfg_release_channel_frame()`。
+Copy mode 與 zero-copy mode 都會回傳借用的 frame buffer。兩者的 pointer 都只保證
+有效到對應的 `gvfg_release_channel_frame()`。
 
 ### 1.22 `gvfg_release_channel_frame`
 
@@ -372,13 +359,11 @@ gvfg_status_t gvfg_release_channel_frame(gvfg_handle handle,
 
 - `handle`：取得該 frame 的同一個 handle。
 - `frame`：`gvfg_read_channel_frame()` 原封不動回傳的完整 descriptor。
-- `GVFG_OK`：成功歸還 frame；copy buffer 可再次使用，或 zero-copy frame 已歸還 driver。
-- 若 frame 原本合法取得，但 release 與 plug-out 競爭，driver 可能已先撤銷
-  zero-copy ownership。SDK 僅在已確認 disconnected 且 driver 回
-  `ERROR_BAD_COMMAND (22)` 時清除相符的 held token，並將 release 視為完成；
-  application 仍照常呼叫一次 release，不需處理 driver error 22。
+- `GVFG_OK`：成功歸還 frame。
+- 即使輸入訊號在持有 frame 期間中斷，application 仍應對原本成功取得的 frame
+  呼叫一次 release。
 - `GVFG_EINVAL`：NULL 或 token 內容與 held frame 不符。
-- `GVFG_ESTATE`：沒有 backend、目前沒有 held frame，或 backend release 狀態不正確。
+- `GVFG_ESTATE`：channel 未開啟，或目前沒有可 release 的 held frame。
 
 ### 1.23 `gvfg_gpu_convert_to_buffer`
 
@@ -467,7 +452,7 @@ gvfg_status_t gvfg_stop(gvfg_handle handle);
 - `GVFG_OK`：成功；已經 stopped 也視為成功。
 - `GVFG_EINVAL`：handle 為 NULL。
 
-此函式會停止 backend、喚醒等待中的 read/poll，並使未 release frame 失效。
+此函式會停止 capture、喚醒等待中的 read/poll，並使未 release frame 失效。
 
 ### 1.29 `gvfg_stop_channel`
 
@@ -492,11 +477,11 @@ gvfg_status_t gvfg_get_channel_signal_status(
 - `GVFG_OK`：查詢成功；沒有訊號時仍成功，但 `connected == 0`。
 - `GVFG_EINVAL`：handle 或 output pointer 為 NULL。
 - `GVFG_ESTATE`：尚未 open 裝置。
-- 也可能回傳其他 backend I/O 狀態。
+- Capture I/O 失敗時可能回傳 `GVFG_EIO`。
 
-Channel 尚未 running 時，此 API 會透過 capture backend 更新 signal status；running 期間回傳
-SDK cache，不進行另一筆硬體查詢。Format changed、input plug-in 與 input unplug event
-都會先同步此 cache，再放入 `gvfg_poll_channel_event()` 使用的 public queue。
+Channel 尚未 running 時，此 API 會更新目前的 signal status；running 期間回傳最近一次
+觀察到的狀態。Format changed、input plug-in 與 input unplug event 發生後，後續查詢會
+反映更新後的狀態。
 
 ### 1.31 `gvfg_get_channel_runtime_info`
 
@@ -511,7 +496,7 @@ gvfg_status_t gvfg_get_channel_runtime_info(
 - `out_info`：接收 runtime statistics，不可為 NULL。
 - `GVFG_OK`：查詢成功。
 - `GVFG_EINVAL`：handle 或 output pointer 為 NULL。
-- `GVFG_ESTATE`：handle 尚無已開啟的 backend 裝置。
+- `GVFG_ESTATE`：handle 尚未開啟任何 channel。
 
 ### 1.32 `gvfg_get_version`
 
@@ -551,13 +536,13 @@ gvfg_status_t gvfg_get_channel_last_sdk_error_detail(gvfg_handle handle,
                                                      uint32_t out_message_size);
 ```
 
-只供公開的 `GVFG_E*` 失敗狀態使用。底層 library 名稱、API 與原始錯誤碼不會出現在
-此公開 detail；這些資訊只保留於內部 debug API。
+此函式提供公開 `GVFG_E*` 失敗狀態的補充說明。回傳內容只描述應用程式可採取行動的
+公開錯誤資訊。
 
 - 複製指定 channel 最近一次 fault 或被拒絕操作的 UTF-8 詳細說明；即使該 channel open 失敗仍可查詢。
 - `gvfg_read_channel_frame()`／`gvfg_poll_channel_event()` 的 timeout、non-blocking 無資料，
   以及正常 stop 喚醒 waiter 都不會覆寫此內容。
-- 每次 `gvfg_start_channel()` request 會開始新的診斷週期並清除舊內容。
+- 每次呼叫 `gvfg_start_channel()` 時會清除先前保存的錯誤說明。
 - 同一 channel 若被多執行緒同時操作，內容可能被後續錯誤覆蓋；應在失敗後立即取得。
 - `GVFG_EINVAL`：handle/message 為 NULL、channel index 無效，或 buffer size 為 0。
 

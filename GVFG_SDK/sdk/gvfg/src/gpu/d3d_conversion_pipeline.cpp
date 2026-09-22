@@ -15,7 +15,11 @@ using Microsoft::WRL::ComPtr;
 
 static void d3d_preview_log_debug(const char *message)
 {
+#if GVFG_INTERNAL_DIAGNOSTICS
     OutputDebugStringA(message ? message : "");
+#else
+    (void)message;
+#endif
 }
 
 static const char *ss_dxgi_format_name(DXGI_FORMAT fmt)
