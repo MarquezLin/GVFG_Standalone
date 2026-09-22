@@ -1263,22 +1263,10 @@ extern "C"
             return "Not supported";
         case GVFG_ETIMEOUT:
             return "Timeout";
-        case GVFG_HRESULT_ERROR:
-            return "GVFG_HRESULT_ERROR";
-        case GVFG_HRESULT_DEV_ERROR:
-            return "GVFG_HRESULT_DEV_ERROR";
-        case GVFG_HRESULT_DEV_BUSY:
-            return "GVFG_HRESULT_DEV_BUSY";
-        case GVFG_HRESULT_VIDEO_CHN_ERROR:
-            return "GVFG_HRESULT_VIDEO_CHN_ERROR";
-        case GVFG_HRESULT_CONTEXT_ERROR:
-            return "GVFG_HRESULT_CONTEXT_ERROR";
-        case GVFG_HRESULT_VIDEO_CHN_INVALID:
-            return "GVFG_HRESULT_VIDEO_CHN_INVALID";
-        case GVFG_HRESULT_API_ERROR:
-            return "GVFG_HRESULT_API_ERROR";
+        case GVFG_EBUSY:
+            return "Device busy";
         default:
-            return status > 0 ? "GVFG_HRESULT_UNKNOWN" : "Unknown";
+            return "Unknown";
         }
     }
 

@@ -88,10 +88,9 @@ extern "C"
         GVFG_ESTATE = -3,  /* API was called in the wrong state. */
         GVFG_EIO = -4,     /* SDK-owned I/O, GPU, or internal extension failure. */
         GVFG_ENOTSUP = -5, /* Requested feature or format is not supported. */
-        GVFG_ETIMEOUT = -6 /* Timed out waiting for driver/backend work. */
+        GVFG_ETIMEOUT = -6, /* Timed out waiting for driver/backend work. */
+        GVFG_EBUSY = -7    /* Device or capture resource is currently busy. */
     };
-
-    /* Positive return values are unmodified GigabyteLib GVFG_HRESULT values. */
 
     typedef enum
     {
@@ -192,7 +191,7 @@ extern "C"
         int height;       /* Signal height in pixels when connected. */
         int pixel_format; /* gvfg_pixel_format_t value for the actual DMA payload. */
         int bit_depth;    /* Signal bit depth derived from the payload format. */
-        int video_interface; /* gvfg_video_interface_t reported by GigabyteLib. */
+        int video_interface; /* gvfg_video_interface_t reported by the capture backend. */
     } gvfg_signal_status_t;
 
     typedef struct
@@ -326,7 +325,8 @@ extern "C"
      * - GVFG_OK on success.
      * - GVFG_EINVAL if handle is NULL or channel_index is invalid.
      * - GVFG_ENODEV if the device cannot be opened.
-     * - A positive, unmodified GVFG_HRESULT for GigabyteLib failures.
+     * - GVFG_EBUSY if the device or capture resource is already in use.
+     * - GVFG_EIO for other capture backend failures.
      */
     GVFG_API gvfg_status_t gvfg_open_channel(
         GVFG_PARAM_IN gvfg_handle handle,
@@ -415,7 +415,8 @@ extern "C"
      * - GVFG_ESTATE if capture is not running or a previous frame has not been
      *   released.
      * - GVFG_ETIMEOUT if no frame is ready before timeout_ms expires.
-     * - A positive, unmodified GVFG_HRESULT for GigabyteLib failures.
+     * - GVFG_EBUSY if the device or capture resource is busy.
+     * - GVFG_EIO for other capture backend failures.
      *
      * In copy mode the returned data pointer is owned by the SDK. In zero-copy
      * mode it points to driver-owned memory. In both modes it remains valid
@@ -570,7 +571,7 @@ extern "C"
      *
      * No input signal is a normal state: the function returns GVFG_OK with
      * out_status->connected set to 0. Before capture starts, this function
-     * refreshes the status from GigabyteLib. While capture is running, it returns
+     * refreshes the status from the capture backend. While capture is running, it returns
      * the SDK cache; format-change, input-plug and input-unplug processing updates
      * that cache before the corresponding public event is queued.
      */
@@ -630,7 +631,7 @@ extern "C"
 
     /*
      * Copy the most recent SDK-owned detailed fault or rejected API call for
-     * one channel. Positive GigabyteLib results and normal timeouts are not stored.
+     * one channel. Backend implementation details and normal timeouts are not stored.
      * A successful gvfg_start_channel() begins a new diagnostic lifetime.
      */
     GVFG_API gvfg_status_t gvfg_get_channel_last_sdk_error_detail(

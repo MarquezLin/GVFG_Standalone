@@ -1,3 +1,23 @@
+/*++
+
+Copyright (C) Gigabyte, All Rights Reserved
+
+Module Name:
+
+    gvfgframework.h
+
+Abstract:
+
+    This module contains the type definitions for Gigabyte VFG100 SDK
+
+Environment:
+
+    Windows Win32
+
+--*/
+
+
+
 #ifndef __GVFG_SDK_FRAMEWORK_H__
 #define __GVFG_SDK_FRAMEWORK_H__
 
@@ -9,7 +29,7 @@ extern "C" {
 #define GVFG_PARAM_OUT
     
 #define GVFG_SDK_API
-#define GVFG_SDK_VER        "1.0.2"
+#define GVFG_SDK_VER        "1.0.3"
     
     
 #ifdef __cplusplus

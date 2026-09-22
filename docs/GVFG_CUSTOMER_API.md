@@ -139,18 +139,19 @@ Audio 採用相同的 pull 與 ownership 模型：
 | `GVFG_EIO`      | SDK 自身 I/O、GPU 或 internal extension 失敗 |
 | `GVFG_ENOTSUP`  | 格式或功能不支援                    |
 | `GVFG_ETIMEOUT` | 等待逾時                        |
+| `GVFG_EBUSY`    | 裝置或 capture resource 正在使用中   |
 
-GigabyteLib 呼叫失敗時，SDK 不重新分類；原始正數 `GVFG_HRESULT` 直接回傳給
-Application。負數只代表 SDK 自己檢查出的錯誤。所有結果都應使用
-`status != GVFG_OK` 判斷，不可套用 Windows `FAILED()`／`SUCCEEDED()`。
+公開 API 不暴露底層 capture library 的錯誤型別。所有失敗都會轉成上述
+`GVFG_E*` 狀態；Application 應使用 `status != GVFG_OK` 判斷，不可套用
+Windows `FAILED()`／`SUCCEEDED()`。
 
 可用 `gvfg_strerror()` 取得靜態英文說明字串；呼叫端不可釋放該字串。
 
 可用 `gvfg_get_version()` 查詢目前實際載入的 `gvfg.dll` 版本。回傳值為
 靜態字串，例如 `"1.0.0"`，呼叫端不可釋放。
 需要記錄最近一次失敗的詳細原因時，可在 API 失敗後立即呼叫
-`gvfg_get_channel_last_sdk_error_detail()`；只保存負數 SDK error 的細節，正數 GigabyteLib
-result 原樣回傳且不寫入此狀態。driver/register 等內部診斷仍保留在 debug API。
+`gvfg_get_channel_last_sdk_error_detail()`。此 API 只提供不含底層 library 名稱與原始錯誤碼的
+公開診斷文字；library、driver、register 等實作資訊只保留在未隨客戶套件交付的 debug API。
 
 ## 5. 資料格式
 
@@ -235,13 +236,13 @@ Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，destroy/c
 成功 read 後，不論 PCM 是送往播放、錄音或被丟棄，都必須正好 release 一次。
 
 `gvfg_set_channel_video_format()` 可在 stream 尚未開始或已 stop 時選擇 YUY2/Y210。
-此功能由 GigabyteLib 1.0.2 的 `GvfgSetVideoColorDepth()` 實作。
+此功能由 SDK 的 capture backend 實作。
 
 ### 查詢
 
 - `gvfg_get_channel_signal_status(handle, channel, &status)`：查詢指定 channel 的連線、尺寸、
   原生格式與 bit depth。沒有輸入訊號是正常狀態：回傳 `GVFG_OK` 且
-  `connected == 0`。Channel 尚未 running 時會向 GigabyteLib 更新；running 期間則回傳
+  `connected == 0`。Channel 尚未 running 時會向 capture backend 更新；running 期間則回傳
   SDK cache，不再額外讀取硬體。
 - `gvfg_get_channel_runtime_info(handle, channel, &info)`：取得指定 channel 已交付 frame 數與
   依 read 間隔估算的 `capture_fps`。start 時統計值重設。

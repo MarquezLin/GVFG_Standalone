@@ -1,19 +1,19 @@
 # GVFG SDK 錯誤處理架構
 
-本文說明目前 SDK 如何產生、傳遞與保存錯誤。SDK 自身錯誤使用負數；
-GigabyteLib 的正數 `GVFG_HRESULT` 不轉換、不重新分類。
+本文說明目前 SDK 如何產生、傳遞與保存錯誤。公開 API 只回傳 `GVFG_*` 狀態；
+底層 library 的原始錯誤只保留在內部 diagnostics。
 
 ## 1. 三層錯誤資訊
 
 ```text
 公開 gvfg_status_t
-    0 成功；負數為 SDK 錯誤；正數為原始 GigabyteLib GVFG_HRESULT
+    0 成功；負數為公開 GVFG 錯誤
 
 ChannelErrorState 詳細字串
-    用來指出哪個操作被拒絕，或哪個 Win32/driver 呼叫真正失敗
+    公開文字只指出操作被拒絕或 capture backend 失敗，不暴露底層 library
 
-Win32 GetLastError()
-    driver/OS 呼叫失敗時的原始錯誤碼
+Internal debug API
+    保存底層 API 名稱、原始 code、enum 名稱與其他 driver/OS 診斷
 ```
 
 例如 driver IOCTL 失敗可能得到：
@@ -36,9 +36,10 @@ Win32 GetLastError()
 | `GVFG_EIO` | SDK 自身 I/O 失敗 | GPU、register extension 或 SDK 內部資料錯誤 |
 | `GVFG_ENOTSUP` | 不支援 | pixel format 或功能不支援 |
 | `GVFG_ETIMEOUT` | 等待超時 | deadline 前沒有 frame/event |
+| `GVFG_EBUSY` | 資源忙碌 | 裝置或 capture resource 已被使用 |
 
-`gvfg_strerror(status)` 對 SDK 負數回傳固定分類文字；對 Lib 正數回傳對應的
-enum 名稱。只有 SDK 負數錯誤會另外保存 channel detail。
+`gvfg_strerror(status)` 對公開狀態回傳固定分類文字。失敗時可以另外查詢不含底層
+library 資訊的 channel detail。
 
 ## 3. 每條 channel 的 `ChannelErrorState`
 
@@ -157,17 +158,20 @@ return fail(GIGABYTE_EIO, "wait DMA event", err);
 2. 透過 error diagnostic log 輸出。
 3. 回傳 backend status。
 
-## 6. GigabyteLib result 如何回到公開 API
+## 6. Backend result 如何回到公開 API
 
-SDK 不推測或重分類主管 library 的錯誤：
+SDK 將底層 library 錯誤轉成穩定的公開狀態：
 
 ```text
 GVFG_HRESULT_OK -> GVFG_OK
-其他 GVFG_HRESULT -> 原始正數不修改，直接回傳
+GVFG_HRESULT_DEV_BUSY -> GVFG_EBUSY
+GVFG_HRESULT_CONTEXT_ERROR -> GVFG_ESTATE
+GVFG_HRESULT_VIDEO_CHN_INVALID -> GVFG_EINVAL
+其他 GVFG_HRESULT -> GVFG_EIO
 ```
 
-負數 `GVFG_E*` 只用於 SDK 自身的參數、lifecycle、timeout、GPU 或 extension
-錯誤，detail 保存 SDK 判定的具體原因。Lib API 的正數結果不會產生或覆寫 detail。
+公開 detail 只保存客戶可理解的失敗原因。內部 `gvfg_debug.h` 另外保存最後一次失敗的
+library API、原始 code 與 enum 名稱；該 header 不隨客戶套件交付。
 
 ## 7. Application 正確取得錯誤的方式
 
@@ -253,10 +257,10 @@ facade running = false
 遇到錯誤時依序記錄：
 
 1. 公開 API 名稱與 `gvfg_status_t`。
-2. 負數 SDK error 再呼叫 `gvfg_get_channel_last_sdk_error_detail()`；正數 Lib result 不需要。
+2. 失敗時呼叫 `gvfg_get_channel_last_sdk_error_detail()` 取得公開 detail。
 3. channel index、copy/zero-copy mode、解析度與格式。
 4. 是否有成功 read 但尚未 release 的 frame。
 5. 是否正在 stop、拔插或 format change。
-6. driver 版本與原始 Win32 error code。
+6. 內部版本再查 debug API 的 library API、原始 code，以及 driver/Win32 資訊。
 
 不要只根據 `GVFG_EIO` 推斷 driver 壞掉；它只是分類，實際失敗邊界必須看詳細字串與當時狀態。

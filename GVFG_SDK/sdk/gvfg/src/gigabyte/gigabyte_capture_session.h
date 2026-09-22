@@ -75,7 +75,7 @@ namespace gvfg::internal
         gvfg_status_t wait_for_recovery(uint32_t timeoutMs);
         gvfg_status_t refresh_video_info();
         gvfg_status_t refresh_audio_info();
-        static gvfg_status_t from_vendor(GVFG_HRESULT result);
+        gvfg_status_t from_vendor(GVFG_HRESULT result, const char *apiName);
         gvfg_status_t reject(gvfg_status_t status, const char *message) const;
         void record_get_frame_timing(double elapsedUs);
 
@@ -89,6 +89,8 @@ namespace gvfg::internal
         bool events_created_ = false;
         bool channel_open_ = false;
         bool video_info_valid_ = false;
+        bool format_change_pending_ = false;
+        gvfg_pixel_format_t requested_video_format_ = GVFG_PIXFMT_UNKNOWN;
         bool audio_info_valid_ = false;
         gvfg_signal_status_t cached_signal_{};
         GVFG_VIDEO_INFO video_info_{};

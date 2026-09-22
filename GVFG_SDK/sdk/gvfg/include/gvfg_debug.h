@@ -30,6 +30,9 @@ typedef struct
     double get_frame_timing_average_us;
     double get_frame_timing_max300_us;
     double get_frame_timing_max_us;
+    int32_t last_vendor_error_code;
+    char last_vendor_api[64];
+    char last_vendor_error_name[64];
 } gvfg_debug_backend_stats_t;
 
 /*

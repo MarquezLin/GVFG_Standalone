@@ -7,6 +7,10 @@
 #include <QStringList>
 #include <QTimer>
 
+#if GVFG_INTERNAL_DIAGNOSTICS
+#include <gvfg_debug.h>
+#endif
+
 #include <chrono>
 #include <cstring>
 #include <utility>
@@ -738,6 +742,21 @@ void CaptureController::reportError(const QString &apiName, gvfg_status_t status
             detail[0] != '\0')
             message += QStringLiteral(" | %1").arg(QString::fromUtf8(detail));
     }
+#if GVFG_INTERNAL_DIAGNOSTICS
+    if (handle_ != nullptr &&
+        (channel == GVFG_CHANNEL_0 || channel == GVFG_CHANNEL_1))
+    {
+        gvfg_debug_backend_stats_t stats{};
+        if (gvfg_debug_get_channel_backend_stats(handle_, channel, &stats) == GVFG_OK &&
+            stats.last_vendor_error_code != 0)
+        {
+            message += QStringLiteral(" | [LIB] %1 returned %2 (%3)")
+                           .arg(QString::fromUtf8(stats.last_vendor_api),
+                                QString::fromUtf8(stats.last_vendor_error_name))
+                           .arg(stats.last_vendor_error_code);
+        }
+    }
+#endif
     appendLog(message);
 }
 
