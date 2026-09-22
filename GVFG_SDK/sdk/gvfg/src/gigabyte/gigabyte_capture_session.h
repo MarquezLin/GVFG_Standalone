@@ -48,7 +48,7 @@ namespace gvfg::internal
         gvfg_status_t set_video_format(gvfg_pixel_format_t format);
         gvfg_status_t get_signal_status(gvfg_signal_status_t &out);
         void get_cached_signal_status(gvfg_signal_status_t &out) const;
-        gvfg_status_t get_device_capabilities(gvfg_device_capabilities_t &out);
+        gvfg_status_t get_device_capabilities(gvfg_debug_device_capabilities_t &out);
         gvfg_status_t get_sdi_info(gvfg_sdi_info_t &out);
         gvfg_status_t get_audio_format(GigabyteAudioInfo &out);
         gvfg_status_t set_event_callback(GigabyteEventCallback callback, void *user);

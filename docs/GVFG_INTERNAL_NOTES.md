@@ -62,7 +62,7 @@ customer/sample (optional)
 | audio enable | `GvfgCreateEvents()` | 使用者只選是否啟用 audio；SDK 轉成 Lib 的 no-audio event 建立參數 |
 | `gvfg_set_channel_video_format()` | `GvfgSetVideoColorDepth()` | YUY2/Y210 轉成 8/10-bit color depth，成功後更新 video info |
 | `gvfg_get_channel_signal_status()` | `GVFG_VIDEO_INFO` cache | `VideoSignalLock` 轉 connected、FourCC 轉 SDK pixel format，並由格式推導 bit depth；正常 UI refresh 只讀 cache |
-| `gvfg_get_device_capabilities()` | `GvfgGetDevInfo()` | 只公開 video channel count 與 audio capability |
+| `gvfg_debug_get_device_capabilities()` | `GvfgGetDevInfo()` | Video channel count 與 audio capability 僅供內部診斷工具使用 |
 | `gvfg_get_channel_sdi_info()` | `GvfgGetSdiVideoInputInfo()`、`GvfgStringifySdiVideoInputInfo()` | 同時提供 Lib 原始欄位的 SDK enum/value 與全部八個未改寫的 Lib 格式化字串，不公開 private struct |
 | `gvfg_get_channel_audio_format()` | `GvfgGetAudioInfo()` | 只公開 sample rate、channels、bits per sample；`cbBufSize` 留在 SDK 作為讀取 buffer 大小，忽略 Lib FrameCount |
 | `gvfg_start_channel()`、stop APIs | `GvfgStartCapture()`、`GvfgStopCapture()` | 驗證狀態、處理 wait cancellation、held frame、event queue、熱插拔恢復與 SDK counters |

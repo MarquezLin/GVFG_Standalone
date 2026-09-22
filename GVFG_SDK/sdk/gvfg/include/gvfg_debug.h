@@ -35,6 +35,12 @@ typedef struct
     char last_vendor_error_name[64];
 } gvfg_debug_backend_stats_t;
 
+typedef struct
+{
+    uint32_t video_channel_count;
+    int has_audio;
+} gvfg_debug_device_capabilities_t;
+
 /*
  * Query driver-neutral internal backend counters.
  *
@@ -45,6 +51,12 @@ GVFG_API gvfg_status_t gvfg_debug_get_channel_backend_stats(
     GVFG_PARAM_IN gvfg_handle handle,
     GVFG_PARAM_IN int channel_index,
     GVFG_PARAM_OUT gvfg_debug_backend_stats_t *out_stats);
+
+/* Query device capabilities for internal diagnostics. At least one channel
+ * must already be open on handle. */
+GVFG_API gvfg_status_t gvfg_debug_get_device_capabilities(
+    GVFG_PARAM_IN gvfg_handle handle,
+    GVFG_PARAM_OUT gvfg_debug_device_capabilities_t *out_capabilities);
 
 /* GIGABYTELIB GAP: GvfgSdk.lib 1.0.2 has no declared register-access API. */
 GVFG_API gvfg_status_t gvfg_debug_read_register(

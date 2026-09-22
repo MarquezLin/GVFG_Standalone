@@ -328,7 +328,7 @@ namespace gvfg::internal
     }
 
     gvfg_status_t GigabyteCaptureSession::get_device_capabilities(
-        gvfg_device_capabilities_t &out)
+        gvfg_debug_device_capabilities_t &out)
     {
         const gvfg_status_t openStatus = ensure_vendor_channel_open();
         if (openStatus != GVFG_OK)
