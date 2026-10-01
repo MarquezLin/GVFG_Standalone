@@ -2,6 +2,7 @@
 
 #include "gvfg_debug.h"
 #include "gigabyte_capture_session.h"
+#include "gvfgframework.h"
 
 #include <algorithm>
 #include <array>
@@ -302,10 +303,7 @@ struct gvfg_channel_session_t
             std::lock_guard<std::mutex> lock(eventMutex);
             if (eventQueue.size() >= 64)
                 eventQueue.pop_front();
-            gvfg_event_t out{};
-            out.struct_size = sizeof(out);
-            out.type = event;
-            eventQueue.push_back(out);
+            eventQueue.push_back(event);
         }
         eventCv.notify_one();
     }
@@ -502,7 +500,7 @@ struct gvfg_channel_session_t
             session->release_frame();
     }
 
-    gvfg_status_t pollEvent(gvfg_event_t &out, uint32_t timeoutMs)
+    gvfg_status_t pollEvent(gvfg_event_type_t &out, uint32_t timeoutMs)
     {
         if (!session)
             return reject(GVFG_ESTATE, "gvfg_poll_channel_event rejected: channel is not open");
@@ -777,7 +775,7 @@ struct gvfg_channel_session_t
     gvfg_audio_frame_t heldAudioFrame{};
     std::mutex eventMutex;
     std::condition_variable eventCv;
-    std::deque<gvfg_event_t> eventQueue;
+    std::deque<gvfg_event_type_t> eventQueue;
 };
 
 struct gvfg_handle_t
@@ -1150,12 +1148,12 @@ extern "C"
 
     gvfg_status_t gvfg_poll_channel_event(gvfg_handle handle,
                                            int channel_index,
-                                           gvfg_event_t *out_event,
+                                           gvfg_event_type_t *out_event_type,
                                            uint32_t timeout_ms)
     {
         if (!handle)
             return GVFG_EINVAL;
-        if (!out_event || out_event->struct_size < sizeof(gvfg_event_t))
+        if (!out_event_type)
             return handle->rejectChannel(channel_index,
                                          GVFG_EINVAL,
                                          "gvfg_poll_channel_event rejected: output event is invalid");
@@ -1164,11 +1162,10 @@ extern "C"
             return handle->rejectChannel(channel_index,
                                          GVFG_ESTATE,
                                          "gvfg_poll_channel_event rejected: channel is not open");
-        gvfg_event_t event{};
-        event.struct_size = sizeof(event);
+        gvfg_event_type_t event = GVFG_EVENT_UNKNOWN;
         const gvfg_status_t status = channel->pollEvent(event, timeout_ms);
         if (status == GVFG_OK)
-            *out_event = event;
+            *out_event_type = event;
         return status;
     }
 
@@ -1245,6 +1242,11 @@ extern "C"
     const char *gvfg_get_version(void)
     {
         return GVFG_VERSION_STRING;
+    }
+
+    const char *gvfg_get_gigabyte_lib_version(void)
+    {
+        return GVFG_SDK_VER;
     }
 
     const char *gvfg_pixel_format_name(int pixel_format)

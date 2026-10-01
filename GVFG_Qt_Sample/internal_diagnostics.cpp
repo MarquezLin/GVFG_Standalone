@@ -51,7 +51,8 @@ void InternalDiagnostics::resetChannel(gvfg_handle handle, int channel)
             stats.video_frames_from_lib,
             stats.audio_dma_event_wakes,
             stats.extra_audio_event_wakes,
-            stats.audio_frames_from_lib};
+            stats.audio_frames_from_lib,
+            stats.audio_driver_frame_count};
     }
 #else
     (void)handle;
@@ -136,6 +137,17 @@ void InternalDiagnostics::appendAudioStatusLine(QStringList &lines,
         return;
 
     const BackendBaseline &baseline = baselines_[channel];
+    const QString driverFrames = stats.audio_driver_frame_count_valid
+        ? QString::number(static_cast<qulonglong>(
+              stats.audio_driver_frame_count - baseline.audioDriverFrameCount))
+        : QStringLiteral("unavailable");
+    lines << QStringLiteral("CH%1 Audio State | enabled=%2 running=%3 | event DMA=%4 Extra=%5 | driver_frames=%6")
+                 .arg(channel)
+                 .arg(stats.audio_enabled ? QStringLiteral("yes") : QStringLiteral("no"))
+                 .arg(stats.stream_running ? QStringLiteral("yes") : QStringLiteral("no"))
+                 .arg(stats.audio_frame_event_valid ? QStringLiteral("valid") : QStringLiteral("NULL"))
+                 .arg(stats.audio_extra_event_valid ? QStringLiteral("valid") : QStringLiteral("NULL"))
+                 .arg(driverFrames);
     lines << QStringLiteral("CH%1 Audio Debug | LIB events DMA=%2 Extra=%3 | LIB->SDK %4 frames | SDK->APP %5 frames")
                  .arg(channel)
                  .arg(static_cast<qulonglong>(stats.audio_dma_event_wakes - baseline.audioDmaEventWakes))

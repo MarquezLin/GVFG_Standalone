@@ -48,9 +48,11 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui_->setupUi(this);
 #if GVFG_INTERNAL_DIAGNOSTICS
-    setWindowTitle(QStringLiteral("GVFG Internal Diagnostic - SDK v%1").arg(controller_->sdkVersion()));
+    setWindowTitle(QStringLiteral("GVFG Internal Diagnostic - APP v%1")
+                       .arg(QStringLiteral(GVFG_SAMPLE_VERSION)));
 #else
-    setWindowTitle(QStringLiteral("GVFG Preview Sample - SDK v%1").arg(controller_->sdkVersion()));
+    setWindowTitle(QStringLiteral("GVFG Preview Sample - APP v%1")
+                       .arg(QStringLiteral(GVFG_SAMPLE_VERSION)));
 #endif
     ui_->logEdit->setMaximumBlockCount(300);
     new LogHighlighter(ui_->logEdit->document());
@@ -136,7 +138,17 @@ MainWindow::MainWindow(QWidget *parent)
 
     updateOutputFormatOptions();
     updateUiState();
-    log_->append(QStringLiteral("GVFG SDK version | %1").arg(controller_->sdkVersion()));
+    log_->append(QStringLiteral("= GVFG Internal Sample startup ="));
+    log_->append(QStringLiteral("APP:     v%1").arg(QStringLiteral(GVFG_SAMPLE_VERSION)));
+    log_->append(QStringLiteral("SDK:     v%1").arg(controller_->sdkVersion()));
+    log_->append(QStringLiteral("GigaLib: v%1").arg(controller_->gigabyteLibVersion()));
+    log_->append(QStringLiteral("Diagnostics: %1")
+#if GVFG_INTERNAL_DIAGNOSTICS
+                     .arg(QStringLiteral("enabled")));
+#else
+                     .arg(QStringLiteral("disabled")));
+#endif
+    log_->append(QStringLiteral("================================"));
     log_->append(log_->fileAvailable()
                      ? QStringLiteral("Log file | %1").arg(log_->filePath())
                      : QStringLiteral("Log file unavailable | %1").arg(log_->filePath()));

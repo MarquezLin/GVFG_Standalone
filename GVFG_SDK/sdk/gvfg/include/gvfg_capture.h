@@ -245,14 +245,6 @@ extern "C"
         GVFG_EVENT_VIDEO_INPUT_UNPLUG = 3    /* Video input cable or signal was disconnected. */
     } gvfg_event_type_t;
 
-    typedef struct
-    {
-        /* Set to sizeof(gvfg_event_t) before calling gvfg_poll_channel_event(). */
-        uint32_t struct_size;
-        int32_t type; /* gvfg_event_type_t value. */
-        uint64_t reserved[4];
-    } gvfg_event_t;
-
     /* Opaque session handle created by gvfg_create() and released by gvfg_destroy(). */
     typedef struct gvfg_handle_t *gvfg_handle;
 
@@ -512,21 +504,20 @@ extern "C"
      *
      * Parameters:
      * - handle: Opened session handle.
-     * - out_event: Receives the event. Initialize it to zero and set
-     *   struct_size to sizeof(gvfg_event_t).
+     * - out_event_type: Receives the event type. Must not be NULL.
      * - timeout_ms: Maximum time to wait. Use 0 to return immediately or
      *   GVFG_TIMEOUT_INFINITE to wait indefinitely.
      *
      * Returns:
      * - GVFG_OK on success.
-     * - GVFG_EINVAL if handle/out_event is NULL or struct_size is invalid.
+     * - GVFG_EINVAL if handle or out_event_type is NULL.
      * - GVFG_ESTATE if no capture device is open or capture has been stopped.
      * - GVFG_ETIMEOUT if no event is available before timeout_ms expires.
      */
     GVFG_API gvfg_status_t gvfg_poll_channel_event(
         GVFG_PARAM_IN gvfg_handle handle,
         GVFG_PARAM_IN int channel_index,
-        GVFG_PARAM_INOUT gvfg_event_t *out_event,
+        GVFG_PARAM_OUT gvfg_event_type_t *out_event_type,
         GVFG_PARAM_IN uint32_t timeout_ms);
 
     /*
@@ -600,6 +591,9 @@ extern "C"
 
     /* Return the loaded GVFG runtime DLL version, for example "1.0.0". */
     GVFG_API const char *gvfg_get_version(void);
+
+    /* Return the GigabyteLib version compiled into the loaded GVFG runtime DLL. */
+    GVFG_API const char *gvfg_get_gigabyte_lib_version(void);
 
     /* Convert a gvfg_pixel_format_t value to a static English format name. */
     GVFG_API const char *gvfg_pixel_format_name(

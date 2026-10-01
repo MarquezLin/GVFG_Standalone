@@ -14,10 +14,10 @@ Log 只標示觀測層、現象與數值。Video/audio `frame_id` 是 SDK 每次
 
 預覽使用 Present(0, 0)，讓 DXGI 等待呈現相依條件，不做外部重試。SyncInterval 仍為 0，並非每張都保證顯示。預覽改成 FIFO，最多保留 3 張待處理影像（包含正在上傳的容量保留），另有 1 個處理中槽位，共 4 個 GPU 槽。60 FPS 下 3 張約 50 ms；這不是刻意等滿 50 ms 才顯示。從上傳完成入列開始計時，等待超過 50 ms 的影像才丟棄（expired）；容量滿時跳過新影像（busy），不替換仍在期限內的舊影像。50 ms 是開始處理前的等待期限，不含 GPU 執行／DXGI Present 等待，不保證端到端延遲或實體螢幕逐張呈現。Stop／關閉／鎖等待只處理 Windows 同步送達的視窗訊息，避免 DXGI 等待 UI 而 UI 又等待 worker；不處理一般排隊輸入或 Qt callbacks。
 
-Audio 保留原本最多 10 個 PCM 區塊的播放佇列（`kMaxQueuedAudioFrames`）；滿時丟掉最舊區塊，再加入新區塊。Sample 不統計輸出、丟棄或取消數量；audio frame 不保證與 video frame 等長。
+Audio 與 Customer Sample 使用相同的 `gvfg_audio_playback.dll` WASAPI helper。APP 先複製 SDK PCM、release SDK frame，再以 SDK timestamp 寫入 helper 的 bounded queue；queue full、輸出失敗、retry、recovery 與 Stop 統計都會寫入內部版 log。audio frame 不保證與 video frame 等長。
 
-播放 write 失敗，或持續回傳 0、兩秒沒有進展，會記錄原因並停止通道；檢查音效裝置後重新 Start。此檢查無法中斷本身永不返回的 write 呼叫。
+Helper create/start/write 失敗時會記錄 status、文字錯誤與 retry；非 queue-full 錯誤會重建 Windows 預設播放端點。APP 不因播放裝置暫時失敗而停止 SDK capture。
 
-統計從 APP 成功取得 SDK frame 開始。SDK ID 連續不能證明更上游沒有丟失；DXGI 接受 Present 不代表實體螢幕已顯示，QAudioSink 接受 PCM 也不代表已實際發聲。已丟掉的原始資料無法靠這些處理補回。
+統計從 APP 成功取得 SDK frame 開始。SDK ID 連續不能證明更上游沒有丟失；DXGI 接受 Present、audio helper 接受 PCM 也不代表實體螢幕已顯示或喇叭已實際發聲。已丟掉的原始資料無法靠這些處理補回。
 
 擷取 API／驅動不修改。新版 APP 需配套的新版 gvfg_preview.dll。後續 GPU 優化修改了共用的轉換原始碼；若要發佈包含該優化的 SDK GPU buffer converter，也需重建其 DLL。尚待 build、播放／預覽異常測試與硬體長測；靜態檢查不能證明零丟失。

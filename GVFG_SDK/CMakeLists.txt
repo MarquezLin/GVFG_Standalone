@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(gvfg_sdk VERSION 1.0.0 LANGUAGES CXX)
+project(gvfg_sdk LANGUAGES CXX)
+
+set(GVFG_SDK_VERSION "1.0.1")
+
+option(GVFG_ENABLE_INTERNAL_API
+  "Export the internal GVFG diagnostic API (never enable for customer packages)"
+  ON
+)
 
 include(GNUInstallDirs)
 
@@ -44,6 +51,7 @@ endif()
 
 add_subdirectory(sdk/gvfg)
 add_subdirectory(helpers/gvfg_preview)
+add_subdirectory(helpers/gvfg_audio_playback)
 
 install(FILES
   ../docs/GVFG_CUSTOMER_API.md

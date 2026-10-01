@@ -11,6 +11,12 @@
 
 #include <stdint.h>
 
+#if defined(GVFG_BUILD) && !GVFG_ENABLE_INTERNAL_API
+#define GVFG_DEBUG_API
+#else
+#define GVFG_DEBUG_API GVFG_API
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -26,6 +32,12 @@ typedef struct
     uint64_t audio_dma_event_wakes;
     uint64_t extra_audio_event_wakes;
     uint64_t audio_frames_from_lib;
+    uint64_t audio_driver_frame_count;
+    int audio_driver_frame_count_valid;
+    int audio_frame_event_valid;
+    int audio_extra_event_valid;
+    int audio_enabled;
+    int stream_running;
     uint64_t get_frame_timing_samples;
     double get_frame_timing_average_us;
     double get_frame_timing_max300_us;
@@ -47,24 +59,24 @@ typedef struct
  * This exposes implementation-level counters for internal tools only. Customer
  * applications should use gvfg_get_channel_runtime_info() instead.
  */
-GVFG_API gvfg_status_t gvfg_debug_get_channel_backend_stats(
+GVFG_DEBUG_API gvfg_status_t gvfg_debug_get_channel_backend_stats(
     GVFG_PARAM_IN gvfg_handle handle,
     GVFG_PARAM_IN int channel_index,
     GVFG_PARAM_OUT gvfg_debug_backend_stats_t *out_stats);
 
 /* Query device capabilities for internal diagnostics. At least one channel
  * must already be open on handle. */
-GVFG_API gvfg_status_t gvfg_debug_get_device_capabilities(
+GVFG_DEBUG_API gvfg_status_t gvfg_debug_get_device_capabilities(
     GVFG_PARAM_IN gvfg_handle handle,
     GVFG_PARAM_OUT gvfg_debug_device_capabilities_t *out_capabilities);
 
 /* GIGABYTELIB GAP: GvfgSdk.lib 1.0.2 has no declared register-access API. */
-GVFG_API gvfg_status_t gvfg_debug_read_register(
+GVFG_DEBUG_API gvfg_status_t gvfg_debug_read_register(
     GVFG_PARAM_IN gvfg_handle handle,
     GVFG_PARAM_IN uint32_t offset,
     GVFG_PARAM_OUT uint32_t *out_value);
 
-GVFG_API gvfg_status_t gvfg_debug_write_register(
+GVFG_DEBUG_API gvfg_status_t gvfg_debug_write_register(
     GVFG_PARAM_IN gvfg_handle handle,
     GVFG_PARAM_IN uint32_t offset,
     GVFG_PARAM_IN uint32_t value);
@@ -72,3 +84,5 @@ GVFG_API gvfg_status_t gvfg_debug_write_register(
 #ifdef __cplusplus
 }
 #endif
+
+#undef GVFG_DEBUG_API

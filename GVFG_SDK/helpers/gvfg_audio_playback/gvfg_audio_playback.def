@@ -1,0 +1,12 @@
+LIBRARY gvfg_audio_playback
+EXPORTS
+    gvfg_audio_player_create
+    gvfg_audio_player_start
+    gvfg_audio_player_write
+    gvfg_audio_player_write_timed
+    gvfg_audio_player_update_video_timestamp
+    gvfg_audio_player_reset_timeline
+    gvfg_audio_player_set_volume
+    gvfg_audio_player_stop
+    gvfg_audio_player_destroy
+    gvfg_audio_player_strerror

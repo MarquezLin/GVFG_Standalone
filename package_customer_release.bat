@@ -4,8 +4,8 @@ setlocal EnableExtensions
 set "PROJECT_DIR=%~dp0"
 set "PROJECT_DIR=%PROJECT_DIR:~0,-1%"
 
-if not defined SDK_SOURCE_BIN set "SDK_SOURCE_BIN=%PROJECT_DIR%\GVFG_SDK\build\Desktop_Qt_6_10_2_MSVC2022_64bit-Release\bin"
-if not defined SAMPLE_SOURCE_BIN set "SAMPLE_SOURCE_BIN=%PROJECT_DIR%\GVFG_Qt_Sample\build\Desktop_Qt_6_10_2_MSVC2022_64bit-Release\bin"
+if not defined SDK_SOURCE_BIN set "SDK_SOURCE_BIN=%PROJECT_DIR%\GVFG_SDK\build\Customer_MSVC2022_64bit-Release\bin"
+if not defined SAMPLE_SOURCE_BIN set "SAMPLE_SOURCE_BIN=%PROJECT_DIR%\..\Costomer_SDK_Release\GVFG_Customer_Sample_1.0.0\build\branch-cleanup-msvc-release\bin"
 if not defined QT_BIN set "QT_BIN=C:\Qt\6.10.2\msvc2022_64\bin"
 if not defined VSDEVCMD set "VSDEVCMD=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat"
 
@@ -15,11 +15,13 @@ if "%~1"=="" (
     set "OUTPUT_DIR=%~1"
 )
 
-for /f %%I in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Date -Format yyyyMMdd_HHmm"') do set "STAMP=%%I"
-for /f "tokens=3" %%I in ('findstr /C:"project(gvfg_sdk VERSION" "%PROJECT_DIR%\GVFG_SDK\CMakeLists.txt"') do set "PACKAGE_VERSION=%%I"
+for /f %%I in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Date -Format yyyyMMdd"') do set "STAMP=%%I"
+for /f "tokens=2" %%I in ('findstr /B /C:"set(GVFG_SDK_VERSION " "%PROJECT_DIR%\GVFG_SDK\CMakeLists.txt"') do set "PACKAGE_VERSION=%%I"
+set "PACKAGE_VERSION=%PACKAGE_VERSION:"=%"
+set "PACKAGE_VERSION=%PACKAGE_VERSION:)=%"
 
 if not defined PACKAGE_VERSION (
-    echo [package] ERROR: Project version not found in CMakeLists.txt.
+    echo [package] ERROR: GVFG_SDK_VERSION not found in CMakeLists.txt.
     goto fail
 )
 
@@ -45,8 +47,24 @@ if not exist "%SDK_SOURCE_BIN%\gvfg_preview.dll" (
     echo [package] ERROR: gvfg_preview.dll not found.
     goto fail
 )
+if not exist "%SDK_SOURCE_BIN%\gvfg_audio_playback.dll" (
+    echo [package] ERROR: gvfg_audio_playback.dll not found.
+    goto fail
+)
 if not exist "%WINDEPLOYQT%" (
     echo [package] ERROR: "%WINDEPLOYQT%" not found.
+    goto fail
+)
+
+if exist "%VSDEVCMD%" call "%VSDEVCMD%" -arch=x64 >nul || goto fail
+dumpbin /nologo /exports "%SDK_SOURCE_BIN%\gvfg.dll" | findstr /C:"gvfg_debug_" >nul
+if not errorlevel 1 (
+    echo [package] ERROR: Internal gvfg_debug exports found in customer gvfg.dll.
+    goto fail
+)
+dumpbin /nologo /imports "%SAMPLE_SOURCE_BIN%\gvfg_qt_preview.exe" | findstr /C:"gvfg_debug_" >nul
+if not errorlevel 1 (
+    echo [package] ERROR: Internal gvfg_debug imports found in customer sample executable.
     goto fail
 )
 
@@ -58,9 +76,9 @@ echo [package] Copy application files...
 copy /Y "%SAMPLE_SOURCE_BIN%\gvfg_qt_preview.exe" "%STAGE_DIR%\" >nul || goto fail
 copy /Y "%SDK_SOURCE_BIN%\gvfg.dll" "%STAGE_DIR%\" >nul || goto fail
 copy /Y "%SDK_SOURCE_BIN%\gvfg_preview.dll" "%STAGE_DIR%\" >nul || goto fail
+copy /Y "%SDK_SOURCE_BIN%\gvfg_audio_playback.dll" "%STAGE_DIR%\" >nul || goto fail
 
 echo [package] Deploy Qt runtime...
-if exist "%VSDEVCMD%" call "%VSDEVCMD%" -arch=x64 >nul || goto fail
 "%WINDEPLOYQT%" --release --compiler-runtime --force --dir "%STAGE_DIR%" "%STAGE_DIR%\gvfg_qt_preview.exe"
 if errorlevel 1 goto fail
 

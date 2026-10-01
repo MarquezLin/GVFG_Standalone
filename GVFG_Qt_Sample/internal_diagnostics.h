@@ -38,6 +38,7 @@ private:
         uint64_t audioDmaEventWakes = 0;
         uint64_t extraAudioEventWakes = 0;
         uint64_t audioFramesFromLibrary = 0;
+        uint64_t audioDriverFrameCount = 0;
     };
 
     struct ChannelMetrics

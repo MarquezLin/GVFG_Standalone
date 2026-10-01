@@ -747,8 +747,25 @@ namespace gvfg::internal
             event_callback_(type, event_callback_user_);
     }
 
-    void GigabyteCaptureSession::fill_debug_stats(gvfg_debug_backend_stats_t &out) const
+    void GigabyteCaptureSession::fill_debug_stats(gvfg_debug_backend_stats_t &out)
     {
+        out.audio_frame_event_valid = events_.hAudioFrameInEvent ? 1 : 0;
+        out.audio_extra_event_valid = events_.hAudioExtraFrame ? 1 : 0;
+        out.audio_enabled = audio_enabled_ ? 1 : 0;
+        out.stream_running = running_ ? 1 : 0;
+        out.audio_driver_frame_count = 0;
+        out.audio_driver_frame_count_valid = 0;
+        if (context_ && channel_open_)
+        {
+            GVFG_AUDIO_INFO liveAudioInfo{};
+            std::lock_guard<std::mutex> captureLock(capture_mutex_);
+            if (GvfgGetAudioInfo(context_, channel_, &liveAudioInfo) == GVFG_HRESULT_OK)
+            {
+                out.audio_driver_frame_count = liveAudioInfo.FrameCount;
+                out.audio_driver_frame_count_valid = 1;
+            }
+        }
+
         std::lock_guard<std::mutex> lock(state_mutex_);
         out.video_dma_event_wakes = video_dma_event_wakes_;
         out.extra_video_event_wakes = extra_video_event_wakes_;

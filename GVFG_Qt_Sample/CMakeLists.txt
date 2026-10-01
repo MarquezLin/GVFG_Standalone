@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(gvfg_qt_preview LANGUAGES CXX)
 
+set(GVFG_SAMPLE_VERSION "1.0.1-internal")
+
 include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -30,13 +32,16 @@ endif()
 
 set(_GVFG_INCLUDE_DIR "${GVFG_SDK_ROOT}/sdk/gvfg/include")
 set(_GVFG_PREVIEW_INCLUDE_DIR "${GVFG_SDK_ROOT}/helpers/gvfg_preview/include")
+set(_GVFG_AUDIO_PLAYBACK_INCLUDE_DIR "${GVFG_SDK_ROOT}/helpers/gvfg_audio_playback/include")
 
 if (MSVC)
   set(_GVFG_IMPLIB_NAME "gvfg.lib")
   set(_GVFG_PREVIEW_IMPLIB_NAME "gvfg_preview.lib")
+  set(_GVFG_AUDIO_PLAYBACK_IMPLIB_NAME "gvfg_audio_playback.lib")
 elseif (MINGW)
   set(_GVFG_IMPLIB_NAME "libgvfg.dll.a")
   set(_GVFG_PREVIEW_IMPLIB_NAME "libgvfg_preview.dll.a")
+  set(_GVFG_AUDIO_PLAYBACK_IMPLIB_NAME "libgvfg_audio_playback.dll.a")
 else()
   message(FATAL_ERROR "Unsupported compiler. Use MSVC or MinGW on Windows x64.")
 endif()
@@ -45,16 +50,20 @@ set(_GVFG_BIN_DIR "${GVFG_SDK_RELEASE_DIR}/bin")
 set(_GVFG_LIB_DIR "${GVFG_SDK_RELEASE_DIR}/lib")
 set(_GVFG_IMPLIB "${_GVFG_LIB_DIR}/${_GVFG_IMPLIB_NAME}")
 set(_GVFG_PREVIEW_IMPLIB "${_GVFG_LIB_DIR}/${_GVFG_PREVIEW_IMPLIB_NAME}")
+set(_GVFG_AUDIO_PLAYBACK_IMPLIB "${_GVFG_LIB_DIR}/${_GVFG_AUDIO_PLAYBACK_IMPLIB_NAME}")
 
 message(STATUS "GVFG SDK Release build: ${GVFG_SDK_RELEASE_DIR}")
 
 foreach(_required_file
     "${_GVFG_INCLUDE_DIR}/gvfg_capture.h"
     "${_GVFG_PREVIEW_INCLUDE_DIR}/gvfg_preview.h"
+    "${_GVFG_AUDIO_PLAYBACK_INCLUDE_DIR}/gvfg_audio_playback.h"
     "${_GVFG_BIN_DIR}/gvfg.dll"
     "${_GVFG_BIN_DIR}/gvfg_preview.dll"
+    "${_GVFG_BIN_DIR}/gvfg_audio_playback.dll"
     "${_GVFG_IMPLIB}"
-    "${_GVFG_PREVIEW_IMPLIB}")
+    "${_GVFG_PREVIEW_IMPLIB}"
+    "${_GVFG_AUDIO_PLAYBACK_IMPLIB}")
   if (NOT EXISTS "${_required_file}")
     message(FATAL_ERROR
       "Required prebuilt GVFG SDK file was not found: ${_required_file}\n"
@@ -76,11 +85,20 @@ set_target_properties(GVFG::Preview PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${_GVFG_PREVIEW_INCLUDE_DIR}"
 )
 
-find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Multimedia)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Multimedia)
+add_library(GVFG::AudioPlayback SHARED IMPORTED GLOBAL)
+set_target_properties(GVFG::AudioPlayback PROPERTIES
+  IMPORTED_LOCATION "${_GVFG_BIN_DIR}/gvfg_audio_playback.dll"
+  IMPORTED_IMPLIB "${_GVFG_AUDIO_PLAYBACK_IMPLIB}"
+  INTERFACE_INCLUDE_DIRECTORIES "${_GVFG_AUDIO_PLAYBACK_INCLUDE_DIR}"
+)
+
+find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
 
 set(GVFG_QT_PREVIEW_SOURCES
   main.cpp
+  audio_playback.cpp
+  audio_playback.h
   capture_controller.cpp
   capture_controller.h
   sample_log.cpp
@@ -106,12 +124,13 @@ endif()
 
 target_link_libraries(gvfg_qt_preview PRIVATE
   Qt${QT_VERSION_MAJOR}::Widgets
-  Qt${QT_VERSION_MAJOR}::Multimedia
   GVFG::Capture
   GVFG::Preview
+  GVFG::AudioPlayback
 )
 
 target_compile_definitions(gvfg_qt_preview PRIVATE
+  GVFG_SAMPLE_VERSION="${GVFG_SAMPLE_VERSION}"
   GVFG_INTERNAL_DIAGNOSTICS=$<IF:$<CONFIG:Debug>,1,0>
 )
 
@@ -123,6 +142,7 @@ add_custom_command(TARGET gvfg_qt_preview POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
     "${_GVFG_BIN_DIR}/gvfg.dll"
     "${_GVFG_BIN_DIR}/gvfg_preview.dll"
+    "${_GVFG_BIN_DIR}/gvfg_audio_playback.dll"
     $<TARGET_FILE_DIR:gvfg_qt_preview>
 )
 

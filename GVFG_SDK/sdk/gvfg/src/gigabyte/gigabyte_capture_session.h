@@ -59,7 +59,7 @@ namespace gvfg::internal
         gvfg_status_t wait_audio(uint32_t timeoutMs, void *destination,
                                     uint32_t destinationCapacity, uint32_t &outBytes);
         gvfg_status_t release_frame();
-        void fill_debug_stats(gvfg_debug_backend_stats_t &out) const;
+        void fill_debug_stats(gvfg_debug_backend_stats_t &out);
         gvfg_status_t debug_read_register(uint32_t offset, uint32_t &outValue);
         gvfg_status_t debug_write_register(uint32_t offset, uint32_t value);
 

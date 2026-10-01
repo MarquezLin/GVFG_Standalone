@@ -15,11 +15,13 @@ if "%~1"=="" (
     set "OUTPUT_DIR=%~1"
 )
 
-for /f %%I in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Date -Format yyyyMMdd_HHmm"') do set "STAMP=%%I"
-for /f "tokens=3" %%I in ('findstr /C:"project(gvfg_sdk VERSION" "%PROJECT_DIR%\GVFG_SDK\CMakeLists.txt"') do set "PACKAGE_VERSION=%%I"
+for /f %%I in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Date -Format yyyyMMdd"') do set "STAMP=%%I"
+for /f "tokens=2" %%I in ('findstr /B /C:"set(GVFG_SDK_VERSION " "%PROJECT_DIR%\GVFG_SDK\CMakeLists.txt"') do set "PACKAGE_VERSION=%%I"
+set "PACKAGE_VERSION=%PACKAGE_VERSION:"=%"
+set "PACKAGE_VERSION=%PACKAGE_VERSION:)=%"
 
 if not defined PACKAGE_VERSION (
-    echo [package] ERROR: Project version not found in CMakeLists.txt.
+    echo [package] ERROR: GVFG_SDK_VERSION not found in CMakeLists.txt.
     goto fail
 )
 
@@ -46,6 +48,10 @@ if not exist "%SDK_SOURCE_BIN%\gvfg_preview.dll" (
     echo [package] ERROR: gvfg_preview.dll not found.
     goto fail
 )
+if not exist "%SDK_SOURCE_BIN%\gvfg_audio_playback.dll" (
+    echo [package] ERROR: gvfg_audio_playback.dll not found.
+    goto fail
+)
 if not exist "%WINDEPLOYQT%" (
     echo [package] ERROR: "%WINDEPLOYQT%" not found.
     goto fail
@@ -59,6 +65,7 @@ echo [package] Copy application files and debug symbols...
 copy /Y "%SAMPLE_SOURCE_BIN%\gvfg_qt_preview.exe" "%STAGE_DIR%\" >nul || goto fail
 copy /Y "%SDK_SOURCE_BIN%\gvfg.dll" "%STAGE_DIR%\" >nul || goto fail
 copy /Y "%SDK_SOURCE_BIN%\gvfg_preview.dll" "%STAGE_DIR%\" >nul || goto fail
+copy /Y "%SDK_SOURCE_BIN%\gvfg_audio_playback.dll" "%STAGE_DIR%\" >nul || goto fail
 if exist "%SAMPLE_SOURCE_BIN%\gvfg_qt_preview.pdb" copy /Y "%SAMPLE_SOURCE_BIN%\gvfg_qt_preview.pdb" "%STAGE_DIR%\" >nul || goto fail
 if exist "%SDK_SOURCE_BIN%\gvfg.pdb" copy /Y "%SDK_SOURCE_BIN%\gvfg.pdb" "%STAGE_DIR%\" >nul || goto fail
 if exist "%SDK_SOURCE_BIN%\gvfg_preview.pdb" copy /Y "%SDK_SOURCE_BIN%\gvfg_preview.pdb" "%STAGE_DIR%\" >nul || goto fail

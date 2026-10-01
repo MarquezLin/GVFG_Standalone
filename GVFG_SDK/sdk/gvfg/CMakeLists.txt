@@ -1,10 +1,14 @@
-# Inherit the version from the standalone root project. The root project()
-# declaration is the single source of truth for the public SDK version.
-set(_GVFG_VERSION "${PROJECT_VERSION}")
-project(gvfg VERSION ${_GVFG_VERSION} LANGUAGES CXX)
+# GVFG_SDK_VERSION in the root CMakeLists.txt is the single version source.
+project(gvfg LANGUAGES CXX)
+
+if (GVFG_ENABLE_INTERNAL_API)
+  set(GVFG_EXPORTS_FILE gvfg.def)
+else()
+  set(GVFG_EXPORTS_FILE gvfg_customer.def)
+endif()
 
 add_library(gvfg SHARED
-    gvfg.def
+    ${GVFG_EXPORTS_FILE}
     include/gvfg_capture.h
     include/gvfg_debug.h
     src/gigabyte/gigabyte_capture_session.cpp
@@ -38,7 +42,8 @@ target_include_directories(gvfg
 
 target_compile_definitions(gvfg PRIVATE
     GVFG_BUILD
-    GVFG_VERSION_STRING="${PROJECT_VERSION}"
+    GVFG_VERSION_STRING="${GVFG_SDK_VERSION}"
+    GVFG_ENABLE_INTERNAL_API=$<BOOL:${GVFG_ENABLE_INTERNAL_API}>
 )
 
 target_compile_definitions(gvfg PRIVATE
@@ -61,7 +66,7 @@ endif()
 if (MSVC AND GVFG_MINGW_DLLTOOL)
   add_custom_command(TARGET gvfg POST_BUILD
     COMMAND "${GVFG_MINGW_DLLTOOL}"
-      -d "${CMAKE_CURRENT_SOURCE_DIR}/gvfg.def"
+      -d "${CMAKE_CURRENT_SOURCE_DIR}/${GVFG_EXPORTS_FILE}"
       -D gvfg.dll
       -l libgvfg.dll.a
     WORKING_DIRECTORY "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}"
