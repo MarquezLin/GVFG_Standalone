@@ -25,13 +25,23 @@ Qt Sample 的 source boundary：
 - `capture_controller.cpp/.h` 直接示範公開的 GVFG C API，並明確管理 `gvfg_create()`／停止流程／`gvfg_destroy()`，不建立重複轉呼叫層。
 
 客戶使用指南在 `docs/GVFG_CUSTOMER_API.md`，完整函式與結構參考在
-`docs/GVFG_CUSTOMER_API_REFERENCE.md`。內部架構、package
+`docs/GVFG_Customer_doc/GVFG_CUSTOMER_API_REFERENCE.md`。內部架構、package
 切分、threading、frame ownership 說明在 `docs/GVFG_INTERNAL_NOTES.md`。
-主管 library 尚缺少的 API 與目前暫時補法整理在 `docs/GIGABYTELIB_GAPS.md`。
+主管 library 尚缺少的 API 與目前暫時補法整理在 `docs/GVFG_Customer_doc/GIGABYTELIB_GAPS.md`。
+
+## Sample tools and archived files
+
+Sample 打包工具統一放在 `../Costomer_SDK_Release/GVFG_Customer_Sample`：
+`master` 的 `package_release.bat` 打包 Customer；
+`internal/audio-diagnostics` 另外提供 `package_debug.bat` 與 `run_diagnostic.bat`。
+這些工具只使用手動編譯產物，不會執行 build。
+
+舊 Sample 套件封存到 `../Archive/Standalone_cleanup_20261002/packages`。
+`CaptureDemo`、廠商 `0922_SDK` 與 SDK build 暫時保留，不當作無用資料刪除。
 
 ## Build
 
-先使用 MSVC 建立 SDK，再到需要的 Sample worktree 使用 Qt kit 建立 Sample。
+先使用 MSVC 建立 SDK，再到共用 Sample 資料夾切換 branch，使用 Qt kit 建立 Sample。
 SDK 與 Sample 使用不同 build directory，切換 Qt compiler 不會重新編譯 SDK source。
 SDK build 會保留 MSVC `.lib`，並在找到 MinGW `dlltool` 時從固定的
 DLL export 清單同步產生 MinGW `.dll.a`；兩種上層共用同一組 MSVC DLL。
