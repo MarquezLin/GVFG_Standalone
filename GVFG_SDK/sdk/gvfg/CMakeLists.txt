@@ -1,11 +1,7 @@
 # GVFG_SDK_VERSION in the root CMakeLists.txt is the single version source.
 project(gvfg LANGUAGES CXX)
 
-if (GVFG_ENABLE_INTERNAL_API)
-  set(GVFG_EXPORTS_FILE gvfg.def)
-else()
-  set(GVFG_EXPORTS_FILE gvfg_customer.def)
-endif()
+set(GVFG_EXPORTS_FILE gvfg.def)
 
 add_library(gvfg SHARED
     ${GVFG_EXPORTS_FILE}

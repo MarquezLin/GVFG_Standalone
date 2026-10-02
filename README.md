@@ -31,6 +31,11 @@ Qt Sample 的 source boundary：
 
 ## Sample tools and archived files
 
+Customer / Internal 共用一組 Release SDK DLL / LIB，SDK 固定匯出診斷 API。
+Customer 專案只交付 public headers，不附 `gvfg_debug.h`，Customer EXE 不可引用診斷 API。
+DLL exports 並非保密或權限邊界；內部 header 不交付僅代表未提供官方使用介面。
+不再維護 `Customer_MSVC2022_64bit-Release` 的獨立 SDK build。
+
 Sample 打包工具統一放在 `../Costomer_SDK_Release/GVFG_Customer_Sample`：
 `master` 的 `package_release.bat` 打包 Customer；
 `internal/audio-diagnostics` 另外提供 `package_debug.bat` 與 `run_diagnostic.bat`。

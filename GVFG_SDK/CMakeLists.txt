@@ -4,10 +4,8 @@ project(gvfg_sdk LANGUAGES CXX)
 
 set(GVFG_SDK_VERSION "1.0.1")
 
-option(GVFG_ENABLE_INTERNAL_API
-  "Export the internal GVFG diagnostic API (never enable for customer packages)"
-  ON
-)
+# One SDK binary for Customer and Internal; only the diagnostic header is private.
+set(GVFG_ENABLE_INTERNAL_API ON)
 
 include(GNUInstallDirs)
 
