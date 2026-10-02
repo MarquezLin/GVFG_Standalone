@@ -1,6 +1,7 @@
 # GVFG Standalone SDK
 
-這個 repository 將 GVFG SDK 與 Qt Sample 分成兩個獨立 CMake project。
+這個 repository 維護 GVFG SDK。Customer 與 Internal Qt Sample 位於各自的
+Git worktree，不在這個 repository 內重複維護 Sample source。
 
 這個 repo 以 GVFG 為 source of truth。其他專案應該透過 public header、
 import library、runtime DLL 來使用 GVFG，不要直接把 GVFG source 編進去。
@@ -13,7 +14,8 @@ done-index 與舊 SDK frame-ring 流程不在相容範圍內。
 ## 內容
 
 - `GVFG_SDK`：獨立 SDK project，使用內嵌的 `GvfgSdk.lib` 建立 `gvfg.dll` 與選用的 `gvfg_preview.dll`。
-- `GVFG_Qt_Sample`：獨立 Qt APP project，只連結預先建好的 SDK，不會編譯 SDK source。
+- `../Costomer_SDK_Release/GVFG_Customer_Sample`：乾淨的 Customer Sample worktree。
+- `../GVFG_Internal_Sample`：包含完整診斷 log 的 Internal Sample worktree。
 - `docs`：API 與整合說明。
 
 Qt Sample 的 source boundary：
@@ -29,8 +31,8 @@ Qt Sample 的 source boundary：
 
 ## Build
 
-先使用 MSVC 建立 SDK，再使用需要的 Qt kit 建立 Sample。兩個 project
-使用不同 build directory，切換 Qt compiler 不會重新編譯 SDK source。
+先使用 MSVC 建立 SDK，再到需要的 Sample worktree 使用 Qt kit 建立 Sample。
+SDK 與 Sample 使用不同 build directory，切換 Qt compiler 不會重新編譯 SDK source。
 SDK build 會保留 MSVC `.lib`，並在找到 MinGW `dlltool` 時從固定的
 DLL export 清單同步產生 MinGW `.dll.a`；兩種上層共用同一組 MSVC DLL。
 
@@ -40,10 +42,10 @@ DLL export 清單同步產生 MinGW `.dll.a`；兩種上層共用同一組 MSVC 
 cmake -S GVFG_SDK -B GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release
 cmake --build GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release --config Release
 
-cmake -S GVFG_Qt_Sample -B GVFG_Qt_Sample/build-release ^
+cmake -S ..\GVFG_Internal_Sample -B ..\GVFG_Internal_Sample\build\Internal_MSVC2022_64bit-Debug ^
   -DCMAKE_PREFIX_PATH=C:\Qt\6.10.2\msvc2022_64 ^
   -DGVFG_SDK_RELEASE_DIR=%CD%\GVFG_SDK\build\Desktop_Qt_6_10_2_MSVC2022_64bit-Release
-cmake --build GVFG_Qt_Sample/build-release --config Release
+cmake --build ..\GVFG_Internal_Sample\build\Internal_MSVC2022_64bit-Debug
 ```
 
 Qt Sample 只從一個固定的 `GVFG_SDK_RELEASE_DIR` 找 DLL 與對應 compiler
@@ -68,7 +70,7 @@ GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/gvfg.lib
 GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/gvfg_preview.lib
 GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/libgvfg.dll.a
 GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/libgvfg_preview.dll.a
-GVFG_Qt_Sample/build-release/bin/gvfg_qt_preview.exe
+../GVFG_Internal_Sample/build/Internal_MSVC2022_64bit-Debug/bin/gvfg_qt_preview.exe
 ```
 
 MSVC 上層連結 `gvfg.lib` 與 `gvfg_preview.lib`；MinGW 上層連結
