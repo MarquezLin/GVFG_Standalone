@@ -11,11 +11,7 @@
 
 #include <stdint.h>
 
-#if defined(GVFG_BUILD) && !GVFG_ENABLE_INTERNAL_API
-#define GVFG_DEBUG_API
-#else
 #define GVFG_DEBUG_API GVFG_API
-#endif
 
 #ifdef __cplusplus
 extern "C" {

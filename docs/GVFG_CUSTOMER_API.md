@@ -258,7 +258,7 @@ Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，destroy/c
 | `GVFG_EVENT_VIDEO_INPUT_PLUGIN`   | Lib 的 video input plug-in event  |
 | `GVFG_EVENT_VIDEO_INPUT_UNPLUG`   | Lib 的 video input unplug event   |
 
-呼叫前應將 `gvfg_event_t` 清零並設定 `struct_size = sizeof(gvfg_event_t)`。
+`event` 使用 `gvfg_event_type_t`；SDK 直接寫入本次取出的事件種類。
 SDK 會在 format changed、input plug-in 或 input unplug event 放入 public queue 前先同步
 signal cache。Application 收到事件後可呼叫 `gvfg_get_channel_signal_status()` 取得對應的新狀態；
 running 期間此查詢讀取 cache，不會再次向 driver 查詢。

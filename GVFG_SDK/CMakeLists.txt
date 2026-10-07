@@ -4,9 +4,6 @@ project(gvfg_sdk LANGUAGES CXX)
 
 set(GVFG_SDK_VERSION "1.0.1")
 
-# One SDK binary for Customer and Internal; only the diagnostic header is private.
-set(GVFG_ENABLE_INTERNAL_API ON)
-
 include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 17)

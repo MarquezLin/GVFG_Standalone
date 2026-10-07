@@ -16,6 +16,8 @@ CMakeUserPresets.json
 *.lib
 *.dll
 *.exe
+__pycache__/
+*.pyc
 
 CaptureDemo/CaptureDemo/.qtcreator/
 CaptureDemo/CaptureDemo/build/

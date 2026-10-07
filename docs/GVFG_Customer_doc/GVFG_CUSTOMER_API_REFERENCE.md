@@ -1,8 +1,17 @@
 # GVFG 客戶 API Reference
 
-## 1. Core API 完整參考
+[TOC]
 
-說明 `gvfg_capture.h` 的所有公開常數、型別、結構與函式。除非特別註明，
+
+
+
+
+
+===
+
+## 1. GVFG API 結構與常數
+
+說明 `gvfg_capture.h` 的所有公開常數、型別、結構。除非特別註明，
 所有輸出結構都建議先用 `{0}` 初始化。
 
 ### 1.1 公開常數
@@ -244,10 +253,6 @@ Caller 必須確認尺寸乘法沒有 overflow，並在 conversion 返回前保�
 | `GVFG_EVENT_VIDEO_INPUT_PLUGIN`   | 2   | Video input 已連接     |
 | `GVFG_EVENT_VIDEO_INPUT_UNPLUG`   | 3   | Video input 已中斷     |
 
-`gvfg_event_t` 是 `gvfg_poll_channel_event()` 的輸出。呼叫前將結構清零並把
-`struct_size` 設為 `sizeof(gvfg_event_t)`。`type` 是上述事件型別；`reserved[4]`
-是保留欄位，caller 應保持為 0，且不可依賴其內容。
-
 SDK 會建立並管理完整的 channel event 集合；使用者直接透過
 `gvfg_poll_channel_event()` 接收。
 
@@ -260,11 +265,17 @@ typedef struct gvfg_handle_t *gvfg_handle;
 只能由 `gvfg_create()` 建立、由 `gvfg_destroy()` 銷毀；caller
 不可取得、配置或修改其內部內容。
 
-### 1.20 `gvfg_enumerate_devices`
+## 2. GVFG API 函式
+
+說明 `gvfg_capture.h` 的所有公開函式。
+
+函式參數方向以 `[in]`、`[out]` 與 `[in, out]` 標示：`[in]` 由 caller 提供， `[out]` 由函式寫入，`[in, out]` 則同時包含 caller 必須先設定的輸入欄位與函式寫回的結果。
+
+### 2.1 `gvfg_enumerate_devices`
 
 ```c
-int gvfg_enumerate_devices(gvfg_device_info_t *out_devices,
-                           int max_devices);
+int gvfg_enumerate_devices(/* [out] */ gvfg_device_info_t *out_devices,
+                           /* [in] */ int max_devices);
 ```
 
 參數：
@@ -276,31 +287,31 @@ int gvfg_enumerate_devices(gvfg_device_info_t *out_devices,
 回傳值：有提供 output array 時為實際寫入數量；只查數量時為可用裝置數；沒有裝置
 時為 0。此函式回傳數量，不回傳 `gvfg_status_t`。
 
-### 1.21 `gvfg_create`
+### 2.2 `gvfg_create`
 
 ```c
-gvfg_status_t gvfg_create(gvfg_handle *out_handle);
+gvfg_status_t gvfg_create(/* [out] */ gvfg_handle *out_handle);
 ```
 
 - `out_handle`：接收新 handle，不可為 NULL。
 - 成功：`GVFG_OK`，handle 處於 closed 狀態。
 - 失敗：`GVFG_EINVAL`（output pointer 為 NULL）。
 
-### 1.22 `gvfg_destroy`
+### 2.3 `gvfg_destroy`
 
 ```c
-gvfg_status_t gvfg_destroy(gvfg_handle handle);
+gvfg_status_t gvfg_destroy(/* [in] */ gvfg_handle handle);
 ```
 
 - `handle`：`gvfg_create()` 回傳的 handle；可為 NULL。
 - 回傳：`GVFG_OK`。若仍在 running，SDK 會先停止。返回後 handle 不得再使用。
 
-### 1.23 `gvfg_open_channel`
+### 2.4 `gvfg_open_channel`
 
 ```c
-gvfg_status_t gvfg_open_channel(gvfg_handle handle,
-                                int device_index,
-                                int channel_index);
+gvfg_status_t gvfg_open_channel(/* [in] */ gvfg_handle handle,
+                                /* [in] */ int device_index,
+                                /* [in] */ int channel_index);
 ```
 
 - `handle`：已建立的 session handle。
@@ -312,13 +323,13 @@ gvfg_status_t gvfg_open_channel(gvfg_handle handle,
 對同一 handle 可分別 open CH0、CH1。已開啟任一 channel 後，不可使用同一 handle
 切換至其他 device index。
 
-### 1.24 `gvfg_get_channel_sdi_info`
+### 2.5 `gvfg_get_channel_sdi_info`
 
 ```c
 gvfg_status_t gvfg_get_channel_sdi_info(
-    gvfg_handle handle,
-    int channel_index,
-    gvfg_sdi_info_t *out_info);
+    /* [in] */ gvfg_handle handle,
+    /* [in] */ int channel_index,
+    /* [out] */ gvfg_sdi_info_t *out_info);
 ```
 
 - `handle`：已 open 指定 channel 的 session。
@@ -329,11 +340,15 @@ gvfg_status_t gvfg_get_channel_sdi_info(
 - `GVFG_ESTATE`：指定 channel 尚未 open。
 - 裝置查詢失敗時可能回傳 `GVFG_EIO`。
 
-### 1.25 Zero-copy mode selection
+### 2.6 Zero-copy mode selection
 
 ```c
-gvfg_status_t gvfg_set_channel_zero_copy_enabled(gvfg_handle handle, int channel, int enabled);
-gvfg_status_t gvfg_get_channel_zero_copy_enabled(gvfg_handle handle, int channel, int *out_enabled);
+gvfg_status_t gvfg_set_channel_zero_copy_enabled(/* [in] */ gvfg_handle handle,
+                                                 /* [in] */ int channel,
+                                                 /* [in] */ int enabled);
+gvfg_status_t gvfg_get_channel_zero_copy_enabled(/* [in] */ gvfg_handle handle,
+                                                 /* [in] */ int channel,
+                                                 /* [out] */ int *out_enabled);
 ```
 
 - `set` 只能在 `gvfg_create()` 後、指定 channel open 前呼叫。
@@ -343,41 +358,39 @@ gvfg_status_t gvfg_get_channel_zero_copy_enabled(gvfg_handle handle, int channel
 - Zero-copy mode 的 `frame.data` 是借用的 pointer；仍必須以相同 descriptor
   呼叫 `gvfg_release_channel_frame()`，且每個 channel 同時最多持有一張 frame。
 
-### 1.26 `gvfg_set_channel_video_format`
+### 2.7 `gvfg_set_channel_video_format`
 
 ```c
-gvfg_status_t gvfg_set_channel_video_format(gvfg_handle handle,
-                                            int channel_index,
-                                            gvfg_pixel_format_t format);
+gvfg_status_t gvfg_set_channel_video_format(/* [in] */ gvfg_handle handle,
+                                            /* [in] */ int channel_index,
+                                            /* [in] */ gvfg_pixel_format_t format);
 ```
 
 - 支援 `GVFG_PIXFMT_YUY2` 與 `GVFG_PIXFMT_Y210`。
 - Channel 必須已 open，且 capture 必須尚未 start 或已 stop。
 - 同一 handle 同時只能有一個 channel 選擇 Y210；衝突的要求回傳 `GVFG_EBUSY`。
-  Application 不需要預先判斷哪個 channel 可以使用 Y210。
-- YUY2 對應 8-bit color depth，Y210 對應 10-bit；Application 只需指定公開格式，
-  不需執行其他格式設定。
+- YUY2 對應 8-bit color depth，Y210 對應 10-bit。
 
-### 1.27 Audio capture selection and frame ownership
+### 2.8 Audio capture selection and frame ownership
 
 ```c
-gvfg_status_t gvfg_set_channel_audio_enabled(gvfg_handle handle,
-                                             int channel_index,
-                                             int enabled);
-gvfg_status_t gvfg_get_channel_audio_format(gvfg_handle handle,
-                                            int channel_index,
-                                            gvfg_audio_format_t *out_format);
-gvfg_status_t gvfg_read_channel_audio_frame(gvfg_handle handle,
-                                            int channel_index,
-                                            gvfg_audio_frame_t *out_frame,
-                                            uint32_t timeout_ms);
-gvfg_status_t gvfg_release_channel_audio_frame(gvfg_handle handle,
-                                               int channel_index,
-                                               const gvfg_audio_frame_t *frame);
+gvfg_status_t gvfg_set_channel_audio_enabled(/* [in] */ gvfg_handle handle,
+                                             /* [in] */ int channel_index,
+                                             /* [in] */ int enabled);
+gvfg_status_t gvfg_get_channel_audio_format(/* [in] */ gvfg_handle handle,
+                                            /* [in] */ int channel_index,
+                                            /* [out] */ gvfg_audio_format_t *out_format);
+gvfg_status_t gvfg_read_channel_audio_frame(/* [in] */ gvfg_handle handle,
+                                            /* [in] */ int channel_index,
+                                            /* [out] */ gvfg_audio_frame_t *out_frame,
+                                            /* [in] */ uint32_t timeout_ms);
+gvfg_status_t gvfg_release_channel_audio_frame(/* [in] */ gvfg_handle handle,
+                                               /* [in] */ int channel_index,
+                                               /* [in] */ const gvfg_audio_frame_t *frame);
 ```
 
 - 預設只擷取 video。CH0 可在 start 前用 `gvfg_set_channel_audio_enabled()`
-  啟用 audio；audio-only 與 CH1 audio 尚未支援。
+  啟用 audio。
 - `gvfg_start_channel()` 會依 audio enabled 狀態開始 video-only 或 video + audio capture。
 - `gvfg_read_channel_audio_frame()` 取得下一個 PCM frame 並交付借用的
   descriptor。使用完成後必須呼叫 `gvfg_release_channel_audio_frame()`。
@@ -389,10 +402,11 @@ gvfg_status_t gvfg_release_channel_audio_frame(gvfg_handle handle,
   audio read。
 - Stop/close 後 descriptor 立即失效；要跨越 release/stop 保存 PCM 必須先複製。
 
-### 1.28 `gvfg_start_channel`
+### 2.9 `gvfg_start_channel`
 
 ```c
-gvfg_status_t gvfg_start_channel(gvfg_handle handle, int channel_index);
+gvfg_status_t gvfg_start_channel(/* [in] */ gvfg_handle handle,
+                                 /* [in] */ int channel_index);
 ```
 
 - `handle`：已成功 open 的 session handle。
@@ -407,13 +421,13 @@ Channel 從 stopped 開始新的 running session 時會執行一次新的 signal
 停止前的 signal cache。對已 running 的 channel 再次呼叫 Start 會直接回傳 `GVFG_OK`，
 不會重新查詢訊號。無訊號時 Application 應等待輸入恢復後再次呼叫 Start。
 
-### 1.29 `gvfg_read_channel_frame`
+### 2.10 `gvfg_read_channel_frame`
 
 ```c
-gvfg_status_t gvfg_read_channel_frame(gvfg_handle handle,
-                                      int channel_index,
-                                      gvfg_frame_t *out_frame,
-                                      uint32_t timeout_ms);
+gvfg_status_t gvfg_read_channel_frame(/* [in] */ gvfg_handle handle,
+                                      /* [in] */ int channel_index,
+                                      /* [out] */ gvfg_frame_t *out_frame,
+                                      /* [in] */ uint32_t timeout_ms);
 ```
 
 - `handle`：running session。
@@ -429,12 +443,12 @@ gvfg_status_t gvfg_read_channel_frame(gvfg_handle handle,
 Copy mode 與 zero-copy mode 都會回傳借用的 frame buffer。兩者的 pointer 都只保證
 有效到對應的 `gvfg_release_channel_frame()`。
 
-### 1.30 `gvfg_release_channel_frame`
+### 2.11 `gvfg_release_channel_frame`
 
 ```c
-gvfg_status_t gvfg_release_channel_frame(gvfg_handle handle,
-                                         int channel_index,
-                                         const gvfg_frame_t *frame);
+gvfg_status_t gvfg_release_channel_frame(/* [in] */ gvfg_handle handle,
+                                         /* [in] */ int channel_index,
+                                         /* [in] */ const gvfg_frame_t *frame);
 ```
 
 - `handle`：取得該 frame 的同一個 handle。
@@ -445,12 +459,12 @@ gvfg_status_t gvfg_release_channel_frame(gvfg_handle handle,
 - `GVFG_EINVAL`：NULL 或 token 內容與 held frame 不符。
 - `GVFG_ESTATE`：channel 未開啟，或目前沒有可 release 的 held frame。
 
-### 1.31 `gvfg_gpu_convert_to_buffer`
+### 2.12 `gvfg_gpu_convert_to_buffer`
 
 ```c
 gvfg_status_t gvfg_gpu_convert_to_buffer(
-    const gvfg_frame_t *source,
-    const gvfg_gpu_output_buffer_t *output);
+    /* [in] */ const gvfg_frame_t *source,
+    /* [in] */ const gvfg_gpu_output_buffer_t *output);
 ```
 
 - `source`：有效的 YUY2/Y210 frame；若來自 read，必須尚未 release。
@@ -460,14 +474,14 @@ gvfg_status_t gvfg_gpu_convert_to_buffer(
 - `GVFG_ENOTSUP`：input/output format 不支援。
 - `GVFG_EIO`：D3D/GPU resource、dispatch 或 readback 失敗。
 
-### 1.32 `gvfg_gpu_convert_to_bgra8`
+### 2.13 `gvfg_gpu_convert_to_bgra8`
 
 ```c
 gvfg_status_t gvfg_gpu_convert_to_bgra8(
-    const gvfg_frame_t *source,
-    void *destination,
-    uint64_t destination_size,
-    int row_bytes);
+    /* [in] */ const gvfg_frame_t *source,
+    /* [out] */ void *destination,
+    /* [in] */ uint64_t destination_size,
+    /* [in] */ int row_bytes);
 ```
 
 - `source`：有效且尚未 release 的 YUY2/Y210 frame。
@@ -476,27 +490,27 @@ gvfg_status_t gvfg_gpu_convert_to_bgra8(
 - `row_bytes`：destination stride，至少 `source->width * 4`。
 - 回傳狀態與通用 GPU conversion 相同。
 
-### 1.33 `gvfg_gpu_convert_to_rgb10a2`
+### 2.14 `gvfg_gpu_convert_to_rgb10a2`
 
 ```c
 gvfg_status_t gvfg_gpu_convert_to_rgb10a2(
-    const gvfg_frame_t *source,
-    void *destination,
-    uint64_t destination_size,
-    int row_bytes);
+    /* [in] */ const gvfg_frame_t *source,
+    /* [out] */ void *destination,
+    /* [in] */ uint64_t destination_size,
+    /* [in] */ int row_bytes);
 ```
 
 參數與 BGRA8 wrapper 相同，但 destination layout 是 packed RGB10A2；每列仍至少
 `source->width * 4` bytes。回傳狀態與通用 GPU conversion 相同。
 
-### 1.34 `gvfg_gpu_convert_to_nv12`
+### 2.15 `gvfg_gpu_convert_to_nv12`
 
 ```c
 gvfg_status_t gvfg_gpu_convert_to_nv12(
-    const gvfg_frame_t *source,
-    void *destination,
-    uint64_t destination_size,
-    int row_bytes);
+    /* [in] */ const gvfg_frame_t *source,
+    /* [out] */ void *destination,
+    /* [in] */ uint64_t destination_size,
+    /* [in] */ int row_bytes);
 ```
 
 - `source`：有效且尚未 release 的 YUY2/Y210 frame；width、height 必須為偶數。
@@ -505,27 +519,27 @@ gvfg_status_t gvfg_gpu_convert_to_nv12(
 - `row_bytes`：Y 與 UV plane 共用的 stride，至少為 `width`。
 - 回傳狀態與通用 GPU conversion 相同。
 
-### 1.35 `gvfg_poll_channel_event`
+### 2.16 `gvfg_poll_channel_event`
 
 ```c
-gvfg_status_t gvfg_poll_channel_event(gvfg_handle handle,
-                                      int channel_index,
-                                      gvfg_event_t *out_event,
-                                      uint32_t timeout_ms);
+gvfg_status_t gvfg_poll_channel_event(/* [in] */ gvfg_handle handle,
+                                      /* [in] */ int channel_index,
+                                      /* [out] */ gvfg_event_type_t *out_event_type,
+                                      /* [in] */ uint32_t timeout_ms);
 ```
 
 - `handle`：running session。
-- `out_event`：接收一個事件，不可為 NULL；呼叫前設定 `struct_size`。
+- `out_event_type`：接收一個 `gvfg_event_type_t` 事件種類，不可為 NULL。
 - `timeout_ms`：規則與 read 相同。
 - `GVFG_OK`：成功取出一個事件。
-- `GVFG_EINVAL`：handle/output pointer 為 NULL，或 `struct_size` 不正確。
+- `GVFG_EINVAL`：handle 或 output pointer 為 NULL。
 - `GVFG_ESTATE`：未 running，或等待時被 stop。
 - `GVFG_ETIMEOUT`：期限內沒有事件。
 
-### 1.36 `gvfg_stop`
+### 2.17 `gvfg_stop`
 
 ```c
-gvfg_status_t gvfg_stop(gvfg_handle handle);
+gvfg_status_t gvfg_stop(/* [in] */ gvfg_handle handle);
 ```
 
 - `handle`：session handle，不可為 NULL。
@@ -534,22 +548,23 @@ gvfg_status_t gvfg_stop(gvfg_handle handle);
 
 此函式會停止 capture、喚醒等待中的 read/poll，並使未 release frame 失效。
 
-### 1.37 `gvfg_stop_channel`
+### 2.18 `gvfg_stop_channel`
 
 ```c
-gvfg_status_t gvfg_stop_channel(gvfg_handle handle, int channel_index);
+gvfg_status_t gvfg_stop_channel(/* [in] */ gvfg_handle handle,
+                                /* [in] */ int channel_index);
 ```
 
 - 只停止指定 channel；`gvfg_stop()` 會停止同一 handle 已開啟的所有 channel。
 - 尚未 open 的 channel 回傳 `GVFG_ESTATE`。
 
-### 1.38 `gvfg_get_channel_signal_status`
+### 2.19 `gvfg_get_channel_signal_status`
 
 ```c
 gvfg_status_t gvfg_get_channel_signal_status(
-    gvfg_handle handle,
-    int channel_index,
-    gvfg_signal_status_t *out_status);
+    /* [in] */ gvfg_handle handle,
+    /* [in] */ int channel_index,
+    /* [out] */ gvfg_signal_status_t *out_status);
 ```
 
 - `handle`：已 open 的 session。
@@ -563,13 +578,13 @@ Channel 尚未 running 時，此 API 會更新目前的 signal status；running 
 觀察到的狀態。Format changed、input plug-in 與 input unplug event 發生後，後續查詢會
 反映更新後的狀態。
 
-### 1.39 `gvfg_get_channel_runtime_info`
+### 2.20 `gvfg_get_channel_runtime_info`
 
 ```c
 gvfg_status_t gvfg_get_channel_runtime_info(
-    gvfg_handle handle,
-    int channel_index,
-    gvfg_runtime_info_t *out_info);
+    /* [in] */ gvfg_handle handle,
+    /* [in] */ int channel_index,
+    /* [out] */ gvfg_runtime_info_t *out_info);
 ```
 
 - `handle`：已 open 或 running 的 session。
@@ -578,42 +593,42 @@ gvfg_status_t gvfg_get_channel_runtime_info(
 - `GVFG_EINVAL`：handle 或 output pointer 為 NULL。
 - `GVFG_ESTATE`：指定 channel 尚未 open。
 
-### 1.40 `gvfg_get_version`
+### 2.21 `gvfg_get_version`
 
 ```c
 const char *gvfg_get_version(void);
 ```
 
-- 回傳目前實際載入的 GVFG runtime DLL 版本，例如 `"1.0.0"`。
+- 回傳目前實際載入的 GVFG runtime DLL 版本，例如 `"1.0.1"`。
 - 回傳值是靜態 null-terminated 字串，caller 不可 free。
-- 可用於 log、問題回報，以及確認 header、LIB、DLL 是否來自同一版本。
+- 可用於 log、問題回報，以及確認 header、DLL 是否來自同一版本。
 
-### 1.41 `gvfg_pixel_format_name`
+### 2.22 `gvfg_pixel_format_name`
 
 ```c
-const char *gvfg_pixel_format_name(int pixel_format);
+const char *gvfg_pixel_format_name(/* [in] */ int pixel_format);
 ```
 
 - `pixel_format`：`gvfg_pixel_format_t` 或其他整數值。
 - 回傳：靜態英文字串 `"YUY2"`、`"Y210"` 或 `"UNKNOWN"`。Caller 不可 free。
 
-### 1.42 `gvfg_strerror`
+### 2.23 `gvfg_strerror`
 
 ```c
-const char *gvfg_strerror(gvfg_status_t status);
+const char *gvfg_strerror(/* [in] */ gvfg_status_t status);
 ```
 
 - `status`：任一 GVFG status code。
 - 回傳：靜態、null-terminated 英文說明字串；未知值回傳 unknown 類型說明。
   Caller 不可 free。
 
-### 1.43 `gvfg_get_channel_last_sdk_error_detail`
+### 2.24 `gvfg_get_channel_last_sdk_error_detail`
 
 ```c
-gvfg_status_t gvfg_get_channel_last_sdk_error_detail(gvfg_handle handle,
-                                                     int channel_index,
-                                                     char *out_message,
-                                                     uint32_t out_message_size);
+gvfg_status_t gvfg_get_channel_last_sdk_error_detail(/* [in] */ gvfg_handle handle,
+                                                     /* [in] */ int channel_index,
+                                                     /* [out] */ char *out_message,
+                                                     /* [in] */ uint32_t out_message_size);
 ```
 
 此函式提供公開 `GVFG_E*` 失敗狀態的補充說明。回傳內容只描述應用程式可採取行動的
@@ -626,12 +641,12 @@ gvfg_status_t gvfg_get_channel_last_sdk_error_detail(gvfg_handle handle,
 - 同一 channel 若被多執行緒同時操作，內容可能被後續錯誤覆蓋；應在失敗後立即取得。
 - `GVFG_EINVAL`：handle/message 為 NULL、channel index 無效，或 buffer size 為 0。
 
-## 2. Preview API 完整參考
+## 3. Preview API 完整參考
 
 本節說明選用的 `gvfg_preview.h`。Preview status 與 core `gvfg_status_t` 是不同 enum，
 不可混用。
 
-### 2.1 Preview 型別
+### 3.1 Preview 型別
 
 `gvfg_preview_status_t`：
 
@@ -706,22 +721,22 @@ configure 與 clear 不會重設。`presented` 表示 DXGI 接受 Present，不�
 submitted = presented + replaced + busy + failed + cancelled + in_flight
 ```
 
-### 2.2 Preview 函式
+### 3.2 Preview 函式
 
-| 函式                                                         | 參數與行為                                                             |
-| ---------------------------------------------------------- | ----------------------------------------------------------------- |
-| `gvfg_preview_get_delivery_stats(handle, out_stats)`       | 取得 frame delivery lifetime counters；output 不可為 NULL               |
-| `gvfg_preview_wait_idle(handle, timeout_ms)`               | 停止提交新 frame 後等待 queued work 完成；仍有工作時回傳 `GVFG_PREVIEW_ESTATE`      |
-| `gvfg_preview_create(out_handle)`                          | `out_handle` 接收新 preview handle；不可為 NULL                          |
-| `gvfg_preview_destroy(handle)`                             | 銷毀 handle 與相關資源；返回後不得再使用                                          |
-| `gvfg_preview_attach_window(handle, native_window_handle)` | 將 preview 接到 Windows `HWND`；兩參數都必須有效                              |
-| `gvfg_preview_prepare(handle, width, height, bit_depth)`   | 在持有第一張 capture frame 前預先建立 GPU resources                          |
-| `gvfg_preview_render_frame(handle, frame)`                 | 返回前同步 upload caller data；GPU conversion 與 Present 由內部 worker 繼續執行 |
-| `gvfg_preview_clear(handle)`                               | 將最後呈現的畫面替換成黑畫面                                                    |
-| `gvfg_preview_get_info(handle, out_info)`                  | 將目前 pipeline/frame/adapter 資訊寫入 `out_info`                        |
-| `gvfg_preview_get_stats(handle, out_stats)`                | 將 Present 統計寫入 `out_stats`                                        |
-| `gvfg_preview_shutdown(handle)`                            | 關閉目前 preview pipeline，但保留 handle 供後續使用或 destroy                   |
-| `gvfg_preview_strerror(status)`                            | 回傳靜態英文錯誤字串；caller 不可 free                                         |
+| 函式                                                         | 參數與行為                                                                                  |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `gvfg_preview_get_delivery_stats(handle, out_stats)`       | `[in] handle`；`[out] out_stats`。取得 frame delivery lifetime counters；output 不可為 NULL    |
+| `gvfg_preview_wait_idle(handle, timeout_ms)`               | `[in] handle, timeout_ms`。停止提交新 frame 後等待 queued work 完成；仍有工作時回傳 `GVFG_PREVIEW_ESTATE` |
+| `gvfg_preview_create(out_handle)`                          | `[out] out_handle`。接收新 preview handle；不可為 NULL                                         |
+| `gvfg_preview_destroy(handle)`                             | `[in] handle`。銷毀 handle 與相關資源；返回後不得再使用                                                 |
+| `gvfg_preview_attach_window(handle, native_window_handle)` | `[in] handle, native_window_handle`。將 preview 接到 Windows `HWND`；兩參數都必須有效               |
+| `gvfg_preview_prepare(handle, width, height, bit_depth)`   | `[in] handle, width, height, bit_depth`。在持有第一張 capture frame 前預先建立 GPU resources       |
+| `gvfg_preview_render_frame(handle, frame)`                 | `[in] handle, frame`。返回前同步 upload caller data；GPU conversion 與 Present 由內部 worker 繼續執行 |
+| `gvfg_preview_clear(handle)`                               | `[in] handle`。將最後呈現的畫面替換成黑畫面                                                           |
+| `gvfg_preview_get_info(handle, out_info)`                  | `[in] handle`；`[out] out_info`。寫入目前 pipeline/frame/adapter 資訊                          |
+| `gvfg_preview_get_stats(handle, out_stats)`                | `[in] handle`；`[out] out_stats`。寫入 Present 統計                                          |
+| `gvfg_preview_shutdown(handle)`                            | `[in] handle`。關閉目前 preview pipeline，但保留 handle 供後續使用或 destroy                          |
+| `gvfg_preview_strerror(status)`                            | `[in] status`。回傳靜態英文錯誤字串；caller 不可 free                                                |
 
 除 `gvfg_preview_strerror()` 外，preview 函式都回傳 `gvfg_preview_status_t`。實際錯誤
 應以函式回傳值判斷，並使用 `gvfg_preview_strerror()` 記錄說明。
@@ -729,3 +744,53 @@ submitted = presented + replaced + busy + failed + cancelled + in_flight
 `gvfg_preview_render_frame()` 返回後，caller 即可 release 或重用原始 frame memory；
 函式返回不代表該 frame 已完成 GPU conversion、Present 或實際顯示。需要在停止提交後確認
 內部工作已完成時，呼叫 `gvfg_preview_wait_idle()`。
+
+## 4. Audio Playback Helper 完整參考
+
+本節說明選用的 `gvfg_audio_playback.h`。`gvfg_audio_playback.dll` 是獨立的 Windows
+WASAPI helper，不依賴 `gvfg.dll`。Application 仍負責從 Capture API 取得 PCM、
+複製資料並 release SDK audio frame，再把 application-owned PCM 送入 helper。
+
+### 4.1 Audio Playback 型別
+
+`gvfg_audio_playback_status_t`：
+
+| 成員                              | 說明                                      |
+| --------------------------------- | ----------------------------------------- |
+| `GVFG_AUDIO_PLAYBACK_OK`          | 成功                                      |
+| `GVFG_AUDIO_PLAYBACK_EINVAL`      | NULL、空資料、格式、frame alignment 或音量參數錯誤 |
+| `GVFG_AUDIO_PLAYBACK_ESTATE`      | Player 尚未啟動或目前狀態不允許操作       |
+| `GVFG_AUDIO_PLAYBACK_ENODEV`      | 找不到 Windows 預設 audio output          |
+| `GVFG_AUDIO_PLAYBACK_EFORMAT`     | WASAPI 不支援指定 PCM 格式                 |
+| `GVFG_AUDIO_PLAYBACK_EQUEUE_FULL` | 內部 bounded queue 已滿；本次 packet 未接受 |
+| `GVFG_AUDIO_PLAYBACK_EIO`         | COM、WASAPI 或 playback worker 操作失敗    |
+
+`gvfg_audio_player` 是 opaque pointer，只能由 audio player create/destroy 管理。
+
+`gvfg_audio_playback_format_t`：
+
+| 欄位              | 說明                         |
+| ----------------- | ---------------------------- |
+| `sample_rate`     | 每秒 sample 數               |
+| `channels`        | Interleaved PCM channel 數    |
+| `bits_per_sample` | 每個 PCM sample 的 bit 數     |
+
+### 4.2 Audio Playback 函式
+
+| 函式 | 參數與行為 |
+| ---- | ---------- |
+| `gvfg_audio_player_create(out_player)` | `[out] out_player`。建立 player；不可為 NULL |
+| `gvfg_audio_player_start(player, format)` | 在 Windows 預設輸出裝置啟動 shared-mode WASAPI playback |
+| `gvfg_audio_player_write(player, data, data_size)` | 複製完整 interleaved PCM frame 到 bounded queue；返回後 caller 可立即重用資料 |
+| `gvfg_audio_player_write_timed(player, data, data_size, audio_timestamp_ns)` | 連同 SDK audio delivery timestamp 排入 queue，供 helper 與 video timestamp 做有限度同步 |
+| `gvfg_audio_player_update_video_timestamp(player, video_timestamp_ns)` | 提供同一 SDK monotonic clock domain 的最新 video delivery timestamp |
+| `gvfg_audio_player_reset_timeline(player)` | 清除 queued PCM、重設 WASAPI stream，並建立新的 A/V sync timeline |
+| `gvfg_audio_player_set_volume(player, volume)` | 設定 PCM16 software gain；範圍 `0.0` 到 `2.0` |
+| `gvfg_audio_player_stop(player)` | 停止 worker 並清除 queued PCM；可重複呼叫 |
+| `gvfg_audio_player_destroy(player)` | 停止並銷毀 player；NULL 可安全忽略 |
+| `gvfg_audio_player_strerror(status)` | 回傳靜態英文錯誤字串；caller 不可 free |
+
+Helper 的 queue 上限約為 500 ms PCM。`GVFG_AUDIO_PLAYBACK_EQUEUE_FULL` 表示本次 packet
+未被接受；capture thread 不應為等待播放而延後 release SDK frame。`write_timed()` 使用的是
+SDK delivery timestamp，不是來源端硬體 PTS，因此同步只適合限制明顯的短期 lead/lag，不能作為
+端到端硬體 A/V sync 的量測依據。

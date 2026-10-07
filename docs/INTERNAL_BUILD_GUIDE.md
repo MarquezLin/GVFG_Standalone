@@ -38,14 +38,16 @@
 
 ## 4. 更新 SDK 版本
 
-版本只有一個來源：`GVFG_SDK/CMakeLists.txt` 的 `project()`。例如準備 `1.0.0`
-時改成：
+版本只有一個來源：`GVFG_SDK/CMakeLists.txt` 的 `GVFG_SDK_VERSION`。例如準備
+`1.0.0-rc.1` 時改成：
 
 ```cmake
-project(gvfg_sdk VERSION 1.0.0 LANGUAGES CXX)
+set(GVFG_SDK_VERSION "1.0.0-rc.1")
 ```
 
-`sdk/gvfg` 會直接繼承根 project version，並將它編入 `gvfg.dll`。不再存在 `GVFG_SDK_VERSION` cache option，也不應使用 `-DGVFG_SDK_VERSION=...` 覆寫。修改版本後要重新 configure，再重新建置 DLL。
+`sdk/gvfg` 會直接將這個字串編入 `gvfg.dll`。正式發布時只要改成
+`set(GVFG_SDK_VERSION "1.0.0")`。這不是 cache option，不應使用
+`-DGVFG_SDK_VERSION=...` 覆寫。修改版本後要重新 configure，再重新建置 DLL。
 
 程式可用下列公開 API 查詢實際載入的 DLL 版本：
 

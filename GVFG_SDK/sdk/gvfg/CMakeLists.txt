@@ -39,7 +39,6 @@ target_include_directories(gvfg
 target_compile_definitions(gvfg PRIVATE
     GVFG_BUILD
     GVFG_VERSION_STRING="${GVFG_SDK_VERSION}"
-    GVFG_ENABLE_INTERNAL_API=$<BOOL:${GVFG_ENABLE_INTERNAL_API}>
 )
 
 target_compile_definitions(gvfg PRIVATE
