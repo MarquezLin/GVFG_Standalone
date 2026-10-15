@@ -643,10 +643,9 @@ private:
                             renderFmt = gvfg::internal::GVFG_RENDER_FMT_RGBA16;
                         else if (work.pixelFormat == GVFG_PREVIEW_PIXFMT_DICOM_YBR_FULL_422)
                             renderFmt = gvfg::internal::GVFG_RENDER_FMT_DICOM_YBR_FULL_422;
-                        rendered = pipeline_->render_texture_to_fp16(work.texture.Get(), renderFmt,
-                                                                      work.width, work.height, work.view.Get());
-                        if (rendered)
-                            presentResult = pipeline_->present_preview(work.width, work.height);
+                        presentResult = pipeline_->present_texture(work.texture.Get(), work.view.Get(), renderFmt,
+                                                                   work.width, work.height, work.bitDepth);
+                        rendered = presentResult != gvfg::internal::GVFG_PREVIEW_PRESENT_FAILED;
                     }
                 }
             }
@@ -708,7 +707,7 @@ private:
         desc.swapchain_10bit = gvfg::internal::GVFG_RENDER_PREVIEW_BITDEPTH_AUTO;
         pipeline_->configurePreview(desc);
         pipeline_->set_source_bit_depth(sourceBitDepth > 0 ? sourceBitDepth : 8);
-        const bool ready = pipeline_->ensure_rt_and_pipeline(width, height, true) &&
+        const bool ready = pipeline_->ensure_states() &&
                            pipeline_->ensure_preview_swapchain(width, height);
         return ready;
     }

@@ -16,6 +16,8 @@ add_library(gvfg SHARED
     src/gpu/d3d_conversion_pipeline.cpp
     src/gpu/d3d_conversion_pipeline.h
     src/gpu/gvfg_gpu_convert.cpp
+    src/gpu/gvfg_gpu_osd.cpp
+    src/gpu/gvfg_gpu_osd.h
     src/gvfg_error_state.h
     src/gvfg_capture.cpp
 )
@@ -46,6 +48,7 @@ target_compile_definitions(gvfg PRIVATE
 )
 
 target_link_libraries(gvfg PRIVATE
+    gvfg_osd_core
     "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/GigabyteLib/GvfgSdk.lib"
     setupapi
     user32

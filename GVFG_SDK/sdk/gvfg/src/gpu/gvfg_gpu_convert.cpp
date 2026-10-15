@@ -37,7 +37,7 @@ public:
         if (!pipeline_)
             pipeline_ = std::make_unique<gvfg::internal::D3DPreviewPipeline>();
         if (!pipeline_->initialize(device_.Get(), context_.Get()) ||
-            !pipeline_->ensure_rt_and_pipeline(source.width, source.height))
+            !pipeline_->ensure_export_target(source.width, source.height, output.pixel_format))
             return GVFG_EIO;
 
         gvfg::internal::gvfg_render_pixfmt_t renderFormat{};
@@ -63,10 +63,16 @@ public:
             return GVFG_ENOTSUP;
         }
 
-        if (!uploaded ||
-            !pipeline_->render_uploaded_yuv_to_fp16(renderFormat, source.width, source.height) ||
-            !pipeline_->copy_fp16_to_scene())
-            return GVFG_EIO;
+        if (!uploaded) return GVFG_EIO;
+
+        if (output.pixel_format == GVFG_GPU_OUTPUT_NV12)
+        {
+            if (!pipeline_->blit_uploaded_422_to_nv12(renderFormat, source.width, source.height) ||
+                !pipeline_->readback_nv12_to_buffer(output.data, output.data_size, output.row_bytes,
+                                                     source.width, source.height))
+                return GVFG_EIO;
+            return GVFG_OK;
+        }
 
         DXGI_FORMAT outputFormat = DXGI_FORMAT_UNKNOWN;
         bool rendered = false;
@@ -74,22 +80,12 @@ public:
         {
         case GVFG_GPU_OUTPUT_BGRA8:
             outputFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
-            rendered = pipeline_->blit_fp16_to_rgba8(source.width, source.height);
+            rendered = pipeline_->draw_uploaded_rgb(renderFormat, source.width, source.height, outputFormat);
             break;
         case GVFG_GPU_OUTPUT_RGB10A2:
             outputFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
-            rendered = pipeline_->blit_fp16_to_rgb10a2(source.width, source.height);
+            rendered = pipeline_->draw_uploaded_rgb(renderFormat, source.width, source.height, outputFormat);
             break;
-        case GVFG_GPU_OUTPUT_NV12:
-            rendered = pipeline_->blit_fp16_to_nv12(source.width, source.height);
-            if (!rendered ||
-                !pipeline_->readback_nv12_to_buffer(output.data,
-                                                     output.data_size,
-                                                     output.row_bytes,
-                                                     source.width,
-                                                     source.height))
-                return GVFG_EIO;
-            return GVFG_OK;
         default:
             return GVFG_ENOTSUP;
         }

@@ -599,7 +599,7 @@ gvfg_status_t gvfg_get_channel_runtime_info(
 const char *gvfg_get_version(void);
 ```
 
-- 回傳目前實際載入的 GVFG runtime DLL 版本，例如 `"1.0.1"`。
+- 回傳目前實際載入的 GVFG runtime DLL 版本，例如 `"1.0.2"`。
 - 回傳值是靜態 null-terminated 字串，caller 不可 free。
 - 可用於 log、問題回報，以及確認 header、DLL 是否來自同一版本。
 

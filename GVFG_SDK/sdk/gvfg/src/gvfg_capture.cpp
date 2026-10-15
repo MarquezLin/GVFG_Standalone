@@ -2,6 +2,7 @@
 
 #include "gvfg_debug.h"
 #include "gigabyte_capture_session.h"
+#include "gpu/gvfg_gpu_osd.h"
 #include "gvfgframework.h"
 
 #include <algorithm>
@@ -398,12 +399,53 @@ struct gvfg_channel_session_t
             return st;
         }
 
-        if (!frame.data || frame.width == 0 || frame.height == 0)
+        if (!frame.data || frame.width <= 0 || frame.height <= 0)
         {
             session->release_frame();
             std::lock_guard<std::mutex> lock(frameMutex);
             readInProgress = false;
             return reject(GVFG_EIO, "gvfg_read_channel_frame received an invalid frame descriptor");
+        }
+
+        int nativeStride = 0;
+        const gvfg_status_t strideStatus =
+            native_row_stride_bytes(static_cast<uint32_t>(frame.width),
+                                    frame.pixel_format, nativeStride);
+        if (strideStatus != GVFG_OK || frame.row_stride_bytes < nativeStride)
+        {
+            session->release_frame();
+            std::lock_guard<std::mutex> lock(frameMutex);
+            readInProgress = false;
+            return reject(strideStatus == GVFG_OK ? GVFG_EIO : strideStatus,
+                          "gvfg_read_channel_frame received an invalid row stride");
+        }
+
+        bool osdApplied = false;
+        int processedStride = 0;
+        const gvfg_status_t osdStatus =
+            osdProcessor.process(frame, processedVideoBuffer, processedStride, osdApplied);
+        if (osdStatus != GVFG_OK)
+        {
+            session->release_frame();
+            std::lock_guard<std::mutex> lock(frameMutex);
+            readInProgress = false;
+            return reject(osdStatus, "gvfg_read_channel_frame failed to apply OSD");
+        }
+
+        bool backendFrameHeld = true;
+        if (osdApplied)
+        {
+            const gvfg_status_t releaseStatus = session->release_frame();
+            if (releaseStatus != GVFG_OK)
+            {
+                std::lock_guard<std::mutex> lock(frameMutex);
+                readInProgress = false;
+                return releaseStatus;
+            }
+            backendFrameHeld = false;
+            frame.data = processedVideoBuffer.data();
+            frame.data_size = static_cast<uint64_t>(processedVideoBuffer.size());
+            frame.row_stride_bytes = processedStride;
         }
 
         bool stoppedWhileWaiting = false;
@@ -418,13 +460,15 @@ struct gvfg_channel_session_t
             {
                 frame.frame_id = ++videoFrameId;
                 heldSessionFrame = frame;
+                heldFrameNeedsBackendRelease = backendFrameHeld;
                 readInProgress = false;
                 frameHeld = true;
             }
         }
         if (stoppedWhileWaiting)
         {
-            session->release_frame();
+            if (backendFrameHeld)
+                session->release_frame();
             return GVFG_ESTATE;
         }
 
@@ -434,16 +478,7 @@ struct gvfg_channel_session_t
         out.data_size = static_cast<uint64_t>(frame.data_size);
         out.width = static_cast<int>(frame.width);
         out.height = static_cast<int>(frame.height);
-        const gvfg_status_t strideStatus =
-            native_row_stride_bytes(frame.width, frame.pixel_format, out.row_stride_bytes);
-        if (strideStatus != GVFG_OK)
-        {
-            session->release_frame();
-            std::lock_guard<std::mutex> lock(frameMutex);
-            heldSessionFrame = {};
-            frameHeld = false;
-            return reject(strideStatus, "gvfg_read_channel_frame received an invalid row stride");
-        }
+        out.row_stride_bytes = frame.row_stride_bytes;
         out.pixel_format = frame.pixel_format;
         out.bit_depth = static_cast<int>(frame.bit_depth);
         out.frame_id = frame.frame_id;
@@ -467,11 +502,15 @@ struct gvfg_channel_session_t
                 frameToken.frame_id != heldSessionFrame.frame_id)
                 return reject(GVFG_EINVAL, "gvfg_release_channel_frame rejected: frame token does not match the held frame");
 
-            const gvfg_status_t st = session->release_frame();
-            if (st != GVFG_OK)
-                return st;
+            if (heldFrameNeedsBackendRelease)
+            {
+                const gvfg_status_t st = session->release_frame();
+                if (st != GVFG_OK)
+                    return st;
+            }
 
             heldSessionFrame = {};
+            heldFrameNeedsBackendRelease = false;
             frameHeld = false;
         }
 
@@ -483,20 +522,19 @@ struct gvfg_channel_session_t
         if (!session)
             return;
 
-        gvfg_frame_t frame{};
-        bool shouldRelease = false;
+        bool shouldReleaseBackend = false;
         {
             std::lock_guard<std::mutex> lock(frameMutex);
             if (frameHeld)
             {
-                frame = heldSessionFrame;
                 heldSessionFrame = {};
                 frameHeld = false;
-                shouldRelease = true;
+                shouldReleaseBackend = heldFrameNeedsBackendRelease;
+                heldFrameNeedsBackendRelease = false;
             }
         }
 
-        if (shouldRelease)
+        if (shouldReleaseBackend)
             session->release_frame();
     }
 
@@ -581,6 +619,24 @@ struct gvfg_channel_session_t
         if (format != GVFG_PIXFMT_YUY2 && format != GVFG_PIXFMT_Y210)
             return reject(GVFG_EINVAL, "gvfg_set_channel_video_format rejected: pixel format is invalid");
         return session->set_video_format(format);
+    }
+
+    gvfg_status_t setOsd(const gvfg_channel_osd_config_t &config)
+    {
+        if (!session)
+            return reject(GVFG_ESTATE, "gvfg_set_channel_osd rejected: channel is not open");
+        const gvfg_status_t status = osdProcessor.configure(config);
+        return status == GVFG_OK
+                   ? GVFG_OK
+                   : reject(status, "gvfg_set_channel_osd rejected: configuration is invalid");
+    }
+
+    gvfg_status_t clearOsd()
+    {
+        if (!session)
+            return reject(GVFG_ESTATE, "gvfg_clear_channel_osd rejected: channel is not open");
+        osdProcessor.clear();
+        return GVFG_OK;
     }
 
     gvfg_status_t setAudioEnabled(bool enabled)
@@ -765,8 +821,11 @@ struct gvfg_channel_session_t
     std::mutex frameMutex;
     bool readInProgress = false;
     bool frameHeld = false;
+    bool heldFrameNeedsBackendRelease = false;
     uint64_t videoFrameId = 0;
     gvfg_frame_t heldSessionFrame{};
+    gvfg::internal::GpuOsdProcessor osdProcessor;
+    std::vector<uint8_t> processedVideoBuffer;
     std::mutex audioMutex;
     std::vector<uint8_t> audioBuffer;
     bool audioReadInProgress = false;
@@ -1047,6 +1106,31 @@ extern "C"
         if (!handle)
             return GVFG_EINVAL;
         return handle->setChannelVideoFormat(channel_index, format);
+    }
+
+    gvfg_status_t gvfg_set_channel_osd(gvfg_handle handle,
+                                        int channel_index,
+                                        const gvfg_channel_osd_config_t *config)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        if (!config)
+            return handle->rejectChannel(channel_index, GVFG_EINVAL,
+                                          "gvfg_set_channel_osd rejected: config is null");
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->setOsd(*config)
+                       : handle->rejectChannel(channel_index, GVFG_ESTATE,
+                                               "gvfg_set_channel_osd rejected: channel is not open");
+    }
+
+    gvfg_status_t gvfg_clear_channel_osd(gvfg_handle handle, int channel_index)
+    {
+        if (!handle)
+            return GVFG_EINVAL;
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->clearOsd()
+                       : handle->rejectChannel(channel_index, GVFG_ESTATE,
+                                               "gvfg_clear_channel_osd rejected: channel is not open");
     }
 
     gvfg_status_t gvfg_set_channel_audio_enabled(gvfg_handle handle,

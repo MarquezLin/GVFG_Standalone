@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 project(gvfg_sdk LANGUAGES CXX)
 
-set(GVFG_SDK_VERSION "1.0.1")
+set(GVFG_SDK_VERSION "1.0.2")
 
 include(GNUInstallDirs)
 
@@ -44,12 +44,13 @@ if (NOT WIN32)
   message(FATAL_ERROR "GVFG SDK currently supports Windows only.")
 endif()
 
+add_subdirectory(helpers/gvfg_osd)
 add_subdirectory(sdk/gvfg)
 add_subdirectory(helpers/gvfg_preview)
 add_subdirectory(helpers/gvfg_audio_playback)
 
 install(FILES
   ../docs/GVFG_CUSTOMER_API.md
-  ../docs/GVFG_CUSTOMER_API_REFERENCE.md
+  ../docs/GVFG_Customer_doc/GVFG_CUSTOMER_API_REFERENCE.md
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
 )

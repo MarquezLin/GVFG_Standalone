@@ -8,6 +8,8 @@ EXPORTS
     gvfg_set_channel_zero_copy_enabled
     gvfg_get_channel_zero_copy_enabled
     gvfg_set_channel_video_format
+    gvfg_set_channel_osd
+    gvfg_clear_channel_osd
     gvfg_set_channel_audio_enabled
     gvfg_get_channel_audio_format
     gvfg_start_channel

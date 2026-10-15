@@ -207,6 +207,23 @@ extern "C"
         uint64_t timestamp_ns; /* Monotonic SDK delivery time; same clock domain as audio. */
     } gvfg_frame_t;
 
+    /*
+     * Text overlay applied by the SDK to subsequently delivered video frames.
+     * The text is copied by gvfg_set_channel_osd(); the caller does not need to
+     * keep the pointer alive after that function returns.
+     */
+    typedef struct
+    {
+        const char *text;       /* Printable English ASCII text (0x20-0x7e). */
+        uint32_t text_length;   /* 1 through GVFG_OSD_MAX_TEXT_CHARACTERS. */
+        int32_t x;              /* Left position in output-frame pixels. */
+        int32_t y;              /* Top position in output-frame pixels. */
+        uint32_t font_size_px;  /* Font size in pixels; must be non-zero. */
+        uint32_t color_rgb;     /* 0x00RRGGBB. */
+    } gvfg_channel_osd_config_t;
+
+#define GVFG_OSD_MAX_TEXT_CHARACTERS 32u
+
     typedef struct
     {
         const void *data;          /* PCM data. Valid until gvfg_release_channel_audio_frame(). */
@@ -321,13 +338,15 @@ extern "C"
     /* A handle may open both channels of the same device. */
 
     /*
-     * Select zero-copy frame delivery.
+     * Select zero-copy frame acquisition.
      *
      * Call after gvfg_create() and before opening the selected channel. The
      * default is disabled independently for each channel. Once that channel is
-     * open its mode cannot be changed. In zero-copy
-     * mode, gvfg_read_channel_frame() returns borrowed memory and every
-     * successful read must be paired with gvfg_release_channel_frame().
+     * open its mode cannot be changed. This setting controls how the SDK
+     * acquires native frames from the capture backend. SDK processing such as
+     * OSD may return an SDK-owned output buffer even when acquisition uses
+     * zero-copy. Every successful read must still be paired with
+     * gvfg_release_channel_frame().
      */
     GVFG_API gvfg_status_t gvfg_set_channel_zero_copy_enabled(
         GVFG_PARAM_IN gvfg_handle handle,
@@ -348,6 +367,21 @@ extern "C"
         GVFG_PARAM_IN gvfg_handle handle,
         GVFG_PARAM_IN int channel_index,
         GVFG_PARAM_IN gvfg_pixel_format_t format);
+
+    /*
+     * Enable or update SDK-side OSD for an opened channel. The configuration
+     * is copied synchronously and applies to subsequent YUY2 or Y210 frames.
+     * Text is rendered as BT.709 limited-range video and blended by the GPU.
+     */
+    GVFG_API gvfg_status_t gvfg_set_channel_osd(
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index,
+        GVFG_PARAM_IN const gvfg_channel_osd_config_t *config);
+
+    /* Disable SDK-side OSD for subsequently delivered frames. */
+    GVFG_API gvfg_status_t gvfg_clear_channel_osd(
+        GVFG_PARAM_IN gvfg_handle handle,
+        GVFG_PARAM_IN int channel_index);
 
     /*
      * Enable or disable audio for the next channel start. Video remains
@@ -403,10 +437,10 @@ extern "C"
      * - GVFG_EBUSY if the device or capture resource is busy.
      * - GVFG_EIO for other capture backend failures.
      *
-     * In copy mode the returned data pointer is owned by the SDK. In zero-copy
-     * mode it points to driver-owned memory. In both modes it remains valid
-     * until gvfg_release_channel_frame() is called, and each channel may hold
-     * only one frame.
+     * The returned data pointer is read-only and may refer to native capture
+     * memory or an SDK-processed buffer. Applications must not free or modify
+     * it. It remains valid until gvfg_release_channel_frame() is called, and
+     * each channel may hold only one frame.
      */
     GVFG_API gvfg_status_t gvfg_read_channel_frame(
         GVFG_PARAM_IN gvfg_handle handle,
