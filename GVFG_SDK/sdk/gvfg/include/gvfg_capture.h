@@ -216,8 +216,8 @@ extern "C"
     {
         const char *text;       /* Printable English ASCII text (0x20-0x7e). */
         uint32_t text_length;   /* 1 through GVFG_OSD_MAX_TEXT_CHARACTERS. */
-        int32_t x;              /* Left position in output-frame pixels. */
-        int32_t y;              /* Top position in output-frame pixels. */
+        int32_t x;              /* Measured text-box left in frame pixels; clamped to fit. */
+        int32_t y;              /* Measured text-box top in frame pixels; clamped to fit. */
         uint32_t font_size_px;  /* Font size in pixels; must be non-zero. */
         uint32_t color_rgb;     /* 0x00RRGGBB. */
     } gvfg_channel_osd_config_t;
@@ -369,9 +369,29 @@ extern "C"
         GVFG_PARAM_IN gvfg_pixel_format_t format);
 
     /*
+     * Measure printable ASCII text as a single non-wrapping line, using the
+     * same font/layout as SDK OSD. No capture handle or open device is needed.
+     * Returns a conservative whole-text box in pixels, including glyph
+     * overhang and a one-pixel guard per edge; these are not pixel-tight bounds.
+     * Both outputs must be non-NULL and are zeroed on failure.
+     * Returns GVFG_EINVAL for invalid input or unrepresentable dimensions,
+     * and GVFG_EIO on measurement failure.
+     */
+    GVFG_API gvfg_status_t gvfg_measure_osd_text(
+        GVFG_PARAM_IN const char *text,
+        GVFG_PARAM_IN uint32_t text_length,
+        GVFG_PARAM_IN uint32_t font_size_px,
+        GVFG_PARAM_OUT uint32_t *out_width,
+        GVFG_PARAM_OUT uint32_t *out_height);
+
+    /*
      * Enable or update SDK-side OSD for an opened channel. The configuration
      * is copied synchronously and applies to subsequent YUY2 or Y210 frames.
      * Text is rendered as BT.709 limited-range video and blended by the GPU.
+     * The single-line measured text box is positioned at x/y, clamped inside
+     * each frame. If the whole box is larger than the frame, OSD is temporarily
+     * skipped while capture continues. It resumes when settings or frame size
+     * change so that the text fits; text is not wrapped, shrunk, or truncated.
      */
     GVFG_API gvfg_status_t gvfg_set_channel_osd(
         GVFG_PARAM_IN gvfg_handle handle,

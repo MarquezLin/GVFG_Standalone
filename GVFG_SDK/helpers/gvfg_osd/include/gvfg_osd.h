@@ -28,7 +28,10 @@ typedef enum gvfg_osd_pixel_format_t
 /*
  * Generates an off-line OSD surface using the Arial system font. Text is
  * restricted to printable ASCII and at most GVFG_OSD_MAX_TEXT_CHARACTERS
- * characters. color_rgb is 0xRRGGBB.
+ * characters on one line without wrapping. color_rgb is 0xRRGGBB.
+ * x/y identify the top-left of the conservative measured text box (including
+ * glyph overhang and a one-pixel guard). They are clamped to keep that box
+ * inside the frame. Rendering returns EINVAL if the box cannot fit the frame.
  * Output YUV uses BT.709 limited range. The mask is one coverage byte per
  * pixel: 0 is transparent and 255 is fully covered.
  */
@@ -63,6 +66,15 @@ gvfg_osd_status_t gvfg_osd_create(
 
 void gvfg_osd_destroy(
     gvfg_osd_handle handle);
+
+/* Conservative whole-text bounds in pixels, not pixel-tight raster bounds. */
+gvfg_osd_status_t gvfg_osd_measure(
+    gvfg_osd_handle handle,
+    const char *text,
+    uint32_t text_length,
+    uint32_t font_size_px,
+    uint32_t *out_width,
+    uint32_t *out_height);
 
 gvfg_osd_status_t gvfg_osd_render(
     gvfg_osd_handle handle,

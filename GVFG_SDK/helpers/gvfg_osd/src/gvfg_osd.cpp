@@ -85,11 +85,107 @@ std::wstring widenAscii(const char *text, uint32_t length)
     return result;
 }
 
+struct MeasuredTextLayout
+{
+    ComPtr<IDWriteTextLayout> layout;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    float drawOffsetX = 0;
+    float drawOffsetY = 0;
+};
+
+gvfg_osd_status_t createTextLayout(OsdContext &context, const char *text,
+                                   uint32_t textLength, uint32_t fontSizePx,
+                                   MeasuredTextLayout &result)
+{
+    if (!validAscii(text, textLength) || fontSizePx == 0)
+        return GVFG_OSD_EINVAL;
+
+    ComPtr<IDWriteTextFormat> format;
+    HRESULT hr = context.dwrite->CreateTextFormat(
+        L"Arial", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        static_cast<float>(fontSizePx), L"en-us", &format);
+    if (FAILED(hr) ||
+        FAILED(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)) ||
+        FAILED(format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING)) ||
+        FAILED(format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)))
+        return GVFG_OSD_ERENDER;
+
+    const std::wstring wideText = widenAscii(text, textLength);
+    hr = context.dwrite->CreateTextLayout(
+        wideText.c_str(), textLength, format.Get(), 1.0f, 1.0f, &result.layout);
+    if (FAILED(hr))
+        return GVFG_OSD_ERENDER;
+
+    DWRITE_TEXT_METRICS metrics{};
+    if (FAILED(result.layout->GetMetrics(&metrics)) ||
+        !std::isfinite(metrics.widthIncludingTrailingWhitespace) ||
+        !std::isfinite(metrics.height))
+        return GVFG_OSD_ERENDER;
+    // Tighten the logical box before requesting overhangs: they are relative
+    // to the layout box, not directly to metrics.width or metrics.height.
+    const float layoutWidth = (std::max)(1.0f, metrics.widthIncludingTrailingWhitespace);
+    const float layoutHeight = (std::max)(1.0f, metrics.height);
+    if (FAILED(result.layout->SetMaxWidth(layoutWidth)) ||
+        FAILED(result.layout->SetMaxHeight(layoutHeight)) ||
+        FAILED(result.layout->GetMetrics(&metrics)))
+        return GVFG_OSD_ERENDER;
+    DWRITE_OVERHANG_METRICS overhang{};
+    if (FAILED(result.layout->GetOverhangMetrics(&overhang)) ||
+        !std::isfinite(metrics.left) || !std::isfinite(metrics.top) ||
+        !std::isfinite(metrics.widthIncludingTrailingWhitespace) ||
+        !std::isfinite(metrics.height) ||
+        !std::isfinite(overhang.left) || !std::isfinite(overhang.top) ||
+        !std::isfinite(overhang.right) || !std::isfinite(overhang.bottom))
+        return GVFG_OSD_ERENDER;
+
+    // Include logical spacing and glyph ink, then round outward and reserve
+    // one pixel per edge for rasterization/grid-fitting differences.
+    const double left = std::floor((std::min)(
+        (std::min)(0.0, static_cast<double>(metrics.left)),
+        -static_cast<double>(overhang.left))) - 1.0;
+    const double top = std::floor((std::min)(
+        (std::min)(0.0, static_cast<double>(metrics.top)),
+        -static_cast<double>(overhang.top))) - 1.0;
+    const double right = std::ceil((std::max)(
+        (std::max)(static_cast<double>(layoutWidth),
+                   static_cast<double>(metrics.left) + metrics.widthIncludingTrailingWhitespace),
+        static_cast<double>(layoutWidth) + overhang.right)) + 1.0;
+    const double bottom = std::ceil((std::max)(
+        (std::max)(static_cast<double>(layoutHeight),
+                   static_cast<double>(metrics.top) + metrics.height),
+        static_cast<double>(layoutHeight) + overhang.bottom)) + 1.0;
+    const double width = right - left;
+    const double height = bottom - top;
+    if (!std::isfinite(width) || !std::isfinite(height) ||
+        width <= 0 || height <= 0 ||
+        width > (std::numeric_limits<uint32_t>::max)() ||
+        height > (std::numeric_limits<uint32_t>::max)())
+        return GVFG_OSD_EINVAL;
+
+    result.width = static_cast<uint32_t>(width);
+    result.height = static_cast<uint32_t>(height);
+    result.drawOffsetX = static_cast<float>(-left);
+    result.drawOffsetY = static_cast<float>(-top);
+    return GVFG_OSD_OK;
+}
+
 gvfg_osd_status_t renderMask(OsdContext &context,
                              const gvfg_osd_config_t &config,
                              uint8_t *destination,
                              uint32_t destinationStride)
 {
+    MeasuredTextLayout textLayout;
+    const gvfg_osd_status_t layoutStatus = createTextLayout(
+        context, config.text, config.text_length, config.font_size_px, textLayout);
+    if (layoutStatus != GVFG_OSD_OK)
+        return layoutStatus;
+    if (textLayout.width > config.width || textLayout.height > config.height)
+        return GVFG_OSD_EINVAL;
+    const int64_t x = std::clamp<int64_t>(config.x, 0, config.width - textLayout.width);
+    const int64_t y = std::clamp<int64_t>(config.y, 0, config.height - textLayout.height);
+
     ComPtr<IWICBitmap> bitmap;
     HRESULT hr = context.wic->CreateBitmap(config.width, config.height,
                                             GUID_WICPixelFormat32bppPBGRA,
@@ -100,19 +196,10 @@ gvfg_osd_status_t renderMask(OsdContext &context,
     D2D1_RENDER_TARGET_PROPERTIES properties = D2D1::RenderTargetProperties(
         D2D1_RENDER_TARGET_TYPE_SOFTWARE,
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
-                         D2D1_ALPHA_MODE_PREMULTIPLIED));
+                         D2D1_ALPHA_MODE_PREMULTIPLIED),
+        96.0f, 96.0f);
     ComPtr<ID2D1RenderTarget> target;
     hr = context.d2d->CreateWicBitmapRenderTarget(bitmap.Get(), properties, &target);
-    if (FAILED(hr))
-        return GVFG_OSD_ERENDER;
-
-    const std::wstring text = widenAscii(config.text, config.text_length);
-
-    ComPtr<IDWriteTextFormat> format;
-    hr = context.dwrite->CreateTextFormat(
-        L"Arial", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
-        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        static_cast<float>(config.font_size_px), L"en-us", &format);
     if (FAILED(hr))
         return GVFG_OSD_ERENDER;
 
@@ -123,12 +210,10 @@ gvfg_osd_status_t renderMask(OsdContext &context,
 
     target->BeginDraw();
     target->Clear(D2D1::ColorF(0.0f, 0.0f));
-    const D2D1_RECT_F layout = D2D1::RectF(
-        static_cast<float>(config.x), static_cast<float>(config.y),
-        static_cast<float>(config.width), static_cast<float>(config.height));
-    target->DrawText(text.c_str(), config.text_length, format.Get(), layout,
-                     brush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP,
-                     DWRITE_MEASURING_MODE_NATURAL);
+    target->DrawTextLayout(
+        D2D1::Point2F(static_cast<float>(x) + textLayout.drawOffsetX,
+                      static_cast<float>(y) + textLayout.drawOffsetY),
+        textLayout.layout.Get(), brush.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
     hr = target->EndDraw();
     if (FAILED(hr))
         return GVFG_OSD_ERENDER;
@@ -251,6 +336,39 @@ void gvfg_osd_destroy(gvfg_osd_handle handle)
     delete static_cast<OsdContext *>(handle);
 }
 
+gvfg_osd_status_t gvfg_osd_measure(gvfg_osd_handle handle,
+                                   const char *text, uint32_t text_length,
+                                   uint32_t font_size_px,
+                                   uint32_t *out_width, uint32_t *out_height)
+{
+    if (out_width)
+        *out_width = 0;
+    if (out_height)
+        *out_height = 0;
+    if (!handle || !out_width || !out_height ||
+        !validAscii(text, text_length) || font_size_px == 0)
+        return GVFG_OSD_EINVAL;
+    try
+    {
+        MeasuredTextLayout layout;
+        const gvfg_osd_status_t status = createTextLayout(
+            *static_cast<OsdContext *>(handle), text, text_length, font_size_px, layout);
+        if (status != GVFG_OSD_OK)
+            return status;
+        *out_width = layout.width;
+        *out_height = layout.height;
+        return GVFG_OSD_OK;
+    }
+    catch (const std::bad_alloc &)
+    {
+        return GVFG_OSD_ENOMEM;
+    }
+    catch (...)
+    {
+        return GVFG_OSD_ERENDER;
+    }
+}
+
 gvfg_osd_status_t gvfg_osd_render(gvfg_osd_handle handle,
                                   const gvfg_osd_config_t *config,
                                   const gvfg_osd_output_t *output)
@@ -260,14 +378,16 @@ gvfg_osd_status_t gvfg_osd_render(gvfg_osd_handle handle,
         output->struct_size != sizeof(gvfg_osd_output_t) ||
         !validAscii(config->text, config->text_length) ||
         config->width == 0 || config->height == 0 || (config->width & 1u) != 0 ||
+        config->width > static_cast<uint32_t>((std::numeric_limits<INT>::max)()) ||
+        config->height > static_cast<uint32_t>((std::numeric_limits<INT>::max)()) ||
         config->font_size_px == 0 || !output->yuv_data || !output->mask_data)
         return GVFG_OSD_EINVAL;
 
-    uint32_t minimumYuvStride = 0;
+    uint64_t minimumYuvStride = 0;
     if (config->pixel_format == GVFG_OSD_PIXFMT_YUY2)
-        minimumYuvStride = config->width * 2u;
+        minimumYuvStride = static_cast<uint64_t>(config->width) * 2u;
     else if (config->pixel_format == GVFG_OSD_PIXFMT_Y210)
-        minimumYuvStride = config->width * 4u;
+        minimumYuvStride = static_cast<uint64_t>(config->width) * 4u;
     else
         return GVFG_OSD_EINVAL;
 
@@ -278,22 +398,35 @@ gvfg_osd_status_t gvfg_osd_render(gvfg_osd_handle handle,
     uint64_t requiredMask = 0;
     if (!checkedImageBytes(output->yuv_stride, config->height, requiredYuv) ||
         !checkedImageBytes(output->mask_stride, config->height, requiredMask) ||
-        output->yuv_size < requiredYuv || output->mask_size < requiredMask)
+        output->yuv_size < requiredYuv || output->mask_size < requiredMask ||
+        requiredYuv > (std::numeric_limits<size_t>::max)() ||
+        requiredMask > (std::numeric_limits<size_t>::max)())
         return GVFG_OSD_EINVAL;
 
-    std::memset(output->mask_data, 0, static_cast<size_t>(requiredMask));
-    const gvfg_osd_status_t maskStatus = renderMask(
-        *static_cast<OsdContext *>(handle), *config,
-        static_cast<uint8_t *>(output->mask_data), output->mask_stride);
-    if (maskStatus != GVFG_OSD_OK)
-        return maskStatus;
+    try
+    {
+        std::memset(output->mask_data, 0, static_cast<size_t>(requiredMask));
+        const gvfg_osd_status_t maskStatus = renderMask(
+            *static_cast<OsdContext *>(handle), *config,
+            static_cast<uint8_t *>(output->mask_data), output->mask_stride);
+        if (maskStatus != GVFG_OSD_OK)
+            return maskStatus;
 
-    const Yuv8 color = rgbToBt709Limited(config->color_rgb);
-    if (config->pixel_format == GVFG_OSD_PIXFMT_YUY2)
-        writeYuy2(*config, *output, color);
-    else
-        writeY210(*config, *output, color);
-    return GVFG_OSD_OK;
+        const Yuv8 color = rgbToBt709Limited(config->color_rgb);
+        if (config->pixel_format == GVFG_OSD_PIXFMT_YUY2)
+            writeYuy2(*config, *output, color);
+        else
+            writeY210(*config, *output, color);
+        return GVFG_OSD_OK;
+    }
+    catch (const std::bad_alloc &)
+    {
+        return GVFG_OSD_ENOMEM;
+    }
+    catch (...)
+    {
+        return GVFG_OSD_ERENDER;
+    }
 }
 
 const char *gvfg_osd_strerror(gvfg_osd_status_t status)

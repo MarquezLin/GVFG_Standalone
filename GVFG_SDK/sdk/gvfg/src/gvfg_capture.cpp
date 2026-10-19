@@ -3,6 +3,7 @@
 #include "gvfg_debug.h"
 #include "gigabyte_capture_session.h"
 #include "gpu/gvfg_gpu_osd.h"
+#include "gvfg_osd.h"
 #include "gvfgframework.h"
 
 #include <algorithm>
@@ -367,9 +368,15 @@ struct gvfg_channel_session_t
         return GVFG_OK;
     }
 
-    gvfg_status_t readFrame(gvfg_frame_t &out, uint32_t timeoutMs)
+    gvfg_status_t readFrame(gvfg_frame_t &out, uint32_t timeoutMs,
+                            gvfg_debug_osd_frame_timing_t *timing = nullptr,
+                            uint64_t *acquisitionBeginNs = nullptr)
     {
         std::memset(&out, 0, sizeof(out));
+        if (timing)
+            *timing = {};
+        if (acquisitionBeginNs)
+            *acquisitionBeginNs = 0;
         if (!session)
             return reject(GVFG_ESTATE, "gvfg_read_channel_frame rejected: channel is not open");
         if (!running)
@@ -389,7 +396,7 @@ struct gvfg_channel_session_t
             return reject(GVFG_ESTATE, stateError);
 
         gvfg_frame_t frame{};
-        const gvfg_status_t st = session->wait_frame(timeoutMs, frame);
+        const gvfg_status_t st = session->wait_frame(timeoutMs, frame, acquisitionBeginNs);
         if (st != GVFG_OK)
         {
             {
@@ -422,8 +429,28 @@ struct gvfg_channel_session_t
 
         bool osdApplied = false;
         int processedStride = 0;
+        // This capability comes from the backend, never from const_cast of a
+        // public frame pointer. Driver storage is excluded by default; only
+        // the explicit unsafe build option below can admit it for experiments.
+        uint8_t *writableSource = session->writable_copy_frame_data(frame);
+        bool experimentalZeroCopy = false;
+        bool inPlaceApplied = false;
+        uint32_t experimentFlags = 0;
+        gvfg_debug_osd_page_check_t pageCheck{};
+#ifdef GVFG_EXPERIMENTAL_ZERO_COPY_OSD_INPLACE
+        experimentFlags = GVFG_DEBUG_OSD_EXPERIMENT_ENABLED;
+        if (!writableSource)
+        {
+            writableSource = session->experimental_zero_copy_frame_data(frame);
+            experimentalZeroCopy = writableSource != nullptr;
+        }
+#endif
+        const uint64_t processBeginNs = timing ? now_ns() : 0;
         const gvfg_status_t osdStatus =
-            osdProcessor.process(frame, processedVideoBuffer, processedStride, osdApplied);
+            osdProcessor.process(frame, processedVideoBuffer, processedStride, osdApplied, timing,
+                                 writableSource, experimentalZeroCopy, &inPlaceApplied, &experimentFlags, &pageCheck);
+        if (timing)
+            timing->stage_ms[GVFG_DEBUG_OSD_PROCESS_TOTAL] = static_cast<double>(now_ns() - processBeginNs) / 1e6;
         if (osdStatus != GVFG_OK)
         {
             session->release_frame();
@@ -433,9 +460,14 @@ struct gvfg_channel_session_t
         }
 
         bool backendFrameHeld = true;
-        if (osdApplied)
+        // An in-place copy-mode frame must keep the backend hold until the
+        // user's release; otherwise recovery/next capture may reuse its data.
+        if (osdApplied && !inPlaceApplied)
         {
+            const uint64_t releaseBeginNs = timing ? now_ns() : 0;
             const gvfg_status_t releaseStatus = session->release_frame();
+            if (timing)
+                timing->stage_ms[GVFG_DEBUG_OSD_BACKEND_RELEASE] = static_cast<double>(now_ns() - releaseBeginNs) / 1e6;
             if (releaseStatus != GVFG_OK)
             {
                 std::lock_guard<std::mutex> lock(frameMutex);
@@ -460,6 +492,8 @@ struct gvfg_channel_session_t
             {
                 frame.frame_id = ++videoFrameId;
                 heldSessionFrame = frame;
+                heldOsdExperimentFlags = experimentFlags;
+                heldOsdPageCheck = pageCheck;
                 heldFrameNeedsBackendRelease = backendFrameHeld;
                 readInProgress = false;
                 frameHeld = true;
@@ -483,8 +517,35 @@ struct gvfg_channel_session_t
         out.bit_depth = static_cast<int>(frame.bit_depth);
         out.frame_id = frame.frame_id;
         out.timestamp_ns = frame.timestamp_ns;
+        if (timing)
+            timing->frame_id = out.frame_id;
         noteDeliveredFrame(out.width, out.height, out.bit_depth, out.pixel_format);
 
+        return GVFG_OK;
+    }
+
+    gvfg_status_t osdExperimentFlags(uint64_t frameId, uint32_t &flags)
+    {
+        flags = 0;
+#ifdef GVFG_EXPERIMENTAL_ZERO_COPY_OSD_INPLACE
+        flags = GVFG_DEBUG_OSD_EXPERIMENT_ENABLED;
+#endif
+        if (frameId == 0)
+            return GVFG_OK;
+        std::lock_guard<std::mutex> lock(frameMutex);
+        if (!frameHeld || heldSessionFrame.frame_id != frameId)
+            return GVFG_ESTATE;
+        flags = heldOsdExperimentFlags;
+        return GVFG_OK;
+    }
+
+    gvfg_status_t osdPageCheck(uint64_t frameId, gvfg_debug_osd_page_check_t &check)
+    {
+        check = {};
+        std::lock_guard<std::mutex> lock(frameMutex);
+        if (!frameId || !frameHeld || heldSessionFrame.frame_id != frameId)
+            return GVFG_ESTATE;
+        check = heldOsdPageCheck;
         return GVFG_OK;
     }
 
@@ -628,7 +689,9 @@ struct gvfg_channel_session_t
         const gvfg_status_t status = osdProcessor.configure(config);
         return status == GVFG_OK
                    ? GVFG_OK
-                   : reject(status, "gvfg_set_channel_osd rejected: configuration is invalid");
+                   : reject(status, status == GVFG_EINVAL
+                                        ? "gvfg_set_channel_osd rejected: configuration is invalid"
+                                        : "gvfg_set_channel_osd failed to store configuration");
     }
 
     gvfg_status_t clearOsd()
@@ -820,6 +883,8 @@ struct gvfg_channel_session_t
     std::atomic<bool> running{false};
     std::mutex frameMutex;
     bool readInProgress = false;
+    uint32_t heldOsdExperimentFlags = 0;
+    gvfg_debug_osd_page_check_t heldOsdPageCheck{};
     bool frameHeld = false;
     bool heldFrameNeedsBackendRelease = false;
     uint64_t videoFrameId = 0;
@@ -1108,6 +1173,45 @@ extern "C"
         return handle->setChannelVideoFormat(channel_index, format);
     }
 
+    gvfg_status_t gvfg_measure_osd_text(const char *text, uint32_t text_length,
+                                         uint32_t font_size_px,
+                                         uint32_t *out_width, uint32_t *out_height)
+    {
+        if (out_width)
+            *out_width = 0;
+        if (out_height)
+            *out_height = 0;
+        if (!text || text_length == 0 || text_length > GVFG_OSD_MAX_TEXT_CHARACTERS ||
+            font_size_px == 0 || !out_width || !out_height)
+            return GVFG_EINVAL;
+        for (uint32_t i = 0; i < text_length; ++i)
+        {
+            const unsigned char c = static_cast<unsigned char>(text[i]);
+            if (c < 0x20 || c > 0x7e)
+                return GVFG_EINVAL;
+        }
+
+        try
+        {
+            gvfg_osd_handle rawHandle = nullptr;
+            if (gvfg_osd_create(&rawHandle) != GVFG_OSD_OK)
+                return GVFG_EIO;
+            const std::unique_ptr<void, decltype(&gvfg_osd_destroy)> helper(
+                rawHandle, &gvfg_osd_destroy);
+            const gvfg_osd_status_t status = gvfg_osd_measure(
+                helper.get(), text, text_length, font_size_px, out_width, out_height);
+            if (status == GVFG_OSD_OK)
+                return GVFG_OK;
+            return status == GVFG_OSD_EINVAL ? GVFG_EINVAL : GVFG_EIO;
+        }
+        catch (...)
+        {
+            *out_width = 0;
+            *out_height = 0;
+            return GVFG_EIO;
+        }
+    }
+
     gvfg_status_t gvfg_set_channel_osd(gvfg_handle handle,
                                         int channel_index,
                                         const gvfg_channel_osd_config_t *config)
@@ -1178,6 +1282,65 @@ extern "C"
                        : handle->rejectChannel(channel_index,
                                                GVFG_ESTATE,
                                                "gvfg_read_channel_frame rejected: channel is not open");
+    }
+
+    gvfg_status_t gvfg_debug_read_channel_frame_timed(gvfg_handle handle,
+                                                       int channel_index,
+                                                       gvfg_frame_t *out_frame,
+                                                       gvfg_debug_osd_frame_timing_t *out_timing,
+                                                       uint32_t timeout_ms)
+    {
+        if (out_timing)
+            *out_timing = {};
+        if (!handle || !out_frame || !out_timing)
+            return GVFG_EINVAL;
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->readFrame(*out_frame, timeout_ms, out_timing)
+                       : handle->rejectChannel(channel_index, GVFG_ESTATE,
+                           "gvfg_debug_read_channel_frame_timed rejected: channel is not open");
+    }
+
+    gvfg_status_t gvfg_debug_read_channel_frame_profiled(gvfg_handle handle,
+                                                          int channel_index,
+                                                          gvfg_frame_t *out_frame,
+                                                          gvfg_debug_frame_read_timing_t *out_timing,
+                                                          uint32_t timeout_ms)
+    {
+        if (out_timing)
+            *out_timing = {};
+        if (!handle || !out_frame || !out_timing)
+            return GVFG_EINVAL;
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->readFrame(*out_frame, timeout_ms, &out_timing->osd,
+                                            &out_timing->acquisition_begin_ns)
+                       : handle->rejectChannel(channel_index, GVFG_ESTATE,
+                           "gvfg_debug_read_channel_frame_profiled rejected: channel is not open");
+    }
+
+    gvfg_status_t gvfg_debug_get_channel_osd_experiment_flags(gvfg_handle handle,
+                                                              int channel_index,
+                                                              uint64_t frame_id,
+                                                              uint32_t *out_flags)
+    {
+        if (out_flags)
+            *out_flags = 0;
+        if (!handle || !out_flags)
+            return GVFG_EINVAL;
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->osdExperimentFlags(frame_id, *out_flags) : GVFG_ESTATE;
+    }
+
+    gvfg_status_t gvfg_debug_get_channel_osd_page_check(gvfg_handle handle,
+                                                       int channel_index,
+                                                       uint64_t frame_id,
+                                                       gvfg_debug_osd_page_check_t *out_check)
+    {
+        if (out_check)
+            *out_check = {};
+        if (!handle || !out_check)
+            return GVFG_EINVAL;
+        gvfg_channel_session_t *channel = handle->findChannel(channel_index);
+        return channel ? channel->osdPageCheck(frame_id, *out_check) : GVFG_ESTATE;
     }
 
     gvfg_status_t gvfg_release_channel_frame(gvfg_handle handle,

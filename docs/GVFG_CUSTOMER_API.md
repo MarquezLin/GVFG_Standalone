@@ -99,9 +99,9 @@ int main(void)
 - API 是 pull model；應用程式自行決定在哪個執行緒呼叫
   `gvfg_read_channel_frame()`。GUI 程式建議每個 channel 使用一個 worker thread，再把 UI 更新送回
   UI thread。
-- Copy mode 的 `frame.data` 由 SDK 擁有；zero-copy mode 則指向 driver-owned
-  buffer。兩種模式都只在對應的 `gvfg_release_channel_frame()` 前有效，資料若要長期
-  保存，必須先複製。
+- `frame.data` 是唯讀的借用 pointer，可能指向原生擷取 buffer 或 SDK 處理後的
+  buffer。Zero-copy 設定控制擷取方式；啟用 OSD 時仍可能交付 SDK-owned buffer。
+  Pointer 只在對應的 `gvfg_release_channel_frame()` 前有效，資料若要長期保存，必須先複製。
 - 每個 channel 同時最多持有一個 frame。尚未 release 又對同一 channel 呼叫
   `gvfg_read_channel_frame()`，會回傳 `GVFG_ESTATE`。
 - release 時傳回 read 取得的 `gvfg_frame_t`；SDK 以 `data + frame_id` 確認目前 held frame。
@@ -220,9 +220,34 @@ Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，destroy/c
 
 ### Frame
 
-- `gvfg_read_channel_frame(handle, channel, &frame, timeout_ms)`：取得一個 frame；ownership 依 copy/
-  zero-copy mode 而定，但 release contract 相同。
+- `gvfg_read_channel_frame(handle, channel, &frame, timeout_ms)`：取得原生或 SDK 處理後的唯讀
+  frame；copy／zero-copy acquisition 的 release contract 相同。
 - `gvfg_release_channel_frame(handle, channel, &frame)`：釋放原 frame token。
+
+### SDK OSD
+
+OSD 整合在 `gvfg.dll`，不需要額外的 OSD DLL 或 `gvfg_preview.dll`。啟用後，
+`gvfg_read_channel_frame()` 交付含 OSD 的完整 YUY2／Y210 frame；使用後照常 release。
+
+- `gvfg_measure_osd_text(text, text_length, font_size_px, &width, &height)`：量測與實際
+  OSD 相同的單行文字框；不需要 handle，也不會開啟 capture device。
+- `gvfg_set_channel_osd(handle, channel, &config)`：啟用或更新已 open channel 的 OSD。
+  SDK 同步複製文字設定，後續 frame 使用新設定。
+- `gvfg_clear_channel_osd(handle, channel)`：停用後續 frame 的 OSD。
+
+`gvfg_channel_osd_config_t` 可設定文字、`x/y`、`font_size_px` 與 `color_rgb`。
+文字為 1–32 個可列印 ASCII 字元（`0x20`–`0x7e`），使用 Arial-preferred normal 字型；
+保持單行，不自動換行。字號必須大於 0；SDK 沒有 viewer 的 512 px UI 上限。
+顏色為 `0x00RRGGBB`，轉為 BT.709 limited range 後由 GPU 與影片混合。
+
+量測的 `width/height` 包含排版空白、glyph overhang 及四邊各 1 px 安全邊，
+是保守的完整文字框，不是逐像素緊貼的字形邊界。`x/y` 表示這個框的左上角；
+SDK 會依實際 frame 限制在 `0..frame.width - text_width`、
+`0..frame.height - text_height`。文字框比 frame 大時，SDK 暫不疊字並繼續擷取；
+設定或 frame 尺寸改成可容納後會恢復，不會縮字、截字或換行。
+
+量測的兩個 output pointer 不可為 NULL；失敗時可寫入的 output 會歸零。
+無效文字、長度、字號或 pointer 回傳 `GVFG_EINVAL`；量測失敗回傳 `GVFG_EIO`。
 
 ### Audio frame
 

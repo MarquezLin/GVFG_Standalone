@@ -46,6 +46,9 @@ target_compile_definitions(gvfg PRIVATE
 target_compile_definitions(gvfg PRIVATE
   GVFG_INTERNAL_DIAGNOSTICS=$<IF:$<CONFIG:Debug>,1,0>
 )
+if (GVFG_EXPERIMENTAL_ZERO_COPY_OSD_INPLACE)
+  target_compile_definitions(gvfg PRIVATE GVFG_EXPERIMENTAL_ZERO_COPY_OSD_INPLACE=1)
+endif()
 
 target_link_libraries(gvfg PRIVATE
     gvfg_osd_core

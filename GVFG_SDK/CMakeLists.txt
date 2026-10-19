@@ -2,7 +2,14 @@ cmake_minimum_required(VERSION 3.16)
 
 project(gvfg_sdk LANGUAGES CXX)
 
-set(GVFG_SDK_VERSION "1.0.2")
+# Version policy: new features bump MINOR and reset PATCH; bug fixes bump PATCH.
+set(GVFG_SDK_VERSION "1.1.0")
+
+option(GVFG_EXPERIMENTAL_ZERO_COPY_OSD_INPLACE
+    "UNSAFE local experiment: write OSD into driver zero-copy buffers" OFF)
+if (GVFG_EXPERIMENTAL_ZERO_COPY_OSD_INPLACE)
+  message(WARNING "EXPERIMENTAL driver-buffer writes enabled. Writable pages do not guarantee DMA ownership. Do not ship this build.")
+endif()
 
 include(GNUInstallDirs)
 

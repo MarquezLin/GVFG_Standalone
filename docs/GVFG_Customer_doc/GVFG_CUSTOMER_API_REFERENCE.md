@@ -20,6 +20,7 @@
 | ----------------------- | ------------:| ----------------------------- |
 | `GVFG_MAX_DEVICES`      | 16           | 一次最多列舉的裝置數                    |
 | `GVFG_TIMEOUT_INFINITE` | `UINT32_MAX` | 無限等待；`timeout_ms == 0` 則完全不等待 |
+| `GVFG_OSD_MAX_TEXT_CHARACTERS` | 32 | OSD 可列印 ASCII 字元數上限 |
 
 ### 1.2 `gvfg_status_t`
 
@@ -265,6 +266,22 @@ typedef struct gvfg_handle_t *gvfg_handle;
 只能由 `gvfg_create()` 建立、由 `gvfg_destroy()` 銷毀；caller
 不可取得、配置或修改其內部內容。
 
+### 1.20 `gvfg_channel_osd_config_t`
+
+由 caller 建立並傳給 `gvfg_set_channel_osd()`。SDK 在函式返回前複製文字及設定，
+caller 不必持續保留 `text` pointer。
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `text` | `const char *` | 可列印 ASCII（`0x20`–`0x7e`），不可為 NULL |
+| `text_length` | `uint32_t` | 1–32 個字元；不包含結尾 NUL |
+| `x`、`y` | `int32_t` | 完整量測文字框的左上角，單位 frame pixel；會限制在可完整顯示範圍 |
+| `font_size_px` | `uint32_t` | 非零字號；SDK 沒有 viewer 的 512 px UI 上限 |
+| `color_rgb` | `uint32_t` | `0x00RRGGBB`；忽略最高 8 bits |
+
+使用 Arial-preferred normal 字型，固定單行不換行。文字框包含排版空白、glyph overhang
+及四邊各 1 px 安全邊；用 `gvfg_measure_osd_text()` 取得與繪製相同的保守框大小。
+
 ## 2. GVFG API 函式
 
 說明 `gvfg_capture.h` 的所有公開函式。
@@ -357,6 +374,8 @@ gvfg_status_t gvfg_get_channel_zero_copy_enabled(/* [in] */ gvfg_handle handle,
 - `get` 可查詢指定 channel 的模式；`out_enabled` 不可為 NULL。
 - Zero-copy mode 的 `frame.data` 是借用的 pointer；仍必須以相同 descriptor
   呼叫 `gvfg_release_channel_frame()`，且每個 channel 同時最多持有一張 frame。
+- 此設定控制原生 frame 的擷取方式。OSD 等 SDK 處理可能交付 SDK-owned output
+  buffer；caller 的 read／release 流程相同。
 
 ### 2.7 `gvfg_set_channel_video_format`
 
@@ -599,7 +618,7 @@ gvfg_status_t gvfg_get_channel_runtime_info(
 const char *gvfg_get_version(void);
 ```
 
-- 回傳目前實際載入的 GVFG runtime DLL 版本，例如 `"1.0.2"`。
+- 回傳目前實際載入的 GVFG runtime DLL 版本，例如 `"1.1.0"`。
 - 回傳值是靜態 null-terminated 字串，caller 不可 free。
 - 可用於 log、問題回報，以及確認 header、DLL 是否來自同一版本。
 
@@ -640,6 +659,52 @@ gvfg_status_t gvfg_get_channel_last_sdk_error_detail(/* [in] */ gvfg_handle hand
 - 每次呼叫 `gvfg_start_channel()` 時會清除先前保存的錯誤說明。
 - 同一 channel 若被多執行緒同時操作，內容可能被後續錯誤覆蓋；應在失敗後立即取得。
 - `GVFG_EINVAL`：handle/message 為 NULL、channel index 無效，或 buffer size 為 0。
+
+### 2.25 `gvfg_measure_osd_text`
+
+```c
+gvfg_status_t gvfg_measure_osd_text(
+    /* [in] */ const char *text,
+    /* [in] */ uint32_t text_length,
+    /* [in] */ uint32_t font_size_px,
+    /* [out] */ uint32_t *out_width,
+    /* [out] */ uint32_t *out_height);
+```
+
+- 不需要 capture handle，不會開啟 device，可在 Start 前量測。
+- `text`：1–32 個可列印 ASCII 字元（`0x20`–`0x7e`），不接受換行。
+- `font_size_px`：必須大於 0；字型、單行排版與 SDK OSD 繪製相同。
+- `out_width`、`out_height`：不可為 NULL，接收單位為 pixel 的保守完整文字框。
+  包含排版空白、glyph overhang 及四邊各 1 px 安全邊，不是 pixel-tight 字形邊界。
+- `GVFG_OK`：量測成功。
+- `GVFG_EINVAL`：pointer、文字、長度或字號無效，或量測結果超過可表示範圍。
+- `GVFG_EIO`：文字量測或配置失敗。失敗時可寫入的 output 會歸零。
+
+### 2.26 `gvfg_set_channel_osd`／`gvfg_clear_channel_osd`
+
+```c
+gvfg_status_t gvfg_set_channel_osd(
+    /* [in] */ gvfg_handle handle,
+    /* [in] */ int channel_index,
+    /* [in] */ const gvfg_channel_osd_config_t *config);
+gvfg_status_t gvfg_clear_channel_osd(
+    /* [in] */ gvfg_handle handle,
+    /* [in] */ int channel_index);
+```
+
+- Channel 必須已 open；可在 Start 前或擷取期間設定或停用。
+- `set` 同步複製設定，套用於後續 YUY2／Y210 frame；文字顏色為 BT.709 limited range，
+  由 GPU 混合。客戶不需要額外部署 OSD DLL 或使用 preview helper。
+- `x/y` 是量測文字框左上角。SDK 依每個 frame 把位置限制在
+  `[0, frame.width - text_width]`／`[0, frame.height - text_height]`。
+- 文字框本身比 frame 大時暫不疊字，擷取仍繼續；設定、frame 尺寸或格式變更後重新判斷。
+  可容納時恢復 OSD，不縮字、截字或換行。
+- `clear` 停用後續 frame 的 OSD。已取得的 frame 仍照原本生命週期使用與 release。
+- `GVFG_OK`：設定或停用成功；不表示文字已完成繪製或一定能放入當前 frame。
+- `GVFG_EINVAL`：NULL handle/config、無效文字長度、字元或零字號。
+- `GVFG_ESTATE`：指定 channel 尚未 open；其他處理失敗可回傳 `GVFG_EIO`。
+- 啟用 OSD 的 frame 可能為 SDK-owned output，即使擷取使用 zero-copy；
+  每次成功 read 仍須恰好 release 一次。
 
 ## 3. Preview API 完整參考
 

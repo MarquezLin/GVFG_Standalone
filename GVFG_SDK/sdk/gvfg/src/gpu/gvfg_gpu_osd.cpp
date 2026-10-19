@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
@@ -20,6 +21,56 @@ namespace gvfg::internal
 {
 namespace
 {
+#ifdef GVFG_EXPERIMENTAL_ZERO_COPY_OSD_INPLACE
+// Permission snapshot only: this does NOT establish exclusive DMA ownership.
+bool writableExperimentalRange(const gvfg_frame_t &source, uint64_t offset, uint64_t span,
+                               gvfg_debug_osd_page_check_t *result)
+{
+    gvfg_debug_osd_page_check_t check{};
+    const auto reject = [&](gvfg_debug_osd_page_reason_t reason) {
+        check.reason = static_cast<uint32_t>(reason);
+        if (result)
+            *result = check;
+        return false;
+    };
+    const uintptr_t base = reinterpret_cast<uintptr_t>(source.data);
+    const uintptr_t limit = (std::numeric_limits<uintptr_t>::max)();
+    if (!span || offset > source.data_size || span > source.data_size - offset ||
+        offset > limit - base || span > limit - (base + offset))
+        return reject(GVFG_DEBUG_OSD_PAGE_INVALID_RANGE);
+    uintptr_t cursor = base + static_cast<uintptr_t>(offset);
+    const uintptr_t end = cursor + static_cast<uintptr_t>(span);
+    while (cursor < end)
+    {
+        MEMORY_BASIC_INFORMATION info{};
+        const SIZE_T queried = VirtualQuery(reinterpret_cast<const void *>(cursor), &info, sizeof(info));
+        // Capture the error immediately, and only on a failed native call.
+        check.win32_error = queried == 0 ? GetLastError() : 0;
+        check.query_bytes = static_cast<uint32_t>(queried);
+        check.protect = info.Protect;
+        check.state = info.State;
+        check.type = info.Type;
+        if (queried != sizeof(info))
+            return reject(GVFG_DEBUG_OSD_PAGE_QUERY_FAILED);
+        if (info.State != MEM_COMMIT)
+            return reject(GVFG_DEBUG_OSD_PAGE_NOT_COMMITTED);
+        if (info.Protect & (PAGE_GUARD | PAGE_NOACCESS))
+            return reject(GVFG_DEBUG_OSD_PAGE_GUARD_OR_NOACCESS);
+        if ((info.Protect & 0xffu) != PAGE_READWRITE)
+            return reject(GVFG_DEBUG_OSD_PAGE_NOT_READWRITE);
+        const uintptr_t regionBase = reinterpret_cast<uintptr_t>(info.BaseAddress);
+        if (info.RegionSize > limit - regionBase)
+            return reject(GVFG_DEBUG_OSD_PAGE_INVALID_REGION);
+        const uintptr_t next = regionBase + info.RegionSize;
+        if (next <= cursor)
+            return reject(GVFG_DEBUG_OSD_PAGE_INVALID_REGION);
+        cursor = next;
+    }
+    if (result)
+        *result = {};
+    return true;
+}
+#endif
 constexpr char kOsdBlendShader[] = R"(
 Texture2D<uint4> sourceTexture : register(t0);
 Texture2D<uint4> osdTexture : register(t1);
@@ -318,12 +369,34 @@ struct GpuOsdProcessor::Impl
         surfaceDirty = true;
         const uint32_t yuvStride = frameWidth * (pixelFormat == GVFG_PIXFMT_YUY2 ? 2u : 4u);
         const uint32_t maskStride = frameWidth;
+        gvfg_osd_handle rawHandle = nullptr;
+        if (gvfg_osd_create(&rawHandle) != GVFG_OSD_OK)
+            return false;
+        std::unique_ptr<void, decltype(&gvfg_osd_destroy)> handle(rawHandle, &gvfg_osd_destroy);
+        uint32_t textWidth = 0;
+        uint32_t textHeight = 0;
+        const gvfg_osd_status_t measureStatus = gvfg_osd_measure(
+            handle.get(), text.c_str(), static_cast<uint32_t>(text.size()),
+            fontSize, &textWidth, &textHeight);
+        // Stored input already passed configure() validation. EINVAL here
+        // means the measured box cannot be represented by uint32_t either.
+        if (measureStatus != GVFG_OSD_OK && measureStatus != GVFG_OSD_EINVAL)
+            return false;
+        if (measureStatus == GVFG_OSD_EINVAL ||
+            textWidth > frameWidth || textHeight > frameHeight)
+        {
+            // Retain the configuration and retry only after settings or the
+            // input dimensions/format change. Capture must continue normally.
+            region = {};
+            surfaceWidth = frameWidth;
+            surfaceHeight = frameHeight;
+            surfaceFormat = pixelFormat;
+            surfaceDirty = false;
+            return true;
+        }
         yuvSurface.resize(static_cast<size_t>(yuvStride) * frameHeight);
         maskSurface.resize(static_cast<size_t>(maskStride) * frameHeight);
 
-        gvfg_osd_handle handle = nullptr;
-        if (gvfg_osd_create(&handle) != GVFG_OSD_OK)
-            return false;
         gvfg_osd_config_t config{};
         config.struct_size = sizeof(config);
         config.width = frameWidth;
@@ -346,8 +419,8 @@ struct GpuOsdProcessor::Impl
         output.mask_data = maskSurface.data();
         output.mask_size = maskSurface.size();
         output.mask_stride = maskStride;
-        const gvfg_osd_status_t status = gvfg_osd_render(handle, &config, &output);
-        gvfg_osd_destroy(handle);
+        const gvfg_osd_status_t status = gvfg_osd_render(handle.get(), &config, &output);
+        handle.reset();
         if (status != GVFG_OSD_OK)
             return false;
 
@@ -402,9 +475,35 @@ struct GpuOsdProcessor::Impl
     gvfg_status_t process(const gvfg_frame_t &source,
                           std::vector<uint8_t> &destination,
                           int &destinationStride,
-                          bool &applied)
+                          bool &applied,
+                          gvfg_debug_osd_frame_timing_t *timing,
+                          uint8_t *writableSource,
+                          bool experimentalZeroCopy,
+                          bool *inPlaceApplied,
+                          uint32_t *experimentFlags,
+                          gvfg_debug_osd_page_check_t *pageCheck)
     {
+        if (pageCheck)
+            *pageCheck = {};
+        if (inPlaceApplied)
+            *inPlaceApplied = false;
+#ifndef GVFG_EXPERIMENTAL_ZERO_COPY_OSD_INPLACE
+        if (experimentalZeroCopy)
+            return GVFG_EINVAL;
+        (void)experimentFlags;
+#endif
+        using Clock = std::chrono::steady_clock;
+        auto stageStart = timing ? Clock::now() : Clock::time_point{};
+        const auto finishStage = [timing, &stageStart](gvfg_debug_osd_stage_t stage) {
+            if (timing)
+            {
+                const auto end = Clock::now();
+                timing->stage_ms[stage] = std::chrono::duration<double, std::milli>(end - stageStart).count();
+                stageStart = end;
+            }
+        };
         std::lock_guard<std::mutex> lock(mutex);
+        finishStage(GVFG_DEBUG_OSD_LOCK_WAIT);
         applied = false;
         if (!active)
             return GVFG_OK;
@@ -424,13 +523,19 @@ struct GpuOsdProcessor::Impl
             rowBytes64;
         if (source.data_size < requiredSource)
             return GVFG_EINVAL;
+        if (writableSource && static_cast<const void *>(writableSource) != source.data)
+            return GVFG_EINVAL;
 
-        if ((surfaceDirty || surfaceWidth != static_cast<uint32_t>(source.width) ||
-             surfaceHeight != static_cast<uint32_t>(source.height) ||
-             surfaceFormat != source.pixel_format) &&
+        const bool rebuild = surfaceDirty || surfaceWidth != static_cast<uint32_t>(source.width) ||
+                             surfaceHeight != static_cast<uint32_t>(source.height) ||
+                             surfaceFormat != source.pixel_format;
+        if (timing)
+            timing->surface_rebuilt = rebuild ? 1 : 0;
+        if (rebuild &&
             !rebuildSurface(static_cast<uint32_t>(source.width),
                             static_cast<uint32_t>(source.height), source.pixel_format))
             return GVFG_EIO;
+        finishStage(GVFG_DEBUG_OSD_SURFACE);
         // Invisible text needs no processed buffer or GPU work.
         if (region.empty())
             return GVFG_OK;
@@ -438,9 +543,34 @@ struct GpuOsdProcessor::Impl
         const uint32_t rowBytes = static_cast<uint32_t>(rowBytes64);
         const uint32_t bytesPerPixel = source.pixel_format == GVFG_PIXFMT_YUY2 ? 2u : 4u;
         const uint32_t regionRowBytes = region.width * bytesPerPixel;
-        const size_t sourceOffset = static_cast<size_t>(region.top) * source.row_stride_bytes +
-                                    static_cast<size_t>(region.left) * bytesPerPixel;
-        destination.resize(static_cast<size_t>(rowBytes) * static_cast<size_t>(source.height));
+        const uint64_t sourceOffset64 = static_cast<uint64_t>(region.top) * source.row_stride_bytes +
+                                        static_cast<uint64_t>(region.left) * bytesPerPixel;
+        if (sourceOffset64 > (std::numeric_limits<size_t>::max)())
+            return GVFG_EINVAL;
+        const size_t sourceOffset = static_cast<size_t>(sourceOffset64);
+#ifdef GVFG_EXPERIMENTAL_ZERO_COPY_OSD_INPLACE
+        const uint64_t writeSpan = static_cast<uint64_t>(region.height - 1u) *
+                                       source.row_stride_bytes + regionRowBytes;
+        if (experimentalZeroCopy &&
+            (!writableSource || !writableExperimentalRange(source, sourceOffset, writeSpan, pageCheck)))
+        {
+            if (!writableSource && pageCheck)
+                pageCheck->reason = GVFG_DEBUG_OSD_PAGE_NO_POINTER;
+            writableSource = nullptr;
+            if (experimentFlags)
+                *experimentFlags |= GVFG_DEBUG_OSD_EXPERIMENT_REJECTED;
+        }
+#endif
+        if (!writableSource)
+            destination.resize(static_cast<size_t>(rowBytes) * static_cast<size_t>(source.height));
+        uint8_t *outputData = writableSource ? writableSource : destination.data();
+        const uint32_t outputStride = writableSource ? static_cast<uint32_t>(source.row_stride_bytes) : rowBytes;
+        if (timing)
+        {
+            timing->roi_width = region.width;
+            timing->roi_height = region.height;
+        }
+        finishStage(GVFG_DEBUG_OSD_PREPARE);
         D3D11_MAPPED_SUBRESOURCE mapped{};
         if (FAILED(context->Map(sourceTexture.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
             return GVFG_EIO;
@@ -450,6 +580,7 @@ struct GpuOsdProcessor::Impl
         context->Unmap(sourceTexture.Get(), 0);
         if (!copiedSource)
             return GVFG_EIO;
+        finishStage(GVFG_DEBUG_OSD_UPLOAD);
 
         ID3D11ShaderResourceView *srvs[] = {sourceSrv.Get(), osdSrv.Get(), maskSrv.Get()};
         ID3D11UnorderedAccessView *uavs[] = {outputUav.Get()};
@@ -469,28 +600,52 @@ struct GpuOsdProcessor::Impl
         context->CSSetShader(nullptr, nullptr, 0);
 
         context->CopyResource(readbackTexture.Get(), outputTexture.Get());
-        // CPU only preserves the native frame; all blending remains on the GPU.
-        // Copy before Map READ so it can overlap queued GPU work.
-        copyFrameRows(source, destination.data(), rowBytes);
+        finishStage(GVFG_DEBUG_OSD_SUBMIT);
+        // Driver zero-copy input requires an independent frame by default.
+        // SDK-owned copy input already contains the untouched full frame, so
+        // only its ROI is overwritten after GPU readback; no full copy/resize.
+        if (!writableSource)
+        {
+            copyFrameRows(source, outputData, rowBytes);
+            finishStage(GVFG_DEBUG_OSD_FRAME_COPY);
+        }
         if (FAILED(context->Map(readbackTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped)))
             return GVFG_EIO;
+        finishStage(GVFG_DEBUG_OSD_READBACK_WAIT);
         if (mapped.RowPitch < regionRowBytes)
         {
             context->Unmap(readbackTexture.Get(), 0);
             return GVFG_EIO;
         }
-        const size_t destinationOffset = static_cast<size_t>(region.top) * rowBytes +
+        const size_t destinationOffset = static_cast<size_t>(region.top) * outputStride +
                                          static_cast<size_t>(region.left) * bytesPerPixel;
+#ifdef GVFG_EXPERIMENTAL_ZERO_COPY_OSD_INPLACE
+        // Recheck immediately before writing. Permissions can still change after
+        // this check; neither this nor the SDK hold prevents concurrent DMA.
+        if (experimentalZeroCopy && writableSource &&
+            !writableExperimentalRange(source, sourceOffset, writeSpan, pageCheck))
+        {
+            context->Unmap(readbackTexture.Get(), 0);
+            return GVFG_EIO;
+        }
+#endif
         for (uint32_t row = 0; row < region.height; ++row)
         {
-            std::memcpy(destination.data() + destinationOffset + static_cast<size_t>(row) * rowBytes,
+            std::memcpy(outputData + destinationOffset + static_cast<size_t>(row) * outputStride,
                         static_cast<const uint8_t *>(mapped.pData) +
                             static_cast<size_t>(row) * mapped.RowPitch,
                         regionRowBytes);
         }
         context->Unmap(readbackTexture.Get(), 0);
-        destinationStride = static_cast<int>(rowBytes);
+        finishStage(GVFG_DEBUG_OSD_ROI_COPY);
+        destinationStride = static_cast<int>(outputStride);
         applied = true;
+        if (inPlaceApplied)
+            *inPlaceApplied = writableSource != nullptr;
+        if (experimentalZeroCopy && writableSource && experimentFlags)
+            *experimentFlags |= GVFG_DEBUG_OSD_EXPERIMENT_USED;
+        if (timing)
+            timing->osd_applied = 1;
         return GVFG_OK;
     }
 
@@ -530,14 +685,39 @@ GpuOsdProcessor::GpuOsdProcessor() : impl_(std::make_unique<Impl>()) {}
 GpuOsdProcessor::~GpuOsdProcessor() = default;
 gvfg_status_t GpuOsdProcessor::configure(const gvfg_channel_osd_config_t &config)
 {
-    return impl_->configure(config);
+    try
+    {
+        return impl_->configure(config);
+    }
+    catch (...)
+    {
+        return GVFG_EIO;
+    }
 }
 void GpuOsdProcessor::clear() { impl_->clear(); }
 gvfg_status_t GpuOsdProcessor::process(const gvfg_frame_t &source,
                                        std::vector<uint8_t> &destination,
                                        int &destinationStride,
-                                       bool &applied)
+                                       bool &applied,
+                                       gvfg_debug_osd_frame_timing_t *timing,
+                                       uint8_t *writableSource,
+                                       bool experimentalZeroCopy,
+                                       bool *inPlaceApplied,
+                                       uint32_t *experimentFlags,
+                                       gvfg_debug_osd_page_check_t *pageCheck)
 {
-    return impl_->process(source, destination, destinationStride, applied);
+    try
+    {
+        return impl_->process(source, destination, destinationStride, applied, timing, writableSource,
+                              experimentalZeroCopy, inPlaceApplied, experimentFlags, pageCheck);
+    }
+    catch (...)
+    {
+        applied = false;
+        if (inPlaceApplied)
+            *inPlaceApplied = false;
+        destinationStride = 0;
+        return GVFG_EIO;
+    }
 }
 }

@@ -49,6 +49,116 @@ typedef struct
     int has_audio;
 } gvfg_debug_device_capabilities_t;
 
+/* CPU wall times around the synchronous OSD delivery path, in milliseconds.
+ * SUBMIT is command submission, not GPU execution time. READBACK_WAIT includes
+ * waiting for earlier GPU work; FRAME_COPY can overlap that GPU work.
+ * PROCESS_TOTAL includes the other process stages, but not BACKEND_RELEASE.
+ */
+typedef enum
+{
+    GVFG_DEBUG_OSD_LOCK_WAIT,
+    GVFG_DEBUG_OSD_SURFACE,
+    GVFG_DEBUG_OSD_PREPARE,
+    GVFG_DEBUG_OSD_UPLOAD,
+    GVFG_DEBUG_OSD_SUBMIT,
+    GVFG_DEBUG_OSD_FRAME_COPY,
+    GVFG_DEBUG_OSD_READBACK_WAIT,
+    GVFG_DEBUG_OSD_ROI_COPY,
+    GVFG_DEBUG_OSD_BACKEND_RELEASE,
+    GVFG_DEBUG_OSD_PROCESS_TOTAL,
+    GVFG_DEBUG_OSD_STAGE_COUNT
+} gvfg_debug_osd_stage_t;
+
+typedef struct
+{
+    uint64_t frame_id;
+    int osd_applied;
+    int surface_rebuilt;
+    uint32_t roi_width;
+    uint32_t roi_height;
+    double stage_ms[GVFG_DEBUG_OSD_STAGE_COUNT];
+} gvfg_debug_osd_frame_timing_t;
+
+/* Internal diagnostic variant of read_channel_frame, with identical frame
+ * ownership/release semantics. Timing is collected only through this entry
+ * point; normal customer reads do not perform these extra clock queries.
+ * On success timing.frame_id matches out_frame->frame_id. No GPU queries,
+ * extra Flush, or additional synchronization are introduced.
+ */
+GVFG_DEBUG_API gvfg_status_t gvfg_debug_read_channel_frame_timed(
+    GVFG_PARAM_IN gvfg_handle handle,
+    GVFG_PARAM_IN int channel_index,
+    GVFG_PARAM_OUT gvfg_frame_t *out_frame,
+    GVFG_PARAM_OUT gvfg_debug_osd_frame_timing_t *out_timing,
+    GVFG_PARAM_IN uint32_t timeout_ms);
+
+/* Acquisition starts after a video-frame event is ready, before retrieving
+ * or copying its data. Excludes waiting for the next frame. The public frame
+ * timestamp remains unchanged (data acquired, before OSD).
+ * A separate type/entry point preserves the older timed-read ABI.
+ */
+typedef struct
+{
+    gvfg_debug_osd_frame_timing_t osd;
+    uint64_t acquisition_begin_ns;
+} gvfg_debug_frame_read_timing_t;
+
+enum
+{
+    GVFG_DEBUG_OSD_EXPERIMENT_ENABLED = 1u,
+    GVFG_DEBUG_OSD_EXPERIMENT_USED = 2u,
+    GVFG_DEBUG_OSD_EXPERIMENT_REJECTED = 4u
+};
+
+typedef enum
+{
+    GVFG_DEBUG_OSD_PAGE_OK = 0,
+    GVFG_DEBUG_OSD_PAGE_NO_POINTER,
+    GVFG_DEBUG_OSD_PAGE_INVALID_RANGE,
+    GVFG_DEBUG_OSD_PAGE_QUERY_FAILED,
+    GVFG_DEBUG_OSD_PAGE_NOT_COMMITTED,
+    GVFG_DEBUG_OSD_PAGE_GUARD_OR_NOACCESS,
+    GVFG_DEBUG_OSD_PAGE_NOT_READWRITE,
+    GVFG_DEBUG_OSD_PAGE_INVALID_REGION
+} gvfg_debug_osd_page_reason_t;
+
+/* Separate diagnostic type: existing timing/flags ABI remains unchanged.
+ * Native Windows values; win32_error is meaningful only for QUERY_FAILED.
+ * Does not expose addresses or imply DMA safety. */
+typedef struct
+{
+    uint32_t reason;
+    uint32_t protect;
+    uint32_t state;
+    uint32_t type;
+    uint32_t win32_error;
+    uint32_t query_bytes;
+} gvfg_debug_osd_page_check_t;
+
+/* Query before releasing the matching successfully delivered frame. */
+GVFG_DEBUG_API gvfg_status_t gvfg_debug_get_channel_osd_page_check(
+    GVFG_PARAM_IN gvfg_handle handle,
+    GVFG_PARAM_IN int channel_index,
+    GVFG_PARAM_IN uint64_t frame_id,
+    GVFG_PARAM_OUT gvfg_debug_osd_page_check_t *out_check);
+
+/* frame_id=0 queries build configuration only. Otherwise the frame must still
+ * be held and its ID must match. Never implies a DMA ownership guarantee.
+ * Separate query preserves all existing timing struct layouts/read ABIs.
+ */
+GVFG_DEBUG_API gvfg_status_t gvfg_debug_get_channel_osd_experiment_flags(
+    GVFG_PARAM_IN gvfg_handle handle,
+    GVFG_PARAM_IN int channel_index,
+    GVFG_PARAM_IN uint64_t frame_id,
+    GVFG_PARAM_OUT uint32_t *out_flags);
+
+GVFG_DEBUG_API gvfg_status_t gvfg_debug_read_channel_frame_profiled(
+    GVFG_PARAM_IN gvfg_handle handle,
+    GVFG_PARAM_IN int channel_index,
+    GVFG_PARAM_OUT gvfg_frame_t *out_frame,
+    GVFG_PARAM_OUT gvfg_debug_frame_read_timing_t *out_timing,
+    GVFG_PARAM_IN uint32_t timeout_ms);
+
 /*
  * Query driver-neutral internal backend counters.
  *

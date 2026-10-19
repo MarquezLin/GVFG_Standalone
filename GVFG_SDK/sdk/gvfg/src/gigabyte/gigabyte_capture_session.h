@@ -55,7 +55,13 @@ namespace gvfg::internal
         gvfg_status_t configure_stream();
         gvfg_status_t start_stream();
         gvfg_status_t stop_stream();
-        gvfg_status_t wait_frame(uint32_t timeoutMs, gvfg_frame_t &out);
+        gvfg_status_t wait_frame(uint32_t timeoutMs, gvfg_frame_t &out,
+                                uint64_t *acquisitionBeginNs = nullptr);
+        // Internal writable access only to the currently held SDK-owned copy.
+        // Driver zero-copy buffers are never returned. Valid until release.
+        uint8_t *writable_copy_frame_data(const gvfg_frame_t &frame);
+        // Opt-in test candidate only, not a driver write/hold guarantee.
+        uint8_t *experimental_zero_copy_frame_data(const gvfg_frame_t &frame);
         gvfg_status_t wait_audio(uint32_t timeoutMs, void *destination,
                                     uint32_t destinationCapacity, uint32_t &outBytes);
         gvfg_status_t release_frame();
@@ -112,6 +118,8 @@ namespace gvfg::internal
         std::mutex capture_mutex_;
         std::vector<uint8_t> copy_buffer_;
         bool frame_held_ = false;
+        void *held_zero_copy_data_ = nullptr;
+        uint64_t held_zero_copy_bytes_ = 0;
         uint64_t video_frames_from_lib_ = 0;
         uint64_t audio_frames_from_lib_ = 0;
         uint64_t video_dma_event_wakes_ = 0;

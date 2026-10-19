@@ -8,6 +8,7 @@ EXPORTS
     gvfg_set_channel_zero_copy_enabled
     gvfg_get_channel_zero_copy_enabled
     gvfg_set_channel_video_format
+    gvfg_measure_osd_text
     gvfg_set_channel_osd
     gvfg_clear_channel_osd
     gvfg_set_channel_audio_enabled
@@ -33,6 +34,10 @@ EXPORTS
     gvfg_strerror
     gvfg_get_channel_last_sdk_error_detail
     gvfg_debug_get_channel_backend_stats
+    gvfg_debug_read_channel_frame_timed
+    gvfg_debug_read_channel_frame_profiled
+    gvfg_debug_get_channel_osd_experiment_flags
+    gvfg_debug_get_channel_osd_page_check
     gvfg_debug_get_device_capabilities
     gvfg_debug_read_register
     gvfg_debug_write_register

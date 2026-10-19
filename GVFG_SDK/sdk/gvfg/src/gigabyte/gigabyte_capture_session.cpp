@@ -458,6 +458,8 @@ namespace gvfg::internal
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             frame_held_ = false;
+            held_zero_copy_data_ = nullptr;
+            held_zero_copy_bytes_ = 0;
         }
         running_ = true;
         start_event_monitoring();
@@ -477,6 +479,8 @@ namespace gvfg::internal
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             frame_held_ = false;
+            held_zero_copy_data_ = nullptr;
+            held_zero_copy_bytes_ = 0;
         }
         recovery_cv_.notify_all();
         stop_event_monitoring();
@@ -499,9 +503,12 @@ namespace gvfg::internal
         return result;
     }
 
-    gvfg_status_t GigabyteCaptureSession::wait_frame(uint32_t timeoutMs, gvfg_frame_t &out)
+    gvfg_status_t GigabyteCaptureSession::wait_frame(uint32_t timeoutMs, gvfg_frame_t &out,
+                                                    uint64_t *acquisitionBeginNs)
     {
         out = {};
+        if (acquisitionBeginNs)
+            *acquisitionBeginNs = 0;
         if (!running_ || !context_)
             return reject(GVFG_ESTATE, "Capture frame read rejected: stream is not running");
         {
@@ -525,6 +532,10 @@ namespace gvfg::internal
             return wait_for_recovery(timeoutMs);
         if (wait != WAIT_OBJECT_0 + 2 && wait != WAIT_OBJECT_0 + 3)
             return reject(GVFG_EIO, "Capture video event wait failed");
+        // The frame event is ready. Start before buffer preparation, vendor
+        // retrieval/copy and their locks, but after waiting for a new frame.
+        if (acquisitionBeginNs)
+            *acquisitionBeginNs = monotonic_ns();
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             if (wait == WAIT_OBJECT_0 + 2)
@@ -547,6 +558,7 @@ namespace gvfg::internal
             bytes = video_info_.cbBufSize;
         }
         const void *data = nullptr;
+        void *zeroCopyData = nullptr;
         gvfg_status_t status = GVFG_OK;
         if (zero_copy_enabled_)
         {
@@ -560,6 +572,7 @@ namespace gvfg::internal
             const auto end = std::chrono::steady_clock::now();
             record_get_frame_timing(std::chrono::duration<double, std::micro>(end - begin).count());
             data = buffer;
+            zeroCopyData = buffer;
         }
         else
         {
@@ -593,7 +606,32 @@ namespace gvfg::internal
         out.bit_depth = signal.bit_depth;
         ++video_frames_from_lib_;
         frame_held_ = true;
+        held_zero_copy_data_ = zeroCopyData;
+        held_zero_copy_bytes_ = zeroCopyData ? bytes : 0;
         return GVFG_OK;
+    }
+
+    uint8_t *GigabyteCaptureSession::writable_copy_frame_data(const gvfg_frame_t &frame)
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (zero_copy_enabled_ || !frame_held_ || copy_buffer_.empty() ||
+            frame.data != copy_buffer_.data() || frame.data_size != copy_buffer_.size())
+            return nullptr;
+        return copy_buffer_.data();
+    }
+
+    uint8_t *GigabyteCaptureSession::experimental_zero_copy_frame_data(const gvfg_frame_t &frame)
+    {
+#ifdef GVFG_EXPERIMENTAL_ZERO_COPY_OSD_INPLACE
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (!zero_copy_enabled_ || !frame_held_ || !held_zero_copy_data_ ||
+            frame.data != held_zero_copy_data_ || frame.data_size != held_zero_copy_bytes_)
+            return nullptr;
+        return static_cast<uint8_t *>(held_zero_copy_data_);
+#else
+        (void)frame;
+        return nullptr;
+#endif
     }
 
     gvfg_status_t GigabyteCaptureSession::release_frame()
@@ -604,6 +642,8 @@ namespace gvfg::internal
                 return reject(GVFG_ESTATE, "Capture frame release rejected: no frame is held");
             // Current GigabyteLib zero-copy contract requires no per-frame release call.
             frame_held_ = false;
+            held_zero_copy_data_ = nullptr;
+            held_zero_copy_bytes_ = 0;
         }
         recovery_cv_.notify_all();
         return GVFG_OK;
