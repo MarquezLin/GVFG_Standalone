@@ -11,6 +11,9 @@ namespace
     constexpr uint32_t kFourccUyvy = GVFG_MAKEFOURCC('U', 'Y', 'V', 'Y');
     constexpr uint32_t kFourccY210 = GVFG_MAKEFOURCC('Y', '2', '1', '0');
     constexpr DWORD kVideoFormatChangeTimeoutMs = 100;
+    // Temporary bring-up workaround: HDMI VideoSignalLock is not implemented
+    // by the current driver/FPGA. Set false once HDMI lock reporting is ready.
+    constexpr bool kBypassHdmiSignalLock = true;
 
     uint64_t monotonic_ns()
     {
@@ -260,7 +263,12 @@ namespace gvfg::internal
         if (status != GVFG_OK)
             return status;
         gvfg_signal_status_t signal{};
-        signal.connected = info.VideoSignalLock ? 1 : 0;
+        // Apply the HDMI workaround here so Start, frame reads and SDK clients
+        // use the same effective signal state. SDI still uses the reported lock.
+        // With bypass enabled, HDMI connected does not prove physical signal lock.
+        const bool bypassLock = kBypassHdmiSignalLock &&
+                                info.VideoInterface == GVFG_VIDEO_INTERFACE_HDMI;
+        signal.connected = (bypassLock || info.VideoSignalLock != 0) ? 1 : 0;
         signal.channel = channel_;
         signal.width = info.Width;
         signal.height = info.Height;
