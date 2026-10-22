@@ -1,4 +1,4 @@
-#include "gvfg_preview.h"
+#include "preview_output_internal.h"
 
 #include "d3d_conversion_pipeline.h"
 
@@ -124,7 +124,7 @@ public:
         D3D11_MAPPED_SUBRESOURCE mapped{};
         if (FAILED(deferred->Map(texture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
         {
-            lock.lock(); slot.state = SlotState::Free; return false;
+            lock.lock(); slot.state = SlotState::Free; idleCv_.notify_all(); return false;
         }
         const size_t rowBytes = frame.pixel_format == GVFG_PREVIEW_PIXFMT_Y210
                                     ? static_cast<size_t>(frame.width) * 4u
@@ -150,7 +150,7 @@ public:
         ComPtr<ID3D11CommandList> commands;
         if (FAILED(deferred->FinishCommandList(FALSE, &commands)))
         {
-            lock.lock(); slot.state = SlotState::Free; return false;
+            lock.lock(); slot.state = SlotState::Free; idleCv_.notify_all(); return false;
         }
 
         lock.lock();
@@ -183,14 +183,20 @@ public:
         {
             auto lock = lockWithWindowMessages(mutex_);
             if (!configured_ || !pipeline_)
-                return false;
+            {
+                // Before the first frame there is no surface to clear.
+                // Treat an already-empty preview as successfully cleared so
+                // playback reset can restart its timeline.
+                clearActiveInfo();
+                return true;
+            }
             for (UploadSlot &slot : slots_)
             {
                 if (slot.state == SlotState::Pending)
                 {
                     ++delivery_.cancelled;
                     slot.commands.Reset();
-                    slot.state = SlotState::Free;
+                    slot.state = SlotState::Free; idleCv_.notify_all();
                 }
             }
         }
@@ -233,6 +239,7 @@ public:
         clearActiveInfo();
         resetPresentStats();
         delivery_ = {};
+        idleCv_.notify_all();
     }
 
     bool active() const
@@ -291,6 +298,20 @@ public:
     bool waitIdle(uint32_t timeoutMs)
     {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        auto isIdle = [this] {
+            for (const auto &slot : slots_)
+                if (slot.state != SlotState::Free) return false;
+            return true;
+        };
+        {
+            auto lock = lockWithWindowMessages(mutex_);
+            const bool ownsWindow = hwnd_ && GetWindowThreadProcessId(static_cast<HWND>(hwnd_), nullptr) == GetCurrentThreadId();
+            // Playback workers do not own the HWND. Wake them directly when
+            // the GPU job retires, rather than polling a 1 ms Windows timer
+            // whose effective wait can consume most of a 60 Hz frame period.
+            if (!ownsWindow) return idleCv_.wait_until(lock, deadline, isIdle);
+        }
+        // The HWND owner must keep synchronous DXGI messages flowing.
         for (;;)
         {
             std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
@@ -338,7 +359,7 @@ private:
             if (slot.state == SlotState::Pending && now - slot.queuedAt > kMaxQueueAge)
             {
                 slot.commands.Reset();
-                slot.state = SlotState::Free;
+                slot.state = SlotState::Free; idleCv_.notify_all();
                 ++skippedSubmits_;
                 ++delivery_.replaced; // Retired queued frame: expired, not latest-frame replacement.
             }
@@ -579,6 +600,7 @@ private:
             if (slot.state == SlotState::Pending)
                 ++delivery_.cancelled;
         slots_ = std::move(replacement);
+        idleCv_.notify_all();
         uploadWidth_ = width;
         uploadHeight_ = height;
         uploadPixelFormat_ = pixelFormat;
@@ -687,6 +709,7 @@ private:
                 }
                 slots_[selected].commands.Reset();
                 slots_[selected].state = SlotState::Free;
+                idleCv_.notify_all();
                 workerCv_.notify_all();
             }
         }
@@ -733,6 +756,7 @@ private:
     std::array<UploadSlot, kUploadSlotCount> slots_{};
     std::thread worker_;
     std::condition_variable workerCv_;
+    std::condition_variable idleCv_;
     bool workerStarted_ = false;
     bool workerStopping_ = false;
     int uploadWidth_ = 0;
@@ -901,30 +925,4 @@ extern "C"
         return handle->renderer.waitIdle(timeout_ms) ? GVFG_PREVIEW_OK : GVFG_PREVIEW_ESTATE;
     }
 
-    gvfg_preview_status_t gvfg_preview_shutdown(gvfg_preview_handle handle)
-    {
-        if (!handle)
-            return GVFG_PREVIEW_EINVAL;
-        handle->renderer.shutdown();
-        return GVFG_PREVIEW_OK;
-    }
-
-    const char *gvfg_preview_strerror(gvfg_preview_status_t status)
-    {
-        switch (status)
-        {
-        case GVFG_PREVIEW_OK:
-            return "OK";
-        case GVFG_PREVIEW_EINVAL:
-            return "Invalid argument";
-        case GVFG_PREVIEW_ESTATE:
-            return "Invalid state";
-        case GVFG_PREVIEW_ENOTSUP:
-            return "Unsupported frame format";
-        case GVFG_PREVIEW_ERENDER:
-            return "Render failed";
-        default:
-            return "Unknown";
-        }
-    }
 }

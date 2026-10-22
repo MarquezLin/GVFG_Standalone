@@ -1,500 +1,78 @@
-# GVFG SDK 專案與 C++ 物件架構
+# GVFG 擷取與播放物件架構
 
-> 學習文件入口：[`GVFG_LEARNING_INDEX.md`](GVFG_LEARNING_INDEX.md)
-> 延伸閱讀：[`GVFG_ERROR_HANDLING.md`](GVFG_ERROR_HANDLING.md)、[`GVFG_FRAME_FLOW_AND_STATE.md`](GVFG_FRAME_FLOW_AND_STATE.md)
+更新於 2026-10-20，依目前原始碼整理。完整閱讀順序見 [學習入口](GVFG_LEARNING_INDEX.md)。
+本版以目前可查證的物件與邊界說明，不把概念欄位當成公開 ABI。
 
-可以把整個架構理解成：**應用程式拿一個總管理 handle，裡面可以管理兩條 channel；每條 channel 經由 GigabyteLib adapter 保有自己的 context、事件、擷取狀態與 frame buffer。**
+## 1. 兩個公開 handle
 
-## 目前模組分工
+| Handle | 建立／銷毀 | 責任 |
+|---|---|---|
+| `gvfg_handle` | `gvfg_create`／`gvfg_destroy` | 裝置、CH0／CH1、read/release、訊號與事件 |
+| `gvfg_playback` | `gvfg_playback_create`／`gvfg_playback_destroy` | 一組播放 session、模式、影音副本、共同時間軸與輸出 |
 
-```text
-samples/gvfg_qt_preview
-    客戶範例應用程式；呼叫公開 C API，不應依賴 SDK private header
-
-sdk/gvfg/include
-    對外公開的 capture API、資料結構與 status
-
-sdk/gvfg/src/gvfg_capture.cpp
-    C ABI facade、opaque handle、channel 管理、參數驗證、frame token、event queue
-
-sdk/gvfg/src/gigabyte
-    將公開 API 的 lifecycle、event、copy/zero-copy ownership 轉接至 GvfgSdk.lib
-
-third_party/GigabyteLib
-    主管提供的靜態 library 與 private headers，只供 gvfg.dll build
-
-helpers/gvfg_preview
-    獨立 preview helper DLL；只負責顯示，不擁有 capture frame
-```
-
-客戶端仍只面對 `gvfg.dll`；`GvfgSdk.lib` 已靜態連結，不是部署用 DLL。
+兩者都是 opaque pointer。使用者看得到 handle 型別，不需要依賴內部 C++ 成員。
+通常每條需要獨立播放的 channel 建一個 Playback handle；它不接管 Capture handle。
 
 ```mermaid
-flowchart TD
-    APP["應用程式 / Qt Preview"]
-
-    API["公開 C API<br/>gvfg_create / open_channel / start_channel<br/>read_channel_frame / release_channel_frame"]
-
-    H["gvfg_handle_t<br/>整張擷取卡的管理者"]
-    DC["Gigabyte device selection<br/>interface path"]
-    C0["gvfg_channel_session_t<br/>CH0 的 SDK 包裝"]
-    C1["gvfg_channel_session_t<br/>CH1 的 SDK 包裝"]
-    B0["GigabyteLib adapter<br/>CH0 context / events"]
-    B1["GigabyteLib adapter<br/>CH1 context / events"]
-    BUF0["copy_buffer_<br/>CH0 copy-mode frame"]
-    BUF1["copy_buffer_<br/>CH1 copy-mode frame"]
-    DRV["GvfgSdk.lib<br/>private driver ABI"]
-
-    APP --> API
-    API --> H
-
-    H --> DC
-    H --> C0
-    H --> C1
-
-    C0 --> B0
-    C1 --> B1
-
-    B0 -. device path .-> DC
-    B1 -. device path .-> DC
-
-    B0 --> BUF0
-    B1 --> BUF1
-
-    DC --> DRV
+flowchart LR
+    V[GigabyteLib / driver] --> C[gvfg.dll: Capture]
+    C -->|借用 video / PCM| A[Application: read → submit → release]
+    A -->|已複製播放資料| P[gvfg_playback.dll: clocks / queues / scheduling]
+    P --> D[Preview 靜態 backend: D3D]
+    P --> W[Audio 靜態 backend: WASAPI]
+    A --> R[可選的獨立 recorder 副本]
 ```
 
-## 第一層：公開的 `gvfg_handle`
+## 2. Capture 內部
 
-公開 header 裡大致是：
+目前 `sdk/gvfg/src/gvfg_capture.cpp` 的 `gvfg_handle_t` 保存 channel errors、
+device path/index、`channels`、zero-copy 請求與影像格式設定。
+`channels` 是持有 `unique_ptr<gvfg_channel_session_t>` 的固定兩格陣列。
+沒有 open 的 channel 沒有對應 session；不可把 handle 本身當成影像 buffer。
 
-```cpp
-struct gvfg_handle_t;
-typedef struct gvfg_handle_t *gvfg_handle;
-```
+每個 `gvfg_channel_session_t` 透過 `unique_ptr<GigabyteCaptureSession> session`
+持有 vendor adapter，另有 running、read／held token、音訊 buffer、訊號與事件狀態。
+目前物件名稱是 `session`，不是舊文件示意的 `backend`。
 
-使用者看到的是：
+`GigabyteCaptureSession` 透過 vendor API 取得影音與事件；SDK facade 負責將資料轉成
+公開結構，驗證 frame token，加入交付時間與 runtime 統計。
+底層連線與 vendor context 不是客戶契約，也不承諾固定的 Win32 HANDLE 數量；
+讀原始碼時從 `open_device_*`、`wait_frame`、`wait_audio`、`stop_stream` 追蹤。
 
-```cpp
-gvfg_handle handle = nullptr;
-gvfg_create(&handle);
-```
+## 3. Playback 內部
 
-`gvfg_handle` 實際上就是指向 `gvfg_handle_t` 的 pointer：
+`helpers/gvfg_playback/src/gvfg_playback.cpp` 的 `gvfg_playback_t` 同時持有：
 
-```cpp
-gvfg_handle
-// 等同概念：
-gvfg_handle_t*
-```
+- config、共同 stats、mutex／condition variable 與共用 worker。
+- video／audio deque 與容量計數。
+- Preview handle 與 Audio player。
+- External／Video clock、AudioTimeline、DriftFilter。
 
-之所以不讓使用者直接看到 `gvfg_handle_t` 內容，是為了隱藏 SDK 內部實作。
+`playback_timing.h` 處理時間換算與狀態；AudioTimeline 把已消耗 sample frames 對應到來源 PTS。
+Audio backend 只知道 PCM、已播／待播 frames、暫停與速率指令，不比較影像時間。
+Preview backend 只知道影像上傳與呈現，不決定哪一路當 master。
 
-應用程式只需要知道：
+`unique_ptr` 表示單一 ownership；Playback 的兩個低階 opaque handle 由 stop/destroy 路徑明確回收。
+這與指標指向的影像資料是否已複製是不同問題。
 
-```cpp
-gvfg_open_channel(handle, ...);
-gvfg_start_channel(handle, ...);
-gvfg_read_channel_frame(handle, ...);
-```
+## 4. DLL 與靜態 library
 
-不用知道裡面的 C++ class。
+| Target | 類型 | 客戶部署 |
+|---|---|---|
+| `gvfg` | SHARED | `gvfg.dll` |
+| `gvfg_playback` | SHARED | `gvfg_playback.dll` |
+| `gvfg_audio_playback` | STATIC | 不另外部署 |
+| `gvfg_preview` | STATIC | 不另外部署 |
 
----
+內部靜態 `.lib` 裝的是實作；對外的 `gvfg_playback.lib` 是 DLL 匯入庫。
+兩種都用 `.lib` 副檔名，不能只看名稱判斷用途；應看 CMake target 類型與 install 規則。
 
-## 第二層：`gvfg_handle_t`
+## 5. 執行緒與資料 lifetime
 
-目前的核心結構是：
+應用程式的影音 read 執行緒與 Playback worker 分開；WASAPI 與 D3D 也各有後端 worker。
+read 成功後的 SDK pointer 必須在 release 前使用或複製；submit 已複製後可以 release。
+GPU 使用後端自有資源，不會以 Capture token 長期占住 DMA buffer。
 
-```cpp
-struct gvfg_handle_t
-{
-    std::array<ChannelErrorState, 2> channelErrors;
-
-    std::shared_ptr<
-        gvfg::internal::GigabyteDeviceConnection
-    > deviceConnection;
-
-    std::array<
-        std::unique_ptr<gvfg_channel_session_t>,
-        2
-    > channels;
-
-    int currentIndex = -1;
-    std::array<bool, 2> zeroCopyRequested{false, false};
-};
-```
-
-它代表「一張擷取裝置的 SDK 操作環境」。
-
-### `deviceConnection`
-
-```cpp
-std::shared_ptr<GigabyteDeviceConnection> deviceConnection;
-```
-
-負責保存底層 Windows driver connection。
-
-剛執行 `gvfg_create()` 時：
-
-```cpp
-deviceConnection == nullptr;
-```
-
-第一次執行 `gvfg_open_channel()` 後才會建立。
-
-### `channels`
-
-```cpp
-std::array<std::unique_ptr<gvfg_channel_session_t>, 2> channels;
-```
-
-是固定兩格的陣列：
-
-```cpp
-channels[0]  // CH0
-channels[1]  // CH1
-```
-
-剛執行 `gvfg_create()` 時：
-
-```cpp
-channels[0] == nullptr;
-channels[1] == nullptr;
-```
-
-如果只開 CH0：
-
-```text
-channels[0] → CH0 session
-channels[1] → nullptr
-```
-
-如果兩條都開：
-
-```text
-channels[0] → CH0 session
-channels[1] → CH1 session
-```
-
-### 為什麼用 `unique_ptr`？
-
-```cpp
-std::unique_ptr<gvfg_channel_session_t>
-```
-
-表示每一條 channel session 只有一個擁有者：
-
-```text
-channels[0] 獨自擁有 CH0 session
-channels[1] 獨自擁有 CH1 session
-```
-
-`gvfg_handle_t` 被刪除時，兩個 session 會自動被刪除，不需要手動 `delete`。
-
----
-
-## 第三層：`gvfg_channel_session_t`
-
-每條 channel 都各有一個：
-
-```cpp
-struct gvfg_channel_session_t
-{
-    ChannelErrorState &errorState;
-    std::unique_ptr<GigabyteCaptureSession> backend;
-
-    int currentIndex;
-    uint32_t selectedChannel;
-    bool zeroCopyRequested;
-    std::atomic<bool> running;
-    bool readInProgress;
-    bool frameHeld;
-
-    GigabyteFrame heldSessionFrame;
-
-    // FPS、signal、event queue 等其他狀態
-};
-```
-
-它是「公開 GVFG API」與「底層 GIGABYTE backend」中間的包裝層。
-
-例如應用程式呼叫：
-
-```cpp
-gvfg_read_channel_frame(handle, GVFG_CHANNEL_0, ...);
-```
-
-流程大致為：
-
-```text
-gvfg_read_channel_frame()
-        ↓
-找到 channels[0]
-        ↓
-gvfg_channel_session_t::readFrame()
-        ↓
-GigabyteCaptureSession::wait_frame()
-        ↓
-driver IOCTL
-```
-
-它主要負責：
-
-- 將公開的 `gvfg_status_t` 與 backend status 互相轉換。
-- 與 backend 共用該 channel 的 `ChannelErrorState`。
-- 保存公開 API 層的 frame ownership 狀態。
-- 防止同一 channel 同時進行兩次 read。
-- 確認成功讀到的 frame 有且只 release 一次。
-- 保存 signal、FPS、event queue 等 SDK 狀態。
-
----
-
-## 第四層：`GigabyteCaptureSession`
-
-這是實際操作 GIGABYTE driver 的單一 channel backend：
-
-```cpp
-class GigabyteCaptureSession
-{
-    std::shared_ptr<GigabyteDeviceConnection>
-        device_connection_;
-
-    HANDLE dma_event_;
-    HANDLE format_change_event_;
-    HANDLE plug_in_event_;
-    HANDLE plug_out_event_;
-
-    uint32_t channel_;
-    bool configured_;
-    bool zero_copy_enabled_;
-
-    std::vector<uint8_t> copy_buffer_;
-    gigabyte_frame_t held_frame_;
-
-    bool frame_held_;
-    bool read_in_progress_;
-
-    std::thread capture_thread_;
-
-    // mutex、condition_variable、signal cache、stats...
-};
-```
-
-CH0、CH1 各有自己的 `GigabyteCaptureSession`，因此它們各自擁有：
-
-- 自己的 DMA event
-- 自己的 signal event
-- 自己的 capture thread
-- 自己的 mutex
-- 自己的 frame 狀態
-- 自己的 copy buffer
-- 自己的 channel index
-
-但是兩者的：
-
-```cpp
-device_connection_
-```
-
-指向同一個 connection。
-
----
-
-## 第五層：`GigabyteDeviceConnection`
-
-目前非常單純：
-
-```cpp
-struct GigabyteDeviceConnection
-{
-    HANDLE handle = INVALID_HANDLE_VALUE;
-
-    ~GigabyteDeviceConnection();
-};
-```
-
-它只負責 Windows device handle 的生命週期。
-
-第一次開啟裝置時：
-
-```cpp
-connection->handle = CreateFileW(...);
-```
-
-最後一個 `shared_ptr` 被釋放時，destructor 執行：
-
-```cpp
-GigabyteDeviceConnection::~GigabyteDeviceConnection()
-{
-    if (handle != INVALID_HANDLE_VALUE)
-        CloseHandle(handle);
-}
-```
-
-### 為什麼這裡使用 `shared_ptr`？
-
-因為同一個 connection 同時被三個地方引用：
-
-```text
-gvfg_handle_t
-CH0 GigabyteCaptureSession
-CH1 GigabyteCaptureSession
-```
-
-它們共同使用同一個 Windows `HANDLE`。
-
-只要仍有其中一個 `shared_ptr` 存在，connection 就不會被刪除。
-
----
-
-## Frame 資料放在哪裡？
-
-### Copy mode
-
-每條 channel 的 backend 都有：
-
-```cpp
-std::vector<uint8_t> copy_buffer_;
-```
-
-開始擷取、知道解析度後才配置：
-
-```cpp
-copy_buffer_.assign(bytes, 0);
-```
-
-例如：
-
-```text
-CH0 backend
-└─ copy_buffer_ → CH0 最新 frame 資料
-
-CH1 backend
-└─ copy_buffer_ → CH1 最新 frame 資料
-```
-
-公開給應用程式的：
-
-```cpp
-gvfg_frame_t::data
-```
-
-會指向：
-
-```cpp
-copy_buffer_.data()
-```
-
-### Zero-copy mode
-
-`copy_buffer_` 不配置影像空間。
-
-Driver 回傳 DMA memory pointer：
-
-```cpp
-held_frame_.data = driverMemory;
-```
-
-SDK 只暫時保存 pointer，實際資料仍屬於 driver。
-
----
-
-## `struct` 與 `class` 有什麼差別？
-
-在 C++ 裡兩者幾乎一樣，主要差別只是預設存取權限。
-
-### `struct`
-
-預設為 `public`：
-
-```cpp
-struct Example
-{
-    int value;
-};
-```
-
-外面可以直接使用：
-
-```cpp
-Example e;
-e.value = 10;
-```
-
-### `class`
-
-預設為 `private`：
-
-```cpp
-class Example
-{
-    int value;  // 外面不能直接存取
-};
-```
-
-通常這個專案的使用方式是：
-
-- `struct`：資料集合或簡單管理物件。
-- `class`：包含較多狀態控制與操作邏輯。
-
-但這只是程式設計習慣，不是語言上的硬性限制。
-
----
-
-## 整個建立過程
-
-```text
-gvfg_create()
-│
-├─ 建立 gvfg_handle_t
-├─ deviceConnection = nullptr
-├─ channels[0] = nullptr
-└─ channels[1] = nullptr
-
-gvfg_open_channel(CH0)
-│
-├─ 建立 CH0 gvfg_channel_session_t
-├─ 建立 CH0 GigabyteCaptureSession
-├─ CreateFileW() 開啟 driver
-└─ deviceConnection 保存 Windows HANDLE
-
-gvfg_open_channel(CH1)
-│
-├─ 建立 CH1 gvfg_channel_session_t
-├─ 建立 CH1 GigabyteCaptureSession
-└─ 共用既有 deviceConnection
-
-gvfg_start_channel(CH0)
-│
-├─ 取得 CH0 signal/format
-├─ 配置 CH0 copy_buffer_（copy mode）
-├─ 建立／註冊 CH0 events
-└─ 啟動 CH0 capture
-
-gvfg_start_channel(CH1)
-│
-├─ 取得 CH1 signal/format
-├─ 配置 CH1 copy_buffer_（copy mode）
-├─ 建立／註冊 CH1 events
-└─ 啟動 CH1 capture
-```
-
-最簡單的記法是：
-
-```text
-gvfg_handle_t
-    = 整張卡
-
-gvfg_channel_session_t
-    = 公開 API 所看到的一條 channel
-
-GigabyteCaptureSession
-    = 實際操作 driver 的一條 channel
-
-GigabyteDeviceConnection
-    = CH0、CH1 共用的 Windows driver 連線
-
-copy_buffer_
-    = 單一 channel 的 copy-mode 影像記憶體
-```
+控制操作由 caller 序列化；UI thread 必須維持 HWND lifetime，且不能在 frame 仍使用中就 destroy Capture。
+資料流、停止與事件處理見 [Frame flow](GVFG_FRAME_FLOW_AND_STATE.md)，
+同步與完成通知的實作見 [Playback 維護說明](../GVFG_SDK/helpers/gvfg_playback/README.md)。

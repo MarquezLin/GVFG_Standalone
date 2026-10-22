@@ -17,13 +17,13 @@ register、ring、counter 與執行緒模型都不是公開 ABI。
 
 | 類別 | 客戶套件 | 僅內部 |
 |---|---|---|
-| Header | `gvfg_capture.h`、選用 `gvfg_preview.h` | `gvfg_debug.h`、backend headers |
-| Binary | `gvfg.dll/.lib`、選用 preview DLL/lib | driver/FPGA 診斷工具 |
+| Header | `gvfg_capture.h`、選用 `gvfg_playback.h` | `gvfg_debug.h`、backend headers |
+| Binary | `gvfg.dll/.lib`、選用 `gvfg_playback.dll/.lib` | driver/FPGA 診斷工具 |
 | 文件 | `GVFG_CUSTOMER_API.md`、`GVFG_CUSTOMER_API_REFERENCE.md` | 本文件 |
 | 資訊 | lifecycle、frame、event、signal、runtime FPS | IOCTL、IRQ、register、DMA/ring、debug counters |
 
-CMake install 會安裝公開的 `gvfg_capture.h`、選用的 `gvfg_preview.h`、客戶文件，
-以及 `gvfg.dll`、`gvfg_preview.dll` 等 target 產物；不得把
+CMake install 會安裝公開的 `gvfg_capture.h`、選用的 `gvfg_playback.h`、客戶文件，
+以及 `gvfg.dll`、`gvfg_playback.dll` 等 target 產物；不得把
 `gvfg_debug.h`、GigabyteLib private header/lib 或 `sdk/gvfg/src` 加入 customer package。
 
 ## 2. 元件責任
@@ -36,9 +36,10 @@ customer/sample
   -> GvfgSdk.lib
 
 customer/sample (optional)
-  -> gvfg_preview.h
-  -> gvfg_preview.dll
-  -> D3D preview pipeline
+  -> gvfg_playback.h
+  -> gvfg_playback.dll
+  -> shared clocks, buffering and scheduling
+  -> Audio / Preview static libraries
 ```
 
 - `gvfg_capture.cpp`：公開 handle 狀態、狀態碼轉換、frame token 驗證、event
@@ -73,7 +74,7 @@ customer/sample (optional)
 | `gvfg_poll_channel_event()` | Lib event handles | Callback 轉成容量 64 的 thread-safe SDK queue，補上 non-blocking、timeout 與 stop wake semantics |
 | `gvfg_get_channel_runtime_info()` | SDK | FPS 與 delivered frame count 都在成功交付 frame 的 SDK 邊界計算，不是 driver/Lib counter |
 | GPU conversion APIs | SDK D3D11 | 驗證 layout/size，再轉成 BGRA8、RGB10A2 或 NV12；GigabyteLib 不參與 |
-| version/name/error APIs | SDK | SDK version、公開名稱與錯誤文字；Lib `GVFG_HRESULT` 正數原樣回傳，不產生 SDK detail |
+| version/name/error APIs | SDK | SDK version、公開名稱與錯誤文字；vendor result 轉成穩定 GVFG status，原始 API／code 保留在內部 detail |
 | register R/W debug APIs | direct driver extension | 不屬於 GigabyteLib 正式 API，只能留在 internal debug surface |
 
 資料來源必須對上層說清楚：video/audio `frame_id`、`timestamp_ns`、runtime FPS 與
@@ -103,49 +104,29 @@ Created/Closed -> Opened -> Running -> Opened -> Destroyed
 Open/start/stop/destroy 等 handle lifecycle 仍應由 caller 序列化；若日後要宣告完整
 thread-safe，必須先補足這些操作彼此的同步與 handle lifetime 保護。
 
-## 4. DMA 與單一 frame buffer
+## 4. 擷取資料與播放副本
 
-Copy mode 資料路徑：
-
-```text
-source frame
--> hardware/driver DMA buffer
--> DMA complete event
--> 呼叫 gvfg_read_channel_frame() 的 thread 等待 DMA complete event
--> IOCTL_GET_FRAME(frameIndex=0xFFFFFFFF) 直接複製到 SDK 的單一 buffer
--> facade 回傳指向該 buffer 的 gvfg_frame_t
--> customer/preview/conversion
--> gvfg_release_channel_frame(channel)
--> buffer 可供下一次 read 使用
-```
-
-Backend 不做 frame queue、slot 切換或 done-index 查詢。每個 channel 同一時間只允許
-一個 read，且成功取得的 frame 必須 release 後才能讀下一張。SDK 不把 driver DMA
-buffer 數或 done-index 演算法暴露為客戶契約。
-
-Zero-copy mode 資料路徑：
+目前 SDK 將 Capture lifecycle 與 frame access 交給 GvfgSdk.lib；不要把舊 IOCTL enable／acquire 圖
+當成 facade 直接執行的程式。Direct driver extension 僅留給明確的內部診斷用途。
 
 ```text
-gvfg_create
--> gvfg_set_channel_zero_copy_enabled(channel, 1)
--> open channel 時 IOCTL_GIGA_ENABLE_FRAME_ZEROCOPY(channel)
--> DMA complete event
--> IOCTL_GIGA_ACQUIRE_VIDEO_FRAME_ZEROCOPY(channel, 0xFFFFFFFF)
--> facade 回傳 driver-owned pointer
--> customer/preview/conversion
--> gvfg_release_channel_frame(channel)
--> SDK 清除 held token；不送 Lib/driver release
--> close/destroy 時 IOCTL_GIGA_DISABLE_FRAME_ZEROCOPY(channel)
+vendor GetVideoFrame / GetVideoFrameZeroCopy
+-> GigabyteCaptureSession::wait_frame
+-> facade 驗證並交付 gvfg_frame_t
+-> application submit Playback / copy recorder / conversion
+-> release 原始 Capture token
 ```
 
-Zero-copy 同時只允許一張 outstanding frame。Caller 必須 release 目前的
-driver pointer，才能再次 read。SDK 不根據 read 間隔推算 frame loss；driver 目前也
-沒有提供可用來確認實際遺失 frame 的 sequence/drop counter。
+Copy／zero-copy 都要求 caller 完成使用或複製後恰好 release 一次。
+啟用 OSD 等處理時，交付 pointer 可能是 SDK-owned buffer，不能只從選項推論最後位址。
+目前 release 驗證 token 並結束 SDK lifetime，不送逐 frame vendor release。
+Playback submit 成功前另有複製，之後排程不保留 Capture frame。
+共用 Playback 的預覽副本可依策略退休，不代表獨立 recorder queue 也刪同張。
 
 ## 5. Frame token 與 ABI
 
-Facade 在 release 時驗證原 token 的 data、size、width、height、stride、format、
-bit depth 與 frame ID。任何欄位遭修改都回傳 `GVFG_EINVAL`。
+Facade 目前以 data 與 frame_id 驗證 held token；caller 仍須保留原始 token，
+不要把未檢查的 metadata 當成可修改契約。Token 不符回傳 GVFG_EINVAL，正確 token 仍需 release。
 
 x64 `gvfg_frame_t` ABI 已在 `gvfg_capture.cpp` 以 static assertions 固定為 56 bytes
 及明確欄位 offsets。修改公開 struct 時必須視為 ABI 變更，不能只重新編譯 DLL。
@@ -207,7 +188,8 @@ GigabyteLib 未提供的 DMA error、IRQ 或 driver sequence counter。
 
 客戶診斷使用 `gvfg_get_channel_signal_status()`、`gvfg_get_channel_runtime_info()`、event、
 `gvfg_strerror()` 與 `gvfg_get_channel_last_sdk_error_detail()`。每個 channel 的 `ChannelErrorState`
-由 `gvfg_handle_t` 持有，只記錄 SDK 自己產生的負數錯誤；正數 Lib result 不會改寫它。
+由 `gvfg_handle_t` 持有；目前 from_vendor 將 vendor 失敗轉為 GVFG status，
+保存客戶文字與內部 API／code／名稱。不能依舊版正數直通策略解讀目前 source。
 
 ## 8. GPU conversion
 
@@ -223,14 +205,20 @@ RGB10A2 或 BT.709 limited-range NV12。
 - D3D device/resource 建立失敗的狀態碼與資源釋放。
 - 在 release 前轉換，及 stop/format change 時沒有持有失效 frame。
 
-## 9. Preview helper
+## 9. 統一 Playback 與內部 backend
 
-Preview helper 是獨立 DLL，不連結 core capture SDK。它只接受 caller 填入的
-`gvfg_preview_frame_t`，同步 render 到 HWND。Sample 可同時使用 capture、preview 與
-internal debug header，但客戶 sample/package 不應包含 internal diagnostics。
+公開播放介面是 gvfg_playback.h，對外只有 gvfg_playback.dll。
+Audio／Preview 是內部 STATIC target；其函式不從 Playback DLL 匯出。
+普通 Customer Demo 只展示 API；內部分支的 Debug diagnostics 不得帶入客戶 Release 套件。
 
-`present_fps` 只統計 DXGI 成功接受的 Present；non-blocking swapchain busy 的 frame
-計入 `skipped_presents`，不可將其解讀為 capture drop。
+Playback 管理共同 clocks／queue、master、PCM 來源 spans、preroll／rebuffer、預覽過期退休與漂移控制。
+Audio backend 操作 PCM／WASAPI、raw frame position、pause／rate；Preview backend 操作 GPU 上傳與呈現。
+背景 GPU completion 以 condition variable 通知，HWND owner 的等待仍服務同步 sent messages。
+
+present_fps／video_presented 是 DXGI 接受 Present，不是實體 scanout。
+video_dropped 包含 core 過期退休與 backend busy 等略過，不代表 Capture 或錄影 loss。
+欄位定義見 [公開 Reference](GVFG_Customer_doc/GVFG_CUSTOMER_API_REFERENCE.md)，
+實作見 [Playback 維護說明](../GVFG_SDK/helpers/gvfg_playback/README.md)。
 
 ## 10. 已知限制與發佈檢查表
 

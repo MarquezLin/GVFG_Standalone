@@ -1,225 +1,86 @@
 # GVFG Standalone SDK
 
-這個 repository 維護 GVFG SDK。Customer 與 Internal Qt Sample 使用同一個
-資料夾的兩條 Git branch。
+目前 SDK 版本為 2.1.1，來源是 [GVFG_SDK/CMakeLists.txt](GVFG_SDK/CMakeLists.txt)。
+擷取使用 `gvfg.dll`；選用播放功能使用 `gvfg_playback.dll`。Audio 與 Preview 是
+Playback 內部靜態 library，不再各自部署 DLL。
 
-這個 repo 以 GVFG 為 source of truth。其他專案應該透過 public header、
-import library、runtime DLL 來使用 GVFG，不要直接把 GVFG source 編進去。
+## 文件入口
 
-## Driver compatibility
+| 目的 | 文件 |
+|---|---|
+| 第一次使用擷取 API | [客戶 API 使用手冊](docs/GVFG_CUSTOMER_API.md) |
+| 播放影像、音訊或同步影音 | [統一影音播放使用手冊](docs/GVFG_PLAYBACK_API.md) |
+| 查結構、參數、限制與狀態碼 | [公開 API Reference](docs/GVFG_Customer_doc/GVFG_CUSTOMER_API_REFERENCE.md) |
+| 理解 source、ownership 與執行緒 | [學習入口](docs/GVFG_LEARNING_INDEX.md) |
+| 建置 SDK、連結 Demo、安裝 | [內部建置說明](docs/INTERNAL_BUILD_GUIDE.md) |
+| 維護同步、WASAPI、D3D 實作 | [Playback 維護說明](GVFG_SDK/helpers/gvfg_playback/README.md) |
 
-此開發版本僅支援新 driver `vfg100_0821c`。舊版 driver、舊 IOCTL、
-done-index 與舊 SDK frame-ring 流程不在相容範圍內。
+客戶先讀使用手冊，不需要理解 backend、driver 或同步演算法才可呼叫 API。
 
-## 內容
+## 原始碼與責任
 
-- `GVFG_SDK`：獨立 SDK project，使用內嵌的 `GvfgSdk.lib` 建立 `gvfg.dll` 與選用的 `gvfg_preview.dll`。
-- `../Costomer_SDK_Release/GVFG_Customer_Sample`：`master` 為乾淨 Customer 版本，
-  `internal/audio-diagnostics` 為完整診斷版本；切換前先提交修改。
-- `docs`：API 與整合說明。
+```text
+GVFG_SDK/
+  sdk/gvfg/                 Capture C API、GigabyteLib adapter、OSD／GPU conversion
+  helpers/gvfg_playback/    公開播放 API、模式、時鐘、緩衝、同步排程
+  helpers/gvfg_audio_playback/  內部 WASAPI 靜態 backend
+  helpers/gvfg_preview/     內部 D3D 靜態 backend
+  helpers/gvfg_osd/         內部 OSD 元件
+docs/                      客戶與維護文件
+../Costomer_SDK_Release/GVFG_Customer_Sample/  獨立 Qt Demo 專案
+../srcroot/                 完整 Viewer，匯入 Standalone SDK
+```
 
-Qt Sample 的 source boundary：
+Capture 的 read/release、裝置與 channel lifecycle 由應用程式管理；Playback 只管理收到的播放副本。
+GigabyteLib `GvfgSdk.lib` 靜態連結在 Capture DLL，private vendor headers 不屬於客戶 API。
 
-- `mainwindow.cpp`：Widget 建立、signal/slot、畫面狀態與使用者操作。
-- `capture_controller.cpp/.h`：不依賴 UI widget 的裝置/channel lifecycle、video/audio worker、preview submission、狀態與 log 資料流。
-- `capture_controller.cpp/.h` 直接示範公開的 GVFG C API，並明確管理 `gvfg_create()`／停止流程／`gvfg_destroy()`，不建立重複轉呼叫層。
+## 建置
 
-客戶使用指南在 `docs/GVFG_CUSTOMER_API.md`，完整函式與結構參考在
-`docs/GVFG_Customer_doc/GVFG_CUSTOMER_API_REFERENCE.md`。內部架構、package
-切分、threading、frame ownership 說明在 `docs/GVFG_INTERNAL_NOTES.md`。
-主管 library 尚缺少的 API 與目前暫時補法整理在 `docs/GVFG_Customer_doc/GIGABYTELIB_GAPS.md`。
-
-## Sample tools and archived files
-
-Customer / Internal 共用一組 Release SDK DLL / LIB，SDK 固定匯出診斷 API。
-Customer 專案只交付 public headers，不附 `gvfg_debug.h`，Customer EXE 不可引用診斷 API。
-DLL exports 並非保密或權限邊界；內部 header 不交付僅代表未提供官方使用介面。
-不再維護 `Customer_MSVC2022_64bit-Release` 的獨立 SDK build。
-
-Sample 打包工具統一放在 `../Costomer_SDK_Release/GVFG_Customer_Sample`：
-`master` 的 `package_release.bat` 打包 Customer；
-`internal/audio-diagnostics` 另外提供 `package_debug.bat` 與 `run_diagnostic.bat`。
-這些工具只使用手動編譯產物，不會執行 build。
-
-舊 Sample 套件封存到 `../Archive/Standalone_cleanup_20261002/packages`。
-`CaptureDemo`、廠商 `0922_SDK` 與 SDK build 暫時保留，不當作無用資料刪除。
-
-## Build
-
-先使用 MSVC 建立 SDK，再到共用 Sample 資料夾切換 branch，使用 Qt kit 建立 Sample。
-SDK 與 Sample 使用不同 build directory，切換 Qt compiler 不會重新編譯 SDK source。
-SDK build 會保留 MSVC `.lib`，並在找到 MinGW `dlltool` 時從固定的
-DLL export 清單同步產生 MinGW `.dll.a`；兩種上層共用同一組 MSVC DLL。
-
-範例：
+SDK 不需要 Qt。在已載入 MSVC x64 環境的命令提示字元，於此目錄執行：
 
 ```bat
-cmake -S GVFG_SDK -B GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release
-cmake --build GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release --config Release
-
-cmake -S ..\Costomer_SDK_Release\GVFG_Customer_Sample -B ..\Costomer_SDK_Release\GVFG_Customer_Sample\build\Desktop_Qt_6_10_2_MSVC2022_64bit-Debug ^
-  -DCMAKE_BUILD_TYPE=Debug ^
-  -DCMAKE_PREFIX_PATH=C:\Qt\6.10.2\msvc2022_64 ^
-  -DGVFG_SDK_RELEASE_DIR=%CD%\GVFG_SDK\build\Desktop_Qt_6_10_2_MSVC2022_64bit-Release
-cmake --build ..\Costomer_SDK_Release\GVFG_Customer_Sample\build\Desktop_Qt_6_10_2_MSVC2022_64bit-Debug
+cmake -S GVFG_SDK -B GVFG_SDK/build_release -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build GVFG_SDK/build_release --target gvfg gvfg_playback
 ```
 
-Qt Sample 只從一個固定的 `GVFG_SDK_RELEASE_DIR` 找 DLL 與對應 compiler
-的 import library，不再依 Sample configuration 搜尋不同 SDK build。
-它不會使用 `add_subdirectory()` 將 SDK source 編入 APP。
+SDK 的頂層 CMake 不建置 Qt Sample，也沒有 `BUILD_GVFG_SAMPLES` 選項。
+Demo 從 [獨立專案目錄](../Costomer_SDK_Release/GVFG_Customer_Sample/README.md) 建置，僅需要 Qt Widgets。
+內附 vendor `.lib` 需要相容的 MSVC x64 SDK 建置環境；MinGW 客戶端可連結產生的 GNU 匯入庫。
+若找不到 dlltool，可設定 `GVFG_MINGW_DLLTOOL`，細節見建置說明。
 
-```text
-GVFG_SDK_ROOT=<path-to-GVFG_SDK>
-GVFG_SDK_RELEASE_DIR=<path-to-one-Release-SDK-build>
-```
-
-目前內部開發也統一使用上述 Release 流程，不另外維護 SDK/Sample 的
-Debug 配對。內部 header、診斷程式碼與 source 仍保留在 repository；等正式
-發布客戶套件時，再整理實際交付的 public header、LIB、DLL 與文件。
-
-Build 產物：
-
-```text
-GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/bin/gvfg.dll
-GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/bin/gvfg_preview.dll
-GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/gvfg.lib
-GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/gvfg_preview.lib
-GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/libgvfg.dll.a
-GVFG_SDK/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Release/lib/libgvfg_preview.dll.a
-../Costomer_SDK_Release/GVFG_Customer_Sample/build/Desktop_Qt_6_10_2_MSVC2022_64bit-Debug/bin/gvfg_qt_preview.exe
-```
-
-MSVC 上層連結 `gvfg.lib` 與 `gvfg_preview.lib`；MinGW 上層連結
-`libgvfg.dll.a` 與 `libgvfg_preview.dll.a`。如果 CMake 找不到 `dlltool`，
-可在 SDK configure 時指定 `-DGVFG_MINGW_DLLTOOL=<path-to-dlltool.exe>`。
-
-## Driver compatibility
-
-GVFG SDK 不再直接定義 driver IOCTL 或 register layout。底層 driver 相容性由
-主管提供的 `GvfgSdk.lib` 負責，GVFG 只使用其 `Gvfg*` API。
-
-### Zero-copy selection
-
-上層程式可在 `gvfg_create()` 後、`gvfg_open_channel()` 前選擇 zero-copy：
-
-```c
-gvfg_handle handle = NULL;
-gvfg_create(&handle);
-gvfg_set_channel_zero_copy_enabled(handle, GVFG_CHANNEL_0, 1);
-gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
-```
-
-SDK 直接使用 GigabyteLib 建立的 video frame、format changed、input plug-in 與
-input unplug events；audio 開啟時才使用 audio frame events。Application 收到
-`GVFG_EVENT_VIDEO_INPUT_UNPLUG` 後應暫停 video/audio read，等待
-`GVFG_EVENT_VIDEO_INPUT_PLUGIN` 或 stop 再喚醒 worker，不應在已知無訊號時持續
-輪詢 timeout。
-
-每次明確呼叫 `gvfg_start_channel()` 都會重新查詢一次 signal；沒有 lock 時回傳
-`GVFG_ETIMEOUT`，channel 不會進入 running。Running 期間的 signal status 由 SDK
-cache 提供，format changed、input plug-in 與 input unplug event 會先同步 cache，
-再讓 Application poll 到對應事件，因此一般狀態顯示不會重複讀取硬體。
-
-每個成功取得的 video/audio frame 都包含 `timestamp_ns`。兩者使用相同的
-monotonic SDK delivery clock，可供 Application 做 soft A/V sync；它不是硬體
-capture timestamp，也不能跨 process 或 session 比較。
-
-每個 channel 預設為 copy mode。指定 channel open 後不可切換該路模式；
-另一條尚未 open 的 channel 仍可獨立選擇。Zero-copy mode 仍使用相同的 `gvfg_read_channel_frame()` /
-`gvfg_release_channel_frame()` ownership contract，每次成功 read 都必須 release。
-SDK 會在 open 時 enable zero-copy，並在 close/destroy 時 disable。
-
-### Audio capture
-
-Channel 預設只啟動 video。CH0 可在 start 前改成 video + audio：
-
-```c
-gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
-gvfg_set_channel_audio_enabled(handle, GVFG_CHANNEL_0, 1);
-
-gvfg_audio_format_t audio = {0};
-gvfg_get_channel_audio_format(handle, GVFG_CHANNEL_0, &audio);
-gvfg_start_channel(handle, GVFG_CHANNEL_0);
-
-gvfg_audio_frame_t pcm = {0};
-if (gvfg_read_channel_audio_frame(handle, GVFG_CHANNEL_0, &pcm, 1000) == GVFG_OK) {
-    /* Consume pcm.data / pcm.data_size here. */
-    gvfg_release_channel_audio_frame(handle, GVFG_CHANNEL_0, &pcm);
-}
-```
-
-Video-only 使用 `IOCTL_GIGA_VIDEO_START/STOP`；video + audio 使用
-`IOCTL_GIGA_START/STOP_VIDEO_AUDIO`。PCM 由 driver DMA buffer 複製到
-SDK-owned frame buffer，再以和 video 相同的 read/release ownership 交付。
-SDK 不建立 audio ring buffer。Audio zero-copy
-尚未納入，CH1 audio 也尚未正式支援。
-
-Qt sample 的 monitoring playback 與 capture reader 分開。若 `QAudioSink` write
-失敗或連續兩秒沒有寫入進度，只會清除過期的播放 queue 並在 audio thread 重新取得
-預設 output device、重建 sink；video/audio capture 不會因此停止。Playback recovery
-不影響 SDK frame release contract。
-
-### 同一裝置雙 channel
-
-同一個 `gvfg_handle` 可對同一個 device index 開啟 CH0、CH1。SDK 只建立一個
-Windows device handle；兩個 channel 各自保有 event、單一 frame buffer
-以及 held-frame/zero-copy ownership：
-
-```c
-gvfg_open_channel(handle, device_index, GVFG_CHANNEL_0);
-gvfg_open_channel(handle, device_index, GVFG_CHANNEL_1);
-gvfg_start_channel(handle, GVFG_CHANNEL_0);
-gvfg_start_channel(handle, GVFG_CHANNEL_1);
-
-gvfg_frame_t frame0 = {0};
-if (gvfg_read_channel_frame(handle, GVFG_CHANNEL_0, &frame0, 1000) == GVFG_OK)
-    gvfg_release_channel_frame(handle, GVFG_CHANNEL_0, &frame0);
-
-gvfg_stop(handle); /* stop both channels */
-```
-
-兩個 channel 應由不同 worker thread 讀取。所有 stream、frame、event、signal 與
-runtime API 都明確要求 `channel_index`；不再保留隱含 selected-channel 的舊 API。
-目前硬體不允許 CH0、CH1 同時使用 Y210；SDK 會拒絕第二個 Y210 設定。
-
-`gvfg_qt_preview.exe` 只使用 public API，主畫面只顯示 input 與 Preview
-狀態；CH0、CH1 各自有 Start、Stop 與獨立 Preview 視窗，可單獨測試，
-也可同時啟動。第二個 channel open/start 失敗時不會停止已運作的 channel。
-Sample 的 Start 會在需要時 open device；Stop 指定 channel 後，若另一個 channel 也未
-running，Sample 會 destroy handle 並釋放 device，但保留 UI 的裝置選擇，供下次 Start
-重新 open。這是 Sample lifecycle policy；公開 `gvfg_stop_channel()` 本身不會 destroy handle。
-關閉獨立 Preview 視窗只會停止該視窗的 frame submission；capture/audio 仍可繼續，
-未顯示的 frame 不計為 preview delivery failure。重新開啟 Preview 或 Fullscreen 會
-恢復 frame submission。
-IRQ、DMA 等資訊只存在 internal diagnostic tool。
-
-## Consumer Layout
-
-一般 application 使用 core SDK 只需要：
+## 客戶檔案
 
 ```text
 include/gvfg_capture.h
-lib/gvfg.lib
-bin/gvfg.dll
-```
-
-`GvfgSdk.lib` 已靜態連結進 `gvfg.dll`，Application 不需另外部署
-`giga_ioctl.dll` 或主管 library 的額外 runtime DLL。
-
-需要 optional display helper 時，再加：
-
-```text
+include/gvfg_playback.h
 include/gvfg_preview.h
-lib/gvfg_preview.lib
-bin/gvfg_preview.dll
+include/gvfg_audio_playback.h
+bin/gvfg.dll
+bin/gvfg_playback.dll
+lib/gvfg.lib
+lib/gvfg_playback.lib
+lib/libgvfg.dll.a                 # 有啟用 dlltool 時
+lib/libgvfg_playback.dll.a        # 有啟用 dlltool 時
 ```
 
-GPU snapshot/export conversion 已整合在 `gvfg.dll`，不需要額外 helper DLL。
+只擷取、不播放時，只需要 Capture 的 header／匯入庫／DLL。使用 Playback 時，
+另外攜帶三個播放相關標頭；後端標頭只為公開資料型別，不代表其函式對外匯出。
+不要把建置目錄內的 `gvfg_preview.lib`、`gvfg_audio_playback.lib` 誤當成部署用匯入庫。
 
-Debug 與 Release Sample package 都部署 SDK Release build 的 `gvfg.dll` 與
-`gvfg_preview.dll`；Debug package 只保留 Debug Sample executable、PDB 與 Qt Debug
-runtime。這可確保兩種 package 使用同一組正式 SDK runtime，並避免誤包舊的 SDK Debug DLL。
+使用 `cmake --install <sdk-build> --prefix <new-package-directory>` 取得配套輸出。
+Customer Demo 的 Release 打包腳本使用 EXE 同目錄中的 Capture／Playback DLL，
+不會代為編譯，也不從其他 build 目錄任意挑 DLL。
 
-Customer/demo package 不應包含 `gvfg_debug.h`、SDK source、GigabyteLib session
-headers、IRQ details 或 helper source。這些只屬於 internal
-debug/full application package。
+## 模式、遷移與驗證
+
+Playback 支援 video-only、audio-only、audio-video；純音訊不需視窗，
+單張 RAW／DICOM 可用 `gvfg_playback_present_image()`，不啟動播放時間軸。
+同步策略在 SDK，不放在 Demo。普通 Demo 顯示基本狀態及 API 錯誤；內部分支的
+Debug 診斷與客戶 Release 套件分開，不能以 Debug 畫面作為客戶 API 契約。
+
+舊程式應移除直接使用 Audio／Preview helper 的程式碼與 DLL 相依，
+重新編譯並改用 `gvfg_playback_*`；遷移步驟見播放手冊。
+既有擷取錄影流程與即時預覽是不同消費路徑，預覽略過數不等於錄影掉格數。
+
+既有 2 分鐘實機測試與慢速輸出模擬的範圍記在 Playback 維護說明；
+短測、建置通過不代表完成聲學嘴型精度、小時級漂移或所有硬體／格式驗證。

@@ -867,6 +867,10 @@ gvfg_preview_present_result_t D3DPreviewPipeline::present_texture(ID3D11Texture2
 }
 bool D3DPreviewPipeline::clear_preview_black()
 {
+    // configurePreview can precede the first prepare/render: no presentation
+    // surface exists yet, so there is nothing to clear.
+    if (!preview_swapchain_ && !preview_rtv_)
+        return true;
     if (!preview_enabled_ || !preview_swapchain_ || !preview_rtv_ || !ctx_)
         return false;
 

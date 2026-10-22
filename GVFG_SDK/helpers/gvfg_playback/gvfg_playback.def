@@ -1,0 +1,20 @@
+LIBRARY gvfg_playback
+EXPORTS
+    gvfg_playback_default_config
+    gvfg_playback_create
+    gvfg_playback_attach_window
+    gvfg_playback_set_signal_connected
+    gvfg_playback_start
+    gvfg_playback_present_image
+    gvfg_playback_submit_video
+    gvfg_playback_submit_audio
+    gvfg_playback_set_volume
+    gvfg_playback_set_sync_enabled
+    gvfg_playback_reset_timeline
+    gvfg_playback_stop
+    gvfg_playback_destroy
+    gvfg_playback_get_stats
+    gvfg_playback_get_preview_info
+    gvfg_playback_get_preview_stats
+    gvfg_playback_get_delivery_stats
+    gvfg_playback_strerror

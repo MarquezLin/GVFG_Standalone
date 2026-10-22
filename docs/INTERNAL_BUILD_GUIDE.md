@@ -1,186 +1,117 @@
-# GVFG Standalone 內部建置與功能說明
+# GVFG SDK 與 Demo 建置說明
 
-本文件供內部開發使用，說明 `GVFG_Standalone` 的用途、CMake 設定、Debug 診斷功能、輸出檔案，以及如何提供 `qt6/srcroot` 使用。
+SDK version 由 `GVFG_SDK/CMakeLists.txt` 決定，目前為 2.1.1。
+Sample version 由自己的 CMake 決定；目前 checkout 是內部分支，與 customer master 不必相同。
 
-## 1. 專案定位
+SDK Debug 在原有等待流程實際收到格式事件時，透過 `OutputDebugStringA()`
+輸出 `[GVFG] Received VIDEO_FORMAT_CHANGED` 到偵錯器輸出視窗。
+未收到時不輸出；不改事件流程、不新增 API，Release 不輸出。
+清除事件前亦以零等待檢查 format event；若已觸發，先印出訊息並標示
+`before format/start/stop reset`，再執行原有清除。這是 SDK 端觀察，不代表攔截 driver 內部觸發。
 
-`GVFG_Standalone` 是 GVFG 擷取功能的 source of truth，包含：
+## 1. 正確專案根目錄
 
-- `sdk/gvfg`：GVFG 公開 C API、PCIe S2MM backend、GPU conversion。
-- `helpers/gvfg_preview`：獨立的 D3D preview helper。
-- `samples/gvfg_qt_preview`：直接使用 GVFG API 的 Qt 測試程式。
-- `docs`：客戶 API、內部架構及建置文件。
+```text
+GVFG_SDK workspace/                  # 不是單一 Git repository
+  GVFG_Standalone/GVFG_SDK/          # SDK CMake project
+  Costomer_SDK_Release/GVFG_Customer_Sample/ # Qt Demo CMake project
+  srcroot/                          # 完整 Viewer CMake project
+```
 
-`qt6/srcroot` 不會重新編譯這裡的 source，而是透過 header、LIB 與 DLL 匯入已建置完成的 Standalone SDK。
+SDK 與 Demo 現在不是同一個頂層 CMake 專案。不存在 `BUILD_GVFG_SAMPLES` 的 SDK 開關。
+不要把舊 `samples/gvfg_qt_preview` 路徑、舊 helper DLL target 或其他 checkout 的 build cache 混用。
 
-## 2. 必要環境
+## 2. 環境與 target
 
-- Windows x64。
-- Visual Studio 2022 MSVC Build Tools。
-- CMake 3.16 以上。
-- Qt 6 MSVC x64；只有建置 `gvfg_qt_preview` sample 時需要 Qt。
+- SDK：Windows x64、CMake 3.16+、相容的 MSVC x64 toolchain 與 vendor `GvfgSdk.lib`。
+- Demo：另外需要相容的 Qt 6 Widgets kit；沒有 Qt Multimedia／QAudioSink 相依。
+- Viewer：另外依賴自己 `srcroot/CMakeLists.txt` 的 Qt／FFmpeg／DCMTK 等項目。
 
-建議先進入 Visual Studio Developer Command Prompt，避免 `cl.exe` 找不到標準函式庫，或系統同時存在 `Path` 與 `PATH` 時造成 MSBuild 錯誤。
-
-## 3. CMake 選項
-
-| 變數 | 類型／預設 | 功能 |
+| SDK target | 類型 | 說明 |
 |---|---|---|
-| `BUILD_GVFG_SAMPLES` | BOOL／`ON` | 是否建置 `gvfg_qt_preview.exe`。SDK 與 preview DLL 不受此選項影響。 |
-| `CMAKE_PREFIX_PATH` | PATH | Qt MSVC kit 的根目錄，例如 `C:\Qt\6.10.2\msvc2022_64`。 |
+| `gvfg` | SHARED | Capture facade、vendor adapter、GPU conversion／OSD |
+| `gvfg_playback` | SHARED | 對外播放 DLL，只匯出 Playback 函式 |
+| `gvfg_preview` | STATIC | D3D backend，私下連結進 Playback |
+| `gvfg_audio_playback` | STATIC | WASAPI backend，私下連結進 Playback |
 
-`GVFG_INTERNAL_DIAGNOSTICS` 不是給使用者手動設定的 cache option。CMake 會依 configuration 自動決定：
+## 3. 建置 SDK
 
-- Debug：`GVFG_INTERNAL_DIAGNOSTICS=1`
-- Release：`GVFG_INTERNAL_DIAGNOSTICS=0`
-
-這個設定會同時套用到 `gvfg.dll`、`gvfg_preview.dll` 與 `gvfg_qt_preview.exe`。
-
-## 4. 更新 SDK 版本
-
-目前 SDK 版本為 `1.1.0`。後續版本採 `MAJOR.MINOR.PATCH`：
-
-- 新增功能：更新中間的 MINOR，並將 PATCH 歸零，例如 `1.1.0` → `1.2.0`。
-- 修正 bug：更新最後的 PATCH，例如 `1.1.0` → `1.1.1`。
-- 同一次版本同時有新功能與 bug 修正時，以新增功能的升版規則為準。
-
-版本只有一個來源：`GVFG_SDK/CMakeLists.txt` 的 `GVFG_SDK_VERSION`。例如準備
-`1.0.0-rc.1` 時改成：
-
-```cmake
-set(GVFG_SDK_VERSION "1.0.0-rc.1")
-```
-
-`sdk/gvfg` 會直接將這個字串編入 `gvfg.dll`。正式發布時只要改成
-`set(GVFG_SDK_VERSION "1.0.0")`。這不是 cache option，不應使用
-`-DGVFG_SDK_VERSION=...` 覆寫。修改版本後要重新 configure，再重新建置 DLL。
-
-程式可用下列公開 API 查詢實際載入的 DLL 版本：
-
-```c
-const char *version = gvfg_get_version();
-```
-
-`qt6_viewer` 啟動時也會把這個 runtime 版本寫入 log，便於發現 header、LIB、DLL 混用舊版本的問題。
-
-## 5. 建置方式
-
-### 5.1 Release：一般整合與效能測試
+在 MSVC x64 Developer Command Prompt，於 workspace 執行：
 
 ```bat
-cmake -S . -B build_release ^
-  -DBUILD_GVFG_SAMPLES=ON ^
-  -DCMAKE_PREFIX_PATH=C:\Qt\6.10.2\msvc2022_64
-
-cmake --build build_release --config Release --target gvfg_qt_preview
+cmake -S GVFG_Standalone/GVFG_SDK -B GVFG_Standalone/GVFG_SDK/build_release -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build GVFG_Standalone/GVFG_SDK/build_release --target gvfg gvfg_playback
 ```
 
-若只需要 SDK，不需要 Qt sample：
+Ninja 使用 CMAKE_BUILD_TYPE；Visual Studio 多組態 generator 使用 `--config Release`。
+預設 bin/lib 在 build root；多組態可能再有 Release／Debug 子目錄，應確認實際檔案位置。
+SDK build 不需要 Qt，也不產生 Demo EXE。
+
+`GVFG_MINGW_DLLTOOL` 是 FILEPATH，可指向 dlltool 以產生客戶端 GNU 匯入庫。
+這不表示 MSVC vendor 靜態庫可直接由 MinGW 建置 SDK。
+`GVFG_EXPERIMENTAL_ZERO_COPY_OSD_INPLACE` 是現有預設 OFF 的實驗選項，不屬於客戶播放設定。
+
+## 4. Sample 的三種 SDK 來源
+
+| 條件 | 使用來源 |
+|---|---|
+| 未指定 override（Customer 預設） | 只使用 Sample 自己的 include/bin/lib，不搜尋同層 SDK |
+| 明確指定 `GVFG_SAMPLE_SDK_SOURCE_DIR`，未指定 build override | add_subdirectory 建置 SDK，連結真正的 gvfg／gvfg_playback target |
+| `GVFG_SAMPLE_SDK_BUILD_DIR` 有值 | 使用該目錄 bin/lib；另有指定 source 時 headers 取自該 source，否則使用套件 headers；須版本配套 |
+
+指定 prebuilt SDK 的範例，於 workspace 執行：
 
 ```bat
-cmake -S . -B build_sdk ^
-  -DBUILD_GVFG_SAMPLES=OFF
-
-cmake --build build_sdk --config Release --target gvfg gvfg_preview
+cmake -S Costomer_SDK_Release/GVFG_Customer_Sample -B sample_release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:/Qt/6.10.2/msvc2022_64 -DGVFG_SAMPLE_SDK_BUILD_DIR=C:/path/to/sdk-build -DGVFG_SAMPLE_SDK_SOURCE_DIR=C:/path/to/GVFG_Standalone/GVFG_SDK
+cmake --build sample_release --target gvfg_qt_preview
 ```
 
-### 5.2 Debug：內部診斷
+指定 build override 時，兩個路徑要對應同一版本；不要讓 include 仍指向其他 checkout。
+Customer 新 build 預設使用套件 include/bin/lib。舊 cache 曾記住 SDK source／build 時，
+需清空 `GVFG_SAMPLE_SDK_SOURCE_DIR` 與 `GVFG_SAMPLE_SDK_BUILD_DIR` 才會改用套件。
+內部診斷支線有自己的 source 選擇設定，不從 Customer 的新預設推論其行為。
+Sample POST_BUILD 只複製匹配的 gvfg.dll／gvfg_playback.dll 到 EXE 旁。
+
+## 5. Customer 與 internal Debug
+
+Customer Demo 使用公開 API、基本狀態與必要錯誤，不輸出同步內部 queue／PTS／dropped。
+目前 `internal/audio-diagnostics` 分支的 CMake 另在 Debug 加入 internal_diagnostics 與 private header 路徑，
+Release 不編譯該診斷來源。內部版規則以 Sample 的 INTERNAL_BRANCH_WORKFLOW.md 為準；
+不要把內部分支或 Debug binary 當成客戶交付版本。
+
+SDK 與 Preview 的 `GVFG_INTERNAL_DIAGNOSTICS` 各由其 CMake 依組態定義，
+不是可任意切換所有模組的統一 runtime 設定。不要假設 Debug 有 vendor 未提供的 IRQ／DMA loss counter。
+
+## 6. 安裝與封裝
 
 ```bat
-cmake -S . -B build_debug ^
-  -DBUILD_GVFG_SAMPLES=ON ^
-  -DCMAKE_PREFIX_PATH=C:\Qt\6.10.2\msvc2022_64
-
-cmake --build build_debug --config Debug --target gvfg_qt_preview
+cmake --install GVFG_Standalone/GVFG_SDK/build_release --prefix sdk_package
 ```
 
-Debug 版本會增加：
+乾淨 install tree 只交付 Capture／Playback 的 DLL 與匯入庫、公開標頭及客戶文件。
+不交付 backend 靜態 `.lib`、private source、gvfg_debug.h、vendor headers 或舊 helper DLL。
+文件保留 `GVFG_Customer_doc/` 子目錄，使使用手冊與 API Reference 的相對連結在安裝後仍成立。
+使用新目錄安裝；cmake install 不會自動移除舊套件留下的 helper DLL 或舊文件。
 
-- backend/DMA/IRQ 統計資訊。
-- preview submit、render、Present 慢幀診斷。
-- held-frame 與 slow-release 診斷。
-- 詳細 backend error。
-- `gvfg_qt_preview` 的 diagnostic status log。
-
-Debug 診斷會增加 log 與檢查成本，不應拿來判斷正式版本效能。
-
-## 6. 輸出檔案
-
-輸出位置由 CMake 統一設定：
-
-```text
-<build>/bin/gvfg.dll
-<build>/bin/gvfg_preview.dll
-<build>/bin/gvfg_qt_preview.exe
-<build>/lib/gvfg.lib
-<build>/lib/gvfg_preview.lib
-```
-
-不同 generator 的 configuration 可能位於 `bin/Release`、`lib/Release`，或 Qt Creator 自己建立的 configuration build 目錄。整合到 `srcroot` 時，`GVFG_STANDALONE_BUILD_DIR` 必須指向實際包含 `bin` 與 `lib` 的那一層。
-
-## 7. 主要功能
-
-### `gvfg.dll`
-
-- 列舉裝置、開啟 channel、開始與停止擷取。
-- 取得原生 YUY2 8-bit 或 Y210 10-bit frame。
-- 使用 `gvfg_get_version()` 查詢實際載入的 runtime DLL 版本。
-- signal status、runtime FPS 與 channel event。
-- GPU conversion：BGRA8、RGB10A2、NV12。
-- SDK 詳細錯誤 API：`gvfg_get_channel_last_sdk_error_detail()`；只適用於負數 SDK error。
-- 內部 debug API：backend stats、register read/write。
-
-目前 FPGA 的 8-bit format register 仍可能回報舊 `YVYU` 值；SDK 只把它當作 legacy register identifier，對外格式與實際 DMA layout一律是 YUY2（`Y0 U0 Y1 V0`）。
-
-### `gvfg_preview.dll`
-
-- 將 YUY2/Y210 frame 顯示到指定 HWND。
-- 自動依來源 bit depth 選擇 preview pipeline。
-- preview worker 與 capture frame delivery 分離；preview 落後時可淘汰舊 preview frame，不阻塞擷取交付。
-
-### `gvfg_qt_preview.exe`
-
-- 最小化的 GVFG 整合範例。
-- 視窗標題與啟動 log 顯示 `gvfg_get_version()` 回傳的實際 DLL 版本。
-- 裝置／channel 選擇、start/stop、preview window。
-- 顯示輸入格式、bit depth、capture FPS、preview FPS 與目前診斷狀態。
-- Debug build 顯示額外 backend diagnostics。
-
-## 8. 提供給 srcroot 使用
-
-建置 Standalone 後，在 `qt6/srcroot` configure 時指定：
+Customer Sample 的 `package_release.bat` 由已建好的 Release EXE 打包：
 
 ```bat
--DBUILD_GVFG_SDK=ON
--DGVFG_STANDALONE_ROOT=C:\Users\mark\Desktop\GcaptureSDK\GVFG_Standalone
--DGVFG_STANDALONE_BUILD_DIR=C:\path\to\standalone-build
+package_release.bat "C:\path\to\gvfg_qt_preview.exe" "C:\Qt\6.10.2\msvc2022_64\bin" "C:\path\to\packages"
 ```
 
-`GVFG_STANDALONE_BUILD_DIR` 應包含：
+腳本檢查 EXE 同目錄的 gvfg.dll／gvfg_playback.dll，檢查 customer EXE 未匯入 gvfg_debug_*，
+再執行 windeployqt。它不會建置或替你挑別的 build directory。
+`srcroot` 的封裝腳本有額外 Viewer／FFmpeg runtime，與 Customer Demo 套件不同。
 
-```text
-bin/gvfg.dll
-bin/gvfg_preview.dll
-lib/gvfg.lib
-lib/gvfg_preview.lib
-```
+## 7. 常見錯誤
 
-修改公開 enum、struct 或函式後，必須先重建 Standalone，再重新 configure/build `srcroot`，否則 header、LIB、DLL 可能版本不一致。
+| 問題 | 檢查 |
+|---|---|
+| LNK1104 無法覆寫 DLL／EXE | 關閉正在使用該 build 的程式，再建置；切分支也不會更新既有 binary |
+| 找不到 gvfg_preview.dll | 程式或封裝仍使用舊 ABI，改連結 Playback，勿補回舊 DLL 掩蓋混版 |
+| 找不到 Playback symbol | 標頭、匯入庫、DLL 不配套，或誤連內部靜態 backend |
+| Sample 沒找到預建 SDK | 確認來源選擇、bin/lib 位置、MSVC／MinGW 匯入庫檔名 |
+| 視窗關閉後音訊停止 | 確認沒有停止 video producer 卻保留 audio-video 模式；隱藏預覽仍需影像時間軸 |
+| 狀態顯示 running 但無輸出 | 檢查 start／submit 回傳、last_error、buffering 與啟用串流資料 |
 
-## 9. 常見問題
-
-### `GVFG_PIXFMT_*` 未宣告
-
-上層正在使用舊 enum，或 include 到另一份舊 header。確認 include path 指向本專案的 `sdk/gvfg/include`，並同步修改上層。
-
-### `Path`／`PATH` duplicate key
-
-這是啟動 Codex/PowerShell 環境時同時存在兩種大小寫造成的 MSBuild 問題。改從 Visual Studio Developer Command Prompt 建置，或清理重複環境變數。
-
-### 找不到 `type_traits` 或 `utility`
-
-表示 MSVC developer environment 尚未載入。先執行 `VsDevCmd.bat -arch=x64`，再呼叫 CMake build。
-
-### DLL 更新但 viewer 行為仍舊
-
-確認 viewer 執行目錄的 DLL timestamp，並關閉正在執行的 viewer 後重新建置。Windows 會鎖住使用中的 EXE/DLL。
+本次文件變更只驗證文件／來源、範例與安裝規則；不因文件改版宣稱新增硬體測試。

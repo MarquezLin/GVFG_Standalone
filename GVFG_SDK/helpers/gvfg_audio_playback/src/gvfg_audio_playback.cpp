@@ -1,4 +1,5 @@
-#include "gvfg_audio_playback.h"
+#include "audio_backend_internal.h"
+#include "audio_output_internal.h"
 
 #include <windows.h>
 #include <audioclient.h>
@@ -27,9 +28,14 @@ struct gvfg_audio_player_t
     struct Packet
     {
         std::vector<uint8_t> pcm;
-        uint64_t timestamp_ns = 0;
     };
 
+    uint64_t written_frames = 0, inflight_frames = 0;
+    uint64_t played_frames = 0, device_padding = 0;
+    uint64_t applied_generation = 0;
+    std::atomic<bool> pause_requested{true};
+    bool output_paused = false;
+    std::atomic<double> rate_ratio{1.0};
     std::mutex mutex;
     std::condition_variable ready;
     std::condition_variable queued;
@@ -43,8 +49,7 @@ struct gvfg_audio_player_t
     bool running = false;
     bool stop_requested = false;
     bool flush_requested = false;
-    std::atomic<uint64_t> latest_video_timestamp_ns{0};
-    std::atomic<uint64_t> timeline_generation{0};
+    std::atomic<uint64_t> buffer_generation{0};
     std::atomic<float> volume{1.0f};
 };
 
@@ -87,13 +92,17 @@ namespace
     void playback_worker(gvfg_audio_player_t *player)
     {
         const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-        const bool uninitializeCom = SUCCEEDED(comResult);
+        struct ComScope {
+            bool initialized;
+            ~ComScope() { if (initialized) CoUninitialize(); }
+        } comScope{SUCCEEDED(comResult)};
         gvfg_audio_playback_status_t startStatus = GVFG_AUDIO_PLAYBACK_EIO;
 
         ComPtr<IMMDeviceEnumerator> enumerator;
         ComPtr<IMMDevice> device;
         ComPtr<IAudioClient> client;
         ComPtr<IAudioRenderClient> render;
+        ComPtr<IAudioClockAdjustment> adjustment;
         UINT32 bufferFrames = 0;
 
         if (SUCCEEDED(comResult) || comResult == RPC_E_CHANGED_MODE)
@@ -122,7 +131,8 @@ namespace
 
                     constexpr REFERENCE_TIME kBufferDuration = 1000000; // 100 ms
                     const DWORD flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
-                                        AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+                                        AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY |
+                                        AUDCLNT_STREAMFLAGS_RATEADJUST;
                     hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags,
                                             kBufferDuration, 0, &wave, nullptr);
                     if (hr == AUDCLNT_E_UNSUPPORTED_FORMAT)
@@ -132,7 +142,10 @@ namespace
                     if (SUCCEEDED(hr) && bufferFrames > 0)
                         hr = client->GetService(IID_PPV_ARGS(&render));
                     if (SUCCEEDED(hr) && render)
+                        hr = client->GetService(IID_PPV_ARGS(&adjustment));
+                    if (SUCCEEDED(hr) && render && !player->pause_requested.load())
                         hr = client->Start();
+                    player->output_paused = player->pause_requested.load();
                     if (SUCCEEDED(hr) && render)
                         startStatus = GVFG_AUDIO_PLAYBACK_OK;
                     else if (startStatus != GVFG_AUDIO_PLAYBACK_EFORMAT)
@@ -146,22 +159,39 @@ namespace
             player->start_status = startStatus;
             player->start_complete = true;
             player->running = startStatus == GVFG_AUDIO_PLAYBACK_OK;
+            player->applied_generation = player->buffer_generation.load();
         }
         player->ready.notify_one();
 
-        constexpr int64_t kLeadLimitNs = 40'000'000;
-        constexpr int64_t kLagDropNs = 80'000'000;
-        constexpr auto kMaxHold = std::chrono::milliseconds(100);
         const uint32_t frameBytes = block_align(player->format);
-        uint64_t observedGeneration = player->timeline_generation.load(std::memory_order_acquire);
-        bool syncBaseValid = false;
-        int64_t syncBaseOffsetNs = 0;
+        uint64_t observedGeneration = player->buffer_generation.load(std::memory_order_acquire);
+        double appliedRate = 1.0;
+        auto updateOutput = [&]() -> bool {
+            const bool pause = player->pause_requested.load();
+            if (pause != player->output_paused) {
+                if (FAILED(pause ? client->Stop() : client->Start())) return false;
+                std::lock_guard<std::mutex> lock(player->mutex);
+                player->output_paused = pause;
+            }
+            const double rate = player->rate_ratio.load();
+            if (rate != appliedRate && adjustment) {
+                if (FAILED(adjustment->SetSampleRate(static_cast<float>(player->format.sample_rate * rate)))) return false;
+                appliedRate = rate;
+            }
+            UINT32 padding = 0;
+            if (FAILED(client->GetCurrentPadding(&padding))) return false;
+            std::lock_guard<std::mutex> lock(player->mutex);
+            player->device_padding = padding;
+            player->played_frames = player->written_frames > padding ? player->written_frames - padding : 0;
+            return true;
+        };
         while (startStatus == GVFG_AUDIO_PLAYBACK_OK)
         {
+            if (!updateOutput()) { startStatus = GVFG_AUDIO_PLAYBACK_EIO; break; }
             gvfg_audio_player_t::Packet packet;
             {
                 std::unique_lock<std::mutex> lock(player->mutex);
-                player->queued.wait(lock, [player]
+                player->queued.wait_for(lock, std::chrono::milliseconds(kPollingSleepMs), [player]
                                     { return player->stop_requested || player->flush_requested ||
                                              !player->packets.empty(); });
                 if (player->stop_requested)
@@ -173,59 +203,25 @@ namespace
                     HRESULT hr = client->Stop();
                     if (SUCCEEDED(hr))
                         hr = client->Reset();
-                    if (SUCCEEDED(hr))
+                    if (SUCCEEDED(hr) && !player->pause_requested.load())
                         hr = client->Start();
+                    {
+                        std::lock_guard<std::mutex> stateLock(player->mutex);
+                        player->written_frames = player->inflight_frames = player->device_padding = player->played_frames = 0;
+                        player->output_paused = player->pause_requested.load();
+                        player->applied_generation = player->buffer_generation.load();
+                    }
                     if (FAILED(hr))
                         break;
-                    observedGeneration = player->timeline_generation.load(std::memory_order_acquire);
-                    syncBaseValid = false;
+                    observedGeneration = player->buffer_generation.load(std::memory_order_acquire);
                     continue;
                 }
+                if (player->packets.empty()) continue;
                 packet = std::move(player->packets.front());
                 player->packets.pop_front();
                 player->queued_bytes -= packet.pcm.size();
-            }
-
-            const uint64_t generation = player->timeline_generation.load(std::memory_order_acquire);
-            if (generation != observedGeneration)
-            {
-                observedGeneration = generation;
-                syncBaseValid = false;
-            }
-            uint64_t videoTimestampNs = player->latest_video_timestamp_ns.load(std::memory_order_acquire);
-            if (packet.timestamp_ns != 0 && videoTimestampNs != 0)
-            {
-                const int64_t rawOffsetNs = static_cast<int64_t>(packet.timestamp_ns) -
-                                            static_cast<int64_t>(videoTimestampNs);
-                if (!syncBaseValid)
-                {
-                    syncBaseOffsetNs = rawOffsetNs;
-                    syncBaseValid = true;
-                }
-                int64_t driftNs = rawOffsetNs - syncBaseOffsetNs;
-                if (driftNs < -kLagDropNs)
-                    continue;
-                const auto holdDeadline = std::chrono::steady_clock::now() + kMaxHold;
-                while (driftNs > kLeadLimitNs &&
-                       std::chrono::steady_clock::now() < holdDeadline)
-                {
-                    {
-                        std::lock_guard<std::mutex> lock(player->mutex);
-                        if (player->stop_requested)
-                            break;
-                    }
-                    if (player->timeline_generation.load(std::memory_order_acquire) != observedGeneration)
-                    {
-                        syncBaseValid = false;
-                        break;
-                    }
-                    Sleep(kPollingSleepMs);
-                    videoTimestampNs = player->latest_video_timestamp_ns.load(std::memory_order_acquire);
-                    driftNs = static_cast<int64_t>(packet.timestamp_ns) -
-                              static_cast<int64_t>(videoTimestampNs) - syncBaseOffsetNs;
-                }
-                if (!syncBaseValid || driftNs > kLeadLimitNs)
-                    continue;
+                player->inflight_frames = packet.pcm.size() / frameBytes;
+                observedGeneration = player->buffer_generation.load(std::memory_order_acquire);
             }
 
             apply_pcm16_gain(packet.pcm, player->volume.load(std::memory_order_acquire));
@@ -234,6 +230,8 @@ namespace
             const uint32_t totalFrames = static_cast<uint32_t>(packet.pcm.size() / frameBytes);
             while (frameOffset < totalFrames)
             {
+                if (!updateOutput()) { startStatus = GVFG_AUDIO_PLAYBACK_EIO; break; }
+                if (player->buffer_generation.load() != observedGeneration) break;
                 {
                     std::lock_guard<std::mutex> lock(player->mutex);
                     if (player->stop_requested)
@@ -271,18 +269,22 @@ namespace
                     startStatus = GVFG_AUDIO_PLAYBACK_EIO;
                     break;
                 }
+                {
+                    std::lock_guard<std::mutex> lock(player->mutex);
+                    player->written_frames += framesNow;
+                    player->inflight_frames -= framesNow;
+                }
                 frameOffset += framesNow;
             }
         }
 
         if (client)
             client->Stop();
+        adjustment.Reset();
         render.Reset();
         client.Reset();
         device.Reset();
         enumerator.Reset();
-        if (uninitializeCom)
-            CoUninitialize();
 
         std::lock_guard<std::mutex> lock(player->mutex);
         player->running = false;
@@ -291,14 +293,6 @@ namespace
 
 extern "C"
 {
-    gvfg_audio_playback_status_t gvfg_audio_player_create(gvfg_audio_player *out_player)
-    {
-        if (!out_player)
-            return GVFG_AUDIO_PLAYBACK_EINVAL;
-        *out_player = new (std::nothrow) gvfg_audio_player_t();
-        return *out_player ? GVFG_AUDIO_PLAYBACK_OK : GVFG_AUDIO_PLAYBACK_EIO;
-    }
-
     gvfg_audio_playback_status_t gvfg_audio_player_start(
         gvfg_audio_player player, const gvfg_audio_playback_format_t *format)
     {
@@ -312,6 +306,7 @@ extern "C"
         player->format = *format;
         player->packets.clear();
         player->queued_bytes = 0;
+        player->written_frames = player->inflight_frames = player->device_padding = player->played_frames = 0;
         player->max_queued_bytes = static_cast<size_t>(format->sample_rate) *
                                    block_align(*format) * kMaxQueuedAudioMs /
                                    kMillisecondsPerSecond;
@@ -319,12 +314,20 @@ extern "C"
         player->start_complete = false;
         player->stop_requested = false;
         player->flush_requested = false;
-        player->latest_video_timestamp_ns.store(0, std::memory_order_release);
-        player->timeline_generation.fetch_add(1, std::memory_order_acq_rel);
+        player->buffer_generation.fetch_add(1, std::memory_order_acq_rel);
 
         try
         {
-            player->worker = std::thread(playback_worker, player);
+            player->worker = std::thread([player] {
+                try { playback_worker(player); }
+                catch (...) {
+                    std::lock_guard<std::mutex> lock(player->mutex);
+                    player->running = false;
+                    player->start_status = GVFG_AUDIO_PLAYBACK_EIO;
+                    player->start_complete = true;
+                    player->ready.notify_one();
+                }
+            });
         }
         catch (...)
         {
@@ -342,13 +345,6 @@ extern "C"
 
     gvfg_audio_playback_status_t gvfg_audio_player_write(
         gvfg_audio_player player, const void *data, uint32_t data_size)
-    {
-        return gvfg_audio_player_write_timed(player, data, data_size, 0);
-    }
-
-    gvfg_audio_playback_status_t gvfg_audio_player_write_timed(
-        gvfg_audio_player player, const void *data, uint32_t data_size,
-        uint64_t audio_timestamp_ns)
     {
         if (!player || !data || data_size == 0)
             return GVFG_AUDIO_PLAYBACK_EINVAL;
@@ -368,7 +364,6 @@ extern "C"
             const auto *bytes = static_cast<const uint8_t *>(data);
             gvfg_audio_player_t::Packet packet;
             packet.pcm.assign(bytes, bytes + data_size);
-            packet.timestamp_ns = audio_timestamp_ns;
             player->packets.push_back(std::move(packet));
         }
         catch (...)
@@ -377,15 +372,6 @@ extern "C"
         }
         player->queued_bytes += data_size;
         player->queued.notify_one();
-        return GVFG_AUDIO_PLAYBACK_OK;
-    }
-
-    gvfg_audio_playback_status_t gvfg_audio_player_update_video_timestamp(
-        gvfg_audio_player player, uint64_t video_timestamp_ns)
-    {
-        if (!player)
-            return GVFG_AUDIO_PLAYBACK_EINVAL;
-        player->latest_video_timestamp_ns.store(video_timestamp_ns, std::memory_order_release);
         return GVFG_AUDIO_PLAYBACK_OK;
     }
 
@@ -398,9 +384,8 @@ extern "C"
             player->packets.clear();
             player->queued_bytes = 0;
             player->flush_requested = true;
+            player->buffer_generation.fetch_add(1, std::memory_order_acq_rel);
         }
-        player->latest_video_timestamp_ns.store(0, std::memory_order_release);
-        player->timeline_generation.fetch_add(1, std::memory_order_acq_rel);
         player->queued.notify_one();
         return GVFG_AUDIO_PLAYBACK_OK;
     }
@@ -439,26 +424,27 @@ extern "C"
         delete player;
     }
 
-    const char *gvfg_audio_player_strerror(gvfg_audio_playback_status_t status)
-    {
-        switch (status)
-        {
-        case GVFG_AUDIO_PLAYBACK_OK:
-            return "ok";
-        case GVFG_AUDIO_PLAYBACK_EINVAL:
-            return "invalid argument";
-        case GVFG_AUDIO_PLAYBACK_ESTATE:
-            return "invalid state";
-        case GVFG_AUDIO_PLAYBACK_ENODEV:
-            return "default audio output unavailable";
-        case GVFG_AUDIO_PLAYBACK_EFORMAT:
-            return "PCM format unsupported";
-        case GVFG_AUDIO_PLAYBACK_EQUEUE_FULL:
-            return "playback queue full";
-        case GVFG_AUDIO_PLAYBACK_EIO:
-            return "audio playback failure";
-        default:
-            return "unknown audio playback status";
-        }
-    }
+}
+
+// Private output controls: no knowledge of video or synchronization policy.
+gvfg_audio_player audio_output_create_managed()
+{
+    return new (std::nothrow) gvfg_audio_player_t();
+}
+AudioOutputPosition audio_output_position(gvfg_audio_player p)
+{
+    if (!p) return {};
+    std::lock_guard<std::mutex> lock(p->mutex);
+    const auto align = block_align(p->format);
+    return {p->played_frames, (align ? p->queued_bytes / align : 0) + p->inflight_frames + p->device_padding,
+        p->running, p->output_paused,
+        p->flush_requested || p->applied_generation != p->buffer_generation.load()};
+}
+void audio_output_pause(gvfg_audio_player p, bool paused)
+{
+    if (p) { p->pause_requested = paused; p->queued.notify_one(); }
+}
+void audio_output_rate(gvfg_audio_player p, double ratio)
+{
+    if (p) p->rate_ratio = ratio;
 }

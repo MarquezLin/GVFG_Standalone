@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.16)
 project(gvfg_sdk LANGUAGES CXX)
 
 # Version policy: new features bump MINOR and reset PATCH; bug fixes bump PATCH.
-set(GVFG_SDK_VERSION "1.1.0")
+set(GVFG_SDK_VERSION "2.1.1")
 
 option(GVFG_EXPERIMENTAL_ZERO_COPY_OSD_INPLACE
     "UNSAFE local experiment: write OSD into driver zero-copy buffers" OFF)
@@ -55,9 +55,13 @@ add_subdirectory(helpers/gvfg_osd)
 add_subdirectory(sdk/gvfg)
 add_subdirectory(helpers/gvfg_preview)
 add_subdirectory(helpers/gvfg_audio_playback)
+add_subdirectory(helpers/gvfg_playback)
 
 install(FILES
   ../docs/GVFG_CUSTOMER_API.md
-  ../docs/GVFG_Customer_doc/GVFG_CUSTOMER_API_REFERENCE.md
+  ../docs/GVFG_PLAYBACK_API.md
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
+)
+install(FILES ../docs/GVFG_Customer_doc/GVFG_CUSTOMER_API_REFERENCE.md
+  DESTINATION ${CMAKE_INSTALL_DOCDIR}/GVFG_Customer_doc
 )

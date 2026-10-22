@@ -1,8 +1,8 @@
 # GVFG 客戶 API 使用手冊
 
-本文件說明客戶可使用的 GVFG 公開介面。唯一的公開核心標頭是
-`sdk/gvfg/include/gvfg_capture.h`；選用預覽功能時才需要
-`helpers/gvfg_preview/include/gvfg_preview.h`。
+本文件說明 SDK 2.1.1 的公開擷取介面 `gvfg_capture.h`。
+影像／音訊／同步播放另使用 `gvfg_playback.h`，完整流程見
+[統一影音播放使用手冊](GVFG_PLAYBACK_API.md)。Capture 與 Playback 是不同 handle 與 DLL。
 
 客戶套件不應包含 `gvfg_debug.h`、`sdk/gvfg/src/`、driver IOCTL、FPGA
 register、IRQ 或 DMA ring 實作細節。
@@ -20,12 +20,14 @@ bin/gvfg.dll
 Application 只 link `gvfg.lib`。內部 Gigabyte library 已靜態連結進
 `gvfg.dll`，不需要部署 `giga_ioctl.dll` 或額外公開 private header。
 
-選用預覽：
+選用播放（純影像、純音訊或影音）：
 
 ```text
+include/gvfg_playback.h
 include/gvfg_preview.h
-lib/gvfg_preview.lib
-bin/gvfg_preview.dll
+include/gvfg_audio_playback.h
+lib/gvfg_playback.lib
+bin/gvfg_playback.dll
 ```
 
 目前支援 Windows x64。API 使用 C ABI，可由 C 或 C++ 呼叫。
@@ -118,12 +120,10 @@ Audio 採用相同的 pull 與 ownership 模型：
   `GVFG_ESTATE`。
 - release 時傳回 read 取得的 `gvfg_audio_frame_t`；SDK 以 `data + frame_id` 確認目前 held frame。
 - 若播放或錄音需要在 release 後繼續使用 PCM，Application 必須先複製。
-- SDK 只保有單一交付 buffer，不建立 audio ring；播放排程與 buffering 屬於
-  Application／Qt／WASAPI。
-- Monitoring playback 不應反向阻塞 capture 或 recording。`QAudioSink` 暫時回傳
-  zero bytes 時可短暫重試；若持續沒有進度，Application 應丟棄過期播放資料並只
-  重建 output sink，保留 capture 與 recording。音訊 output device 恢復後從最新
-  PCM 繼續播放。
+- Capture 保有自己的交付 buffer；播放副本、queue、同步與輸出由 Playback 管理。
+- 使用 Playback 時，submit 已完成複製後即可 release，Demo 不自行實作音訊調速或同步。
+- 播放錯誤由 Playback status／last_error 回報，caller 決定停止與重啟。
+  輸出裝置故障後，應用程式須處理錯誤並決定是否重新啟動播放。
 
 `timeout_ms` 的共同規則：`0` 表示不等待；`GVFG_TIMEOUT_INFINITE` 表示無限等待；
 其他值的單位為毫秒。
@@ -136,7 +136,7 @@ Audio 採用相同的 pull 與 ownership 模型：
 | `GVFG_EINVAL`   | 參數、channel 或 frame token 無效 |
 | `GVFG_ENODEV`   | 找不到裝置或裝置無法開啟                |
 | `GVFG_ESTATE`   | 呼叫時機或 handle 狀態不正確          |
-| `GVFG_EIO`      | SDK 自身 I/O、GPU 或 internal extension 失敗 |
+| `GVFG_EIO`      | SDK／backend I/O、GPU 或 internal extension 失敗 |
 | `GVFG_ENOTSUP`  | 格式或功能不支援                    |
 | `GVFG_ETIMEOUT` | 等待逾時                        |
 | `GVFG_EBUSY`    | 裝置或 capture resource 正在使用中   |
@@ -226,7 +226,7 @@ Zero-copy mode 的 driver lifecycle 由 SDK 管理：open 時 enable，destroy/c
 
 ### SDK OSD
 
-OSD 整合在 `gvfg.dll`，不需要額外的 OSD DLL 或 `gvfg_preview.dll`。啟用後，
+OSD 由 `gvfg.dll` 提供。啟用後，
 `gvfg_read_channel_frame()` 交付含 OSD 的完整 YUY2／Y210 frame；使用後照常 release。
 
 - `gvfg_measure_osd_text(text, text_length, font_size_px, &width, &height)`：量測與實際
@@ -312,21 +312,23 @@ plane；使用 BT.709 limited range。
 - `gvfg_gpu_convert_to_rgb10a2()`
 - `gvfg_gpu_convert_to_nv12()`
 
-## 8. 選用預覽 helper
+## 8. 播放 API
 
-`gvfg_preview.dll` 是同步顯示 helper，不擁有 capture handle，也不依賴
-`gvfg.dll`。典型流程：
+`gvfg_playback.dll` 提供影像、音訊播放與影音同步功能。
+擷取仍由應用程式呼叫 `gvfg.dll`。典型流程：
 
 ```text
-gvfg_read_channel_frame
--> 將 gvfg_frame_t 欄位對應到 gvfg_preview_frame_t
--> gvfg_preview_render_frame
--> gvfg_release_channel_frame
+gvfg_playback_create -> attach_window -> default_config -> start
+capture video/audio -> submit_video / submit_audio -> release SDK frame
+停止提交 -> gvfg_playback_stop -> gvfg_playback_destroy
 ```
 
-建立後用 `gvfg_preview_attach_window()` 傳入 Windows `HWND`。render 返回前
-frame memory 必須保持有效。`gvfg_preview_get_stats()` 的 `present_fps` 只計算
-DXGI 成功接受的 Present；swapchain busy 而略過者記在 `skipped_presents`。
+submit 成功前已完成資料複製，返回後即可 release SDK frame；失敗時也必須 release，
+時間不連續或輸出錯誤仍須處理；queue 壓力由 Playback 自動降級並略過過時資料，不要求停止擷取。
+stop/reset 會丟棄待播資料，不代表無損排空。
+單張影像用 `gvfg_playback_present_image()`，在已綁定視窗、未 start 的 handle 上同步呼叫。
+詳細模式、master、緩衝與 timestamp 規則見
+[`統一影音播放使用手冊`](GVFG_PLAYBACK_API.md)。
 
 ## 9. 錯誤處理建議
 
@@ -345,4 +347,4 @@ DXGI 成功接受的 Present；swapchain busy 而略過者記在 `skipped_presen
 ## 完整 API Reference
 
 所有公開常數、型別、結構欄位、函式參數與回傳值，請參閱
-[`GVFG_CUSTOMER_API_REFERENCE.md`](GVFG_CUSTOMER_API_REFERENCE.md)。
+[`GVFG_CUSTOMER_API_REFERENCE.md`](GVFG_Customer_doc/GVFG_CUSTOMER_API_REFERENCE.md)。

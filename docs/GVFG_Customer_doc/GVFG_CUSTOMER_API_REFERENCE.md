@@ -1,13 +1,11 @@
 # GVFG 客戶 API Reference
 
-[TOC]
+SDK 2.1.1。Capture 與 Playback 使用各自的 API 與狀態碼。
 
-
-
-
-
-
-===
+- [擷取型別與常數](#1-gvfg-api-結構與常數)
+- [擷取函式](#2-gvfg-api-函式)
+- [播放影像型別](#3-playback-使用的影像型別)
+- [播放 API、config、stats 與限制](#4-統一-playback-api)
 
 ## 1. GVFG API 結構與常數
 
@@ -618,7 +616,7 @@ gvfg_status_t gvfg_get_channel_runtime_info(
 const char *gvfg_get_version(void);
 ```
 
-- 回傳目前實際載入的 GVFG runtime DLL 版本，例如 `"1.1.0"`。
+- 回傳目前實際載入的 GVFG runtime DLL 版本，例如 `"2.1.1"`。
 - 回傳值是靜態 null-terminated 字串，caller 不可 free。
 - 可用於 log、問題回報，以及確認 header、DLL 是否來自同一版本。
 
@@ -694,7 +692,7 @@ gvfg_status_t gvfg_clear_channel_osd(
 
 - Channel 必須已 open；可在 Start 前或擷取期間設定或停用。
 - `set` 同步複製設定，套用於後續 YUY2／Y210 frame；文字顏色為 BT.709 limited range，
-  由 GPU 混合。客戶不需要額外部署 OSD DLL 或使用 preview helper。
+  由 GPU 混合。
 - `x/y` 是量測文字框左上角。SDK 依每個 frame 把位置限制在
   `[0, frame.width - text_width]`／`[0, frame.height - text_height]`。
 - 文字框本身比 frame 大時暫不疊字，擷取仍繼續；設定、frame 尺寸或格式變更後重新判斷。
@@ -706,33 +704,24 @@ gvfg_status_t gvfg_clear_channel_osd(
 - 啟用 OSD 的 frame 可能為 SDK-owned output，即使擷取使用 zero-copy；
   每次成功 read 仍須恰好 release 一次。
 
-## 3. Preview API 完整參考
+## 3. Playback 使用的影像型別
 
-本節說明選用的 `gvfg_preview.h`。Preview status 與 core `gvfg_status_t` 是不同 enum，
-不可混用。
+以下型別定義於 `gvfg_preview.h`，由 `gvfg_playback.h` 引入。
+此標頭只提供 Playback 使用的影像與統計型別；播放操作見第 4 節。
 
 ### 3.1 Preview 型別
 
-`gvfg_preview_status_t`：
-
-| 成員                     | 說明                           |
-| ---------------------- | ---------------------------- |
-| `GVFG_PREVIEW_OK`      | 成功                           |
-| `GVFG_PREVIEW_EINVAL`  | NULL、尺寸或參數錯誤                 |
-| `GVFG_PREVIEW_ESTATE`  | 尚未建立／attach，或狀態不允許操作         |
-| `GVFG_PREVIEW_ENOTSUP` | 不支援 frame 格式                 |
-| `GVFG_PREVIEW_ERENDER` | D3D/DXGI render 或 Present 失敗 |
-
-`gvfg_preview_handle` 是 opaque pointer，只能由 preview create/destroy 管理。
+本節說明 Playback 使用的資料型別；操作函式與錯誤碼見第 4 節。
 
 `gvfg_preview_pixel_format_t`：
 
 | 成員                           | 值   | 說明                                             |
 | ---------------------------- | ---:| ---------------------------------------------- |
-| `GVFG_PREVIEW_PIXFMT_YUY2`   | 1   | Packed 8-bit YUV 4:2:2；值與 core YUY2 相同         |
-| `GVFG_PREVIEW_PIXFMT_Y210`   | 2   | Packed 10-bit YUV 4:2:2；值與 core Y210 相同        |
+| `GVFG_PREVIEW_PIXFMT_YUY2`   | 1   | Packed 8-bit YUV 4:2:2，Y0 U0 Y1 V0；Capture 格式應明確對應 |
+| `GVFG_PREVIEW_PIXFMT_Y210`   | 2   | Packed 10-bit YUV 4:2:2，16-bit containers |
 | `GVFG_PREVIEW_PIXFMT_GRAY16` | 4   | 每 pixel 一個 16-bit unsigned grayscale component |
 | `GVFG_PREVIEW_PIXFMT_RGBA16` | 5   | 每 pixel 四個 16-bit UNORM component：R、G、B、A      |
+| `GVFG_PREVIEW_PIXFMT_DICOM_YBR_FULL_422` | 6 | 每 pixel pair 四個 16-bit words：Y0、Y1、Cb、Cr，數值依 bit_depth 靠右對齊 |
 
 `gvfg_preview_frame_t`：
 
@@ -761,7 +750,7 @@ gvfg_status_t gvfg_clear_channel_osd(
 | ------------------ | ------------------------------------ |
 | `present_fps`      | 最近五秒成功 Present 的速率                   |
 | `presented_frames` | 成功 Present 的累積 frame 數               |
-| `skipped_presents` | Non-blocking swapchain busy 而略過的累積次數 |
+| `skipped_presents` | 底層 Preview 的 Present busy、submit busy 與 queue age 等略過累積；不含所有 core 提前退休 |
 
 `gvfg_preview_delivery_stats_t`：以下 counter 從 create 或前一次 shutdown 開始累積；
 configure 與 clear 不會重設。`presented` 表示 DXGI 接受 Present，不代表已實際 scanout。
@@ -786,76 +775,175 @@ configure 與 clear 不會重設。`presented` 表示 DXGI 接受 Present，不�
 submitted = presented + replaced + busy + failed + cancelled + in_flight
 ```
 
-### 3.2 Preview 函式
+## 4. 統一 Playback API
 
-| 函式                                                         | 參數與行為                                                                                  |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `gvfg_preview_get_delivery_stats(handle, out_stats)`       | `[in] handle`；`[out] out_stats`。取得 frame delivery lifetime counters；output 不可為 NULL    |
-| `gvfg_preview_wait_idle(handle, timeout_ms)`               | `[in] handle, timeout_ms`。停止提交新 frame 後等待 queued work 完成；仍有工作時回傳 `GVFG_PREVIEW_ESTATE` |
-| `gvfg_preview_create(out_handle)`                          | `[out] out_handle`。接收新 preview handle；不可為 NULL                                         |
-| `gvfg_preview_destroy(handle)`                             | `[in] handle`。銷毀 handle 與相關資源；返回後不得再使用                                                 |
-| `gvfg_preview_attach_window(handle, native_window_handle)` | `[in] handle, native_window_handle`。將 preview 接到 Windows `HWND`；兩參數都必須有效               |
-| `gvfg_preview_prepare(handle, width, height, bit_depth)`   | `[in] handle, width, height, bit_depth`。在持有第一張 capture frame 前預先建立 GPU resources       |
-| `gvfg_preview_render_frame(handle, frame)`                 | `[in] handle, frame`。返回前同步 upload caller data；GPU conversion 與 Present 由內部 worker 繼續執行 |
-| `gvfg_preview_clear(handle)`                               | `[in] handle`。將最後呈現的畫面替換成黑畫面                                                           |
-| `gvfg_preview_get_info(handle, out_info)`                  | `[in] handle`；`[out] out_info`。寫入目前 pipeline/frame/adapter 資訊                          |
-| `gvfg_preview_get_stats(handle, out_stats)`                | `[in] handle`；`[out] out_stats`。寫入 Present 統計                                          |
-| `gvfg_preview_shutdown(handle)`                            | `[in] handle`。關閉目前 preview pipeline，但保留 handle 供後續使用或 destroy                          |
-| `gvfg_preview_strerror(status)`                            | `[in] status`。回傳靜態英文錯誤字串；caller 不可 free                                                |
+公開標頭為 `gvfg_playback.h`，連結 `gvfg_playback.lib`、部署 `gvfg_playback.dll`。
+MinGW 使用 `libgvfg_playback.dll.a`。
 
-除 `gvfg_preview_strerror()` 外，preview 函式都回傳 `gvfg_preview_status_t`。實際錯誤
-應以函式回傳值判斷，並使用 `gvfg_preview_strerror()` 記錄說明。
+`gvfg_playback` 是 opaque handle。`config.struct_size`、`stats.struct_size`
+須設為對應結構大小；config 可先呼叫 `gvfg_playback_default_config()` 填好預設值。
+音訊格式 `gvfg_audio_playback_format_t` 包含 sample_rate、channels、bits_per_sample，
+目前支援 signed interleaved PCM16。
 
-`gvfg_preview_render_frame()` 返回後，caller 即可 release 或重用原始 frame memory；
-函式返回不代表該 frame 已完成 GPU conversion、Present 或實際顯示。需要在停止提交後確認
-內部工作已完成時，呼叫 `gvfg_preview_wait_idle()`。
+| 函式 | 行為 |
+|---|---|
+| `gvfg_playback_default_config(config)` | 預設影音模式、External master、100 ms preroll、48 kHz stereo PCM16 |
+| `gvfg_playback_create(out)` | 建立 handle，不啟動輸出 |
+| `gvfg_playback_attach_window(p, hwnd)` | 設定 HWND；NULL 表示無畫面輸出但仍消耗影像時間軸 |
+| `gvfg_playback_start(p, config)` | 啟動選定的純影像、純音訊或影音模式 |
+| `gvfg_playback_submit_video(p, frame)` | 複製影像與 timestamp，排入共用播放佇列 |
+| `gvfg_playback_submit_audio(p, pcm, bytes, timestamp_ns)` | 複製 PCM，以 SDK 交付時間建立來源 sample 時間軸 |
+| `gvfg_playback_present_image(p, image)` | 停止狀態、已綁定 HWND 時同步顯示單張影像，不需 start 或 PTS |
+| `gvfg_playback_set_volume(p, gain)` | PCM16 軟體音量，範圍 0.0 到 2.0 |
+| `gvfg_playback_set_sync_enabled(p, enabled)` | 0 為各自播放且不自動恢復同步；1 為啟用同步，預設 1 |
+| `gvfg_playback_reset_timeline(p)` | 丟棄待播資料，使用原設定重新建立時間軸 |
+| `gvfg_playback_stop(p)` | 停止播放並丟棄待播資料，可重複呼叫 |
+| `gvfg_playback_destroy(p)` | 停止並銷毀，NULL 可安全忽略 |
+| `gvfg_playback_get_stats(p, stats)` | 共同緩衝、queue、影音進度、誤差及調速資訊 |
+| `gvfg_playback_get_preview_info(p, info)` | 影像輸出資訊 |
+| `gvfg_playback_get_preview_stats(p, stats)` | GPU／呈現統計 |
+| `gvfg_playback_set_signal_connected(p, connected)` | UI 執行緒轉交訊號狀態：0 顯示 helper 內建 NO SIGNAL 圖卡，1 隱藏 |
+| `gvfg_playback_get_delivery_stats(p, stats)` | 影像呈現與略過等計數 |
+| `gvfg_playback_strerror(status)` | 靜態英文錯誤字串，不可 free |
 
-## 4. Audio Playback Helper 完整參考
+狀態碼為 OK、EINVAL、ESTATE、EOUTPUT、EQUEUE_FULL、EDISCONTINUITY、EAUDIO；
+queue 壓力會自動降級並略過過期資料，不要求 caller 因此停止擷取。正常同步時 External／Audio master 會退休過期預覽影格，並累計
+`video_dropped`；GPU busy 也計為略過，真正 GPU 失敗才回報 EOUTPUT。音訊及獨立錄影不受此預覽策略影響。
+2.0.2 的 get_stats 也接受舊 stats 大小，只寫入呼叫端提供的原始結構範圍。
+submit 返回後 caller 可立即釋放 SDK frame；present_image 則須保留資料到函式返回。
+控制操作（含 present_image）須由 caller 序列化；可由獨立影音 producer 併行 submit。
+stop/reset 是取消，不是無損 EOS drain。
 
-本節說明選用的 `gvfg_audio_playback.h`。`gvfg_audio_playback.dll` 是獨立的 Windows
-WASAPI helper，不依賴 `gvfg.dll`。Application 仍負責從 Capture API 取得 PCM、
-複製資料並 release SDK audio frame，再把 application-owned PCM 送入 helper。
+完整使用流程與可編譯的提交範例見
+[統一影音播放使用手冊](../GVFG_PLAYBACK_API.md)。
 
-### 4.1 Audio Playback 型別
+### 4.1 `gvfg_playback_config_t`
 
-`gvfg_audio_playback_status_t`：
+先呼叫 `gvfg_playback_default_config(&config)`，不需要自行填 struct_size。
+start 會複製設定；只接受停止狀態的 handle，不會代替 caller 停掉既有播放。
 
-| 成員                              | 說明                                      |
-| --------------------------------- | ----------------------------------------- |
-| `GVFG_AUDIO_PLAYBACK_OK`          | 成功                                      |
-| `GVFG_AUDIO_PLAYBACK_EINVAL`      | NULL、空資料、格式、frame alignment 或音量參數錯誤 |
-| `GVFG_AUDIO_PLAYBACK_ESTATE`      | Player 尚未啟動或目前狀態不允許操作       |
-| `GVFG_AUDIO_PLAYBACK_ENODEV`      | 找不到 Windows 預設 audio output          |
-| `GVFG_AUDIO_PLAYBACK_EFORMAT`     | WASAPI 不支援指定 PCM 格式                 |
-| `GVFG_AUDIO_PLAYBACK_EQUEUE_FULL` | 內部 bounded queue 已滿；本次 packet 未接受 |
-| `GVFG_AUDIO_PLAYBACK_EIO`         | COM、WASAPI 或 playback worker 操作失敗    |
+| 欄位 | 預設值 | 限制與語意 |
+|---|---|---|
+| `struct_size` | `sizeof(gvfg_playback_config_t)` | 必須等於目前完整結構大小 |
+| `mode` | `GVFG_PLAYBACK_AUDIO_VIDEO` | Video-only=1、Audio-only=2、Audio-video=3 |
+| `master` | `GVFG_PLAYBACK_MASTER_EXTERNAL` | External=0、Audio=1、Video=2；純影像強制 External，純音訊強制 Audio |
+| `audio_format.sample_rate` | 48000 | 啟用音訊時為 1～384000 Hz；通過參數檢查不代表 Windows 裝置一定支援 |
+| `audio_format.channels` | 2 | 啟用音訊時為 1～32 |
+| `audio_format.bits_per_sample` | 16 | 啟用音訊時必須為 16，signed interleaved PCM |
+| `preroll_ms` | 100 | 1～1000 ms；啟用串流需要的初始／重新緩衝覆蓋範圍 |
+| `max_video_frames` | 32 | 1～600，待播影像張數上限；純音訊仍須填合法值 |
+| `max_audio_ms` | 1000 | 不小於 preroll_ms，且不超過 10000；包括共用 queue 與輸出端待播量 |
+| `max_video_bytes` | 256 MiB | 必須大於 0；包括目前 worker 處理中的 CPU 影像副本 |
 
-`gvfg_audio_player` 是 opaque pointer，只能由 audio player create/destroy 管理。
+External／Audio master 的預覽允許過期退休與 GPU-busy 略過，不是逐幀無損輸出。
+Video master 不啟用自動過期退休；有限緩衝也不保證在輸出速度不足時永久接收所有 frame。
+選擇模式不會改變 Capture SDK 的啟用設定；Capture 的 audio enable 仍由 caller 管理。
 
-`gvfg_audio_playback_format_t`：
+### 4.2 `gvfg_playback_video_frame_t`
 
-| 欄位              | 說明                         |
-| ----------------- | ---------------------------- |
-| `sample_rate`     | 每秒 sample 數               |
-| `channels`        | Interleaved PCM channel 數    |
-| `bits_per_sample` | 每個 PCM sample 的 bit 數     |
+| 欄位 | 意義 |
+|---|---|
+| `image` | `gvfg_preview_frame_t`；資料指標、可用 bytes、尺寸、格式、有效 bit depth、row stride、frame ID |
+| `timestamp_ns` | 來源共同單調時間軸的交付奈秒值；非 0、各路嚴格遞增、不超過 INT64_MAX |
 
-### 4.2 Audio Playback 函式
+image 支援 YUY2、Y210、GRAY16、RGBA16、DICOM YBR_FULL_422，以
+`GVFG_PREVIEW_PIXFMT_*` 指定。Capture 的 `GVFG_PIXFMT_*` 必須明確對應，不能直接複製 enum 整數。
+`data_size` 至少覆蓋 `row_bytes * height`；row_bytes 須足夠容納一列指定格式。
+submit 會複製實際影像列範圍，frame ID 僅作身分／統計資訊，不用來計算 PTS。
+影像各欄位與格式 layout 詳見第 3 節。
 
-| 函式 | 參數與行為 |
-| ---- | ---------- |
-| `gvfg_audio_player_create(out_player)` | `[out] out_player`。建立 player；不可為 NULL |
-| `gvfg_audio_player_start(player, format)` | 在 Windows 預設輸出裝置啟動 shared-mode WASAPI playback |
-| `gvfg_audio_player_write(player, data, data_size)` | 複製完整 interleaved PCM frame 到 bounded queue；返回後 caller 可立即重用資料 |
-| `gvfg_audio_player_write_timed(player, data, data_size, audio_timestamp_ns)` | 連同 SDK audio delivery timestamp 排入 queue，供 helper 與 video timestamp 做有限度同步 |
-| `gvfg_audio_player_update_video_timestamp(player, video_timestamp_ns)` | 提供同一 SDK monotonic clock domain 的最新 video delivery timestamp |
-| `gvfg_audio_player_reset_timeline(player)` | 清除 queued PCM、重設 WASAPI stream，並建立新的 A/V sync timeline |
-| `gvfg_audio_player_set_volume(player, volume)` | 設定 PCM16 software gain；範圍 `0.0` 到 `2.0` |
-| `gvfg_audio_player_stop(player)` | 停止 worker 並清除 queued PCM；可重複呼叫 |
-| `gvfg_audio_player_destroy(player)` | 停止並銷毀 player；NULL 可安全忽略 |
-| `gvfg_audio_player_strerror(status)` | 回傳靜態英文錯誤字串；caller 不可 free |
+### 4.3 `gvfg_playback_submit_audio()` 的輸入
 
-Helper 的 queue 上限約為 500 ms PCM。`GVFG_AUDIO_PLAYBACK_EQUEUE_FULL` 表示本次 packet
-未被接受；capture thread 不應為等待播放而延後 release SDK frame。`write_timed()` 使用的是
-SDK delivery timestamp，不是來源端硬體 PTS，因此同步只適合限制明顯的短期 lead/lag，不能作為
-端到端硬體 A/V sync 的量測依據。
+| 參數 | 契約 |
+|---|---|
+| `p` | 已 start 且啟用音訊的 handle |
+| `pcm` | 非 NULL 的 signed interleaved PCM16，返回前保持有效 |
+| `bytes` | 大於 0，對齊 channels × 2，每包最多 100 ms |
+| `timestamp_ns` | 同一來源時鐘域的 SDK delivery time；須大於包長、非 0、嚴格遞增且不超過 INT64_MAX |
+
+第一包來源起點估為 timestamp 減去包長；後續維持連續的 sample 時間軸，
+平滑追蹤與交付時鐘的長期偏差。相鄰 delivery timestamp 的間隔若超過 250 ms 加上本包包長，
+會進入獨立播放並建立新的音訊映射；不會因此停止擷取。重複或倒退的時間仍會回報 EDISCONTINUITY。
+這些規則不會提供硬體擷取時間、漏 sample 數或絕對聲學延遲。
+
+### 4.4 狀態碼
+
+| 值 | 名稱 | caller 處理 |
+|---:|---|---|
+| 0 | `GVFG_PLAYBACK_OK` | 操作成功；submit 成功表示接受，不表示已呈現 |
+| -1 | `GVFG_PLAYBACK_EINVAL` | 修正 NULL、格式、尺寸、對齊、struct_size 或 config 範圍 |
+| -2 | `GVFG_PLAYBACK_ESTATE` | 檢查是否 start、模式是否啟用該路、單張操作是否在停止且已綁窗狀態 |
+| -3 | `GVFG_PLAYBACK_EOUTPUT` | 檢查 WASAPI／GPU／視窗／記憶體及重啟流程；不能假設會自動恢復 |
+| -4 | `GVFG_PLAYBACK_EQUEUE_FULL` | 保留的未接受狀態；先 release SDK frame，不可持有擷取資源等待 |
+| -5 | `GVFG_PLAYBACK_EDISCONTINUITY` | 協調 producer，重設時間軸；新音訊格式須以新 config stop/start |
+| -6 | `GVFG_PLAYBACK_EAUDIO` | 影音模式的監聽音效已因輸出故障停用，影像繼續；提示一次，繼續獨立擷取／錄影。此 handle 不再接受音訊，重建 handle 才重試音效 |
+
+影音模式的音訊輸出故障不設定整體 `last_error`；音訊 submit 回傳 `EAUDIO`，
+影像 submit 繼續。影音 start 遇到音效開啟失敗仍可成功，音訊 submit 會回報 `EAUDIO`。
+停用狀態跨 stop/start/reset 保留；重建 handle 才重試音效。純音訊模式仍視為輸出失敗。
+其他非同步輸出錯誤會保存在 `last_error`，後續 submit 會回傳此錯誤。
+`running` 仍可能為 1，因此不能只看 running 判斷輸出健康。
+
+### 4.5 `gvfg_playback_stats_t`
+
+一般 Customer Demo 不需要定期顯示本表；診斷或整合工具可自行查詢。
+先設 `stats.struct_size = sizeof(stats)`。getter 也接受 2.0.0／2.0.1 與 2.0.2／2.0.3 的 stats 大小，
+只回填舊結構範圍；config 並未因此接受任意大小。
+
+| 欄位 | 定義 |
+|---|---|
+| `struct_size` | caller 的有效結構大小 |
+| `running` | Playback 是否已 start 且尚未 stop，不是輸出健康保證 |
+| `buffering` | 正在等初始／重新緩衝，或因持續錯誤暫停 |
+| `last_error` | 共用 worker 的持續錯誤；查詢 API 返回 OK 不表示此欄也為 OK |
+| `video_submitted` | 成功接受的來源影像張數 |
+| `video_processed` | 已呈現、隱藏消化或已計數略過的張數 |
+| `video_presented` | 成功被 DXGI Present 接受的張數，不代表完成螢幕 scanout |
+| `audio_submitted` | 成功接受的音訊 packet 數，不是 sample 數 |
+| `queue_rejections` | 保留的容量拒收計數；一般 queue 壓力會自動降級／略過，不增加此值 |
+| `rebuffer_count` | 已運行時間軸重新進入共同緩衝的次數 |
+| `video_queue_bytes` | CPU 影像副本 bytes，包含 worker 目前處理中的副本 |
+| `video_queue_frames` | 共用待播 deque 張數，不含已移交 worker 的單張 |
+| `audio_queue_ms` | 共用 PCM queue 加上音訊輸出端待播 frames 的估計毫秒數 |
+| `video_timestamp_ns` | 最近完成影像處理所記錄的來源時間；隱藏模式也可推進，不是實體 scanout 時間 |
+| `audio_timestamp_ns` | 已消耗音訊 frames 換算的來源位置估計，不是麥克風量得的發聲時間 |
+| `av_difference_ns` | worker 保存的 audio 減 video clock 差值；兩個 clock 有效時才有意義，不是同時刻外部量測 |
+| `audio_rate_ratio` | 最近給輸出端的速率比例，1.0 表示不補償 |
+| `video_dropped` | 2.0.2 新增，過期退休與 GPU-busy 等預覽略過數，不是 capture／recording loss |
+| `sync_degraded` | 1 表示目前獨立播放，不等待另一路完成同步；0 表示正常同步流程 |
+| `sync_fallbacks` | 本次 start 後進入獨立播放的次數 |
+| `audio_dropped_frames` | 從 Playback 共用 queue 丟棄的 PCM sample frames；不含 WASAPI reset 取消的 padding，不是擷取遺失數 |
+
+不要把 submitted、processed、presented 視為必定相等。初始／共同緩衝、隱藏顯示、
+過期略過、in-flight 與 stop/reset 取消，都會影響計數關係。
+
+### 4.6 控制 API 的細節
+
+`gvfg_playback_set_sync_enabled(p, enabled)` 接受 0 或 1，其他值／NULL handle 回傳 EINVAL。
+可在 start 前或運行中呼叫；0 立即使用獨立播放且不自動恢復同步，1 在條件穩定後恢復同步。
+設定保留到 stop/start、reset_timeline；重新 create 的 handle 預設為 1。
+主動關閉同步也會使 `sync_degraded` 為 1，但不增加 `sync_fallbacks`。
+
+| API | 狀態、ownership 與限制 |
+|---|---|
+| `default_config(config)` | NULL 時不操作；其餘填完整預設值與 struct_size |
+| `create(out)` | out 不可 NULL；成功後 caller 擁有 handle，失敗時 out 為 NULL |
+| `attach_window(p, hwnd)` | 綁定 HWND；NULL 隱藏輸出但保留模式與影像時間軸；不自動 start |
+| `start(p, config)` | 必須為停止狀態；重設計數、queue、時鐘，沿用已設定音量與視窗 |
+| `submit_video(p, frame)` | 已 start 且啟用影像；返回後無論成功與否，都必須結束 caller 自己的 Capture frame ownership |
+| `submit_audio(p, pcm, bytes, ts)` | 已 start 且啟用音訊；成功返回前完成複製 |
+| `present_image(p, image)` | 停止狀態且有 HWND；同步等待工作完成，資料須有效到返回；GPU busy 不等於實體顯示成功 |
+| `set_volume(p, gain)` | finite 0.0～2.0；可先設定再 start，0 是靜音而不是停音訊 |
+| `reset_timeline(p)` | stop、清畫面、若原本 active 則用原 config start；未建立呈現表面（swapchain）的空畫面視為清除成功；會取消舊 queue，真正的清畫面或重啟失敗仍回報錯誤 |
+| `stop(p)` | 可重複呼叫；join 共用 worker、銷毀音訊輸出並清 queue；保留 Preview 物件供後續重用 |
+| `destroy(p)` | NULL 安全；stop 後銷毀 Preview 與 handle |
+| `get_stats(p, stats)` | 驗證 struct_size，回填共同快照；沒有音訊輸出時不建立它 |
+| `get_preview_info(p, info)` | 回傳影像資訊；尚未建立 Preview 時為零值 |
+| `get_preview_stats(p, stats)` | 回傳呈現 FPS／計數；尚未建立 Preview 時為零值 |
+| `set_signal_connected(p, connected)` | 僅接受 0／1，預設 1。0 顯示 helper 內建圖卡、1 隱藏。可在 attach 前設定，跨 stop/start/reset/reattach 保留；與 attach/destroy 在 HWND 執行緒序列化。圖卡隨視窗縮放，detach/destroy 釋放。此 API 不查詢 Capture、不更動影格或同步、不依 FPS 判斷訊號 |
+| `get_delivery_stats(p, stats)` | 回傳底層 Preview delivery 計數；不包含共用核心提前退休的所有過期影格 |
+| `strerror(status)` | 靜態字串，不可 free；未知值回傳 unknown error 文字 |
+
+函式完整名稱皆為 `gvfg_playback_` 加上表中名稱。getters 的輸出指標不可 NULL。
+控制操作含 present_image，須由 caller 序列化；一個影像與一個音訊 producer 可併行 submit。
+Playback 不控制 Capture handle，亦不接管它的 read/release 或 channel lifecycle。

@@ -1,9 +1,9 @@
 # Preview GPU conversion paths
 
-`gvfg_preview.dll` remains independent of `gvfg.dll`. Both targets compile
-one shared private conversion source, `d3d_conversion_pipeline.cpp`, into
-their own DLLs. There is no cross-DLL bridge, new public texture API, or
-runtime SDK dependency in the preview helper.
+The static `gvfg_preview` backend is linked into `gvfg_playback.dll` and remains
+independent of `gvfg.dll`. Both playback and capture compile the shared private
+conversion source, `d3d_conversion_pipeline.cpp`, into their own DLLs. Preview
+functions are internal; applications use `gvfg_playback_*`.
 
 CPU-buffer conversion uses dedicated outputs. YUY2/Y210 to NV12 preserves
 native luma and averages chroma vertically; Y210 codes are reduced to 8 bits.

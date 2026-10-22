@@ -1,75 +1,49 @@
-# GVFG SDK 學習文件入口
+# GVFG 文件閱讀入口
 
-這組文件以目前 `GVFG_Standalone` 工作目錄的實作為準，目的是協助自己理解 C++、追蹤 SDK 架構，以及記錄目前已完成與尚未驗證的內容。
+更新於 2026-10-22；SDK 2.1.1。以下連結以目前 source tree 為準。
 
-## 建議閱讀順序
+## 客戶與 Demo 使用者
 
-1. [`GVFG_Overview.md`](GVFG_Overview.md)
-   - 先認識 `gvfg_handle_t`、`gvfg_channel_session_t`、`GigabyteCaptureSession`。
-   - 理解 `unique_ptr`、`shared_ptr`、宣告與實際配置的差異。
-   - 理解 CH0、CH1 如何共用同一個 Windows device handle。
-2. [`GVFG_ERROR_HANDLING.md`](GVFG_ERROR_HANDLING.md)
-   - 理解公開 status、詳細錯誤字串與 Win32 `GetLastError()` 的分工。
-   - 理解 facade 與 backend 如何寫入同一份 `ChannelErrorState`。
-   - 理解哪些失敗可以 retry，哪些必須立即回傳。
-3. [`GVFG_FRAME_FLOW_AND_STATE.md`](GVFG_FRAME_FLOW_AND_STATE.md)
-   - 從 `gvfg_start_channel()` 一路追到 driver/DMA，再回到 application。
-   - 比較 copy 與 zero-copy 的資料位置及 ownership。
-   - 理解 read/release、stop、signal event、format change 的狀態變數。
+1. [客戶 Capture 使用手冊](GVFG_CUSTOMER_API.md)：裝置、channel、影音 read/release 與事件。
+2. [統一 Playback 使用手冊](GVFG_PLAYBACK_API.md)：一個播放 DLL、三種模式、單張顯示與舊版遷移。
+3. [公開 API Reference](GVFG_Customer_doc/GVFG_CUSTOMER_API_REFERENCE.md)：所有 Capture API，以及 Playback config、輸入、狀態、stats、函式契約。
+4. [Customer Sample README](../../Costomer_SDK_Release/GVFG_Customer_Sample/README.md)：Qt Creator／CMake 建置與 Demo 操作。
 
-其他用途不同的既有文件：
+不需先讀 driver、WASAPI 或 D3D 才能使用公開 API。Demo 只展示 API，不實作同步演算法。
 
-- [`GVFG_CUSTOMER_API.md`](GVFG_CUSTOMER_API.md)：客戶使用流程與規則。
-- [`GVFG_CUSTOMER_API_REFERENCE.md`](GVFG_CUSTOMER_API_REFERENCE.md)：公開 API 逐項參考。
-- [`GVFG_INTERNAL_NOTES.md`](GVFG_INTERNAL_NOTES.md)：內部模組邊界、打包與維護筆記。
-- [`INTERNAL_BUILD_GUIDE.md`](INTERNAL_BUILD_GUIDE.md)：建置與診斷方式。
+## SDK 維護與學習
 
-## 目前程式改到哪裡
+1. [物件架構](GVFG_Overview.md)：Capture／Playback 兩種 handle、內部物件及 DLL／靜態 library。
+2. [資料流與狀態](GVFG_FRAME_FLOW_AND_STATE.md)：借用 pointer、播放副本、read/release、重設與停止。
+3. [Capture 錯誤處理](GVFG_ERROR_HANDLING.md)：Capture status／detail 與 ownership；播放錯誤另看 API Reference 第 4 節。
+4. [Playback 實作](../GVFG_SDK/helpers/gvfg_playback/README.md)：PTS、master、共同緩衝、WASAPI 進度、漂移與過期預覽追趕。
+5. [內部建置說明](INTERNAL_BUILD_GUIDE.md)：實際 target、Sample 三種 SDK 來源、install 與版本配套。
+6. [內部設計筆記](GVFG_INTERNAL_NOTES.md)：Capture facade、vendor adapter 與內部診斷邊界。
+7. [Viewer backend 邊界](../../srcroot/docs/BACKEND_BOUNDARIES.md)：GVFG、DirectShow、錄影各自的責任。
 
-更新日期：2026-08-27。
+## 建議的原始碼追蹤順序
 
-目前已實作：
+| 問題 | 從哪裡看 |
+|---|---|
+| 公開型別與函式 | `GVFG_SDK/sdk/gvfg/include/gvfg_capture.h`、`helpers/gvfg_playback/include/gvfg_playback.h` |
+| Capture token／channel lifecycle | `GVFG_SDK/sdk/gvfg/src/gvfg_capture.cpp` |
+| vendor frame／event | `GVFG_SDK/sdk/gvfg/src/gigabyte/gigabyte_capture_session.cpp` |
+| 開始播放、queue、master、過期退休 | `GVFG_SDK/helpers/gvfg_playback/src/gvfg_playback.cpp` |
+| Clock／sample-to-PTS／DriftFilter | `GVFG_SDK/helpers/gvfg_playback/src/playback_timing.h` |
+| WASAPI 與 raw frame position | `GVFG_SDK/helpers/gvfg_audio_playback/src/` |
+| GPU 上傳、呈現與完成通知 | `GVFG_SDK/helpers/gvfg_preview/src/gvfg_preview.cpp` |
+| Demo 如何使用 API | `Costomer_SDK_Release/GVFG_Customer_Sample/src/playback.cpp`、`capture_controller.cpp` |
 
-- 一個 `gvfg_handle_t` 可管理 CH0、CH1。
-- CH0、CH1 共用一個 `GigabyteDeviceConnection`，底層只有一個 Windows device `HANDLE`。
-- 每條 channel 各自擁有 backend、event、capture thread、copy buffer 與 frame lifetime state。
-- 公開 API 已改為 channel-aware：open/start/read/release/poll/stop 都帶 `channel_index`。
-- copy mode 直接把 driver frame 寫入該 channel 的 `copy_buffer_`。
-- zero-copy mode 保存 driver-owned pointer，成功 read 必須配對一次公開 release 以結束
-  SDK pointer lifetime；目前不送逐 frame Lib/driver release。
-- `ChannelErrorState` 由 `gvfg_handle_t` 逐 channel 持有，facade/backend 共用同一份詳細錯誤。
-- `firstOpenChannel()` 與「第二條 channel 從第一條借 backend」的 ownership 已移除。
-- 重複的 `device_`、`opened_`、device path/name session 狀態已移除；`device_connection_` 是 device handle 的唯一來源。
-- `wait_frame()` 只對 transient not-ready error 在原始 deadline 內重試，不使用無界 retry 或 `Sleep()`。
+表內路徑分別相對 Standalone repo 或 SDK workspace；不是可依賴的公開 ABI。
 
-目前驗證範圍：
+## 怎麼判讀驗證結果
 
-- 已做 source 搜尋與 `git diff --check`。
-- 本輪未執行 build。
-- 尚未在硬體上驗證 CH0、CH1 同時 start/read/release。
-- 尚未用實際拔插、格式切換、stop-with-held-frame 覆蓋所有狀態轉移。
+- source／文件核對：證明描述與所讀取的程式一致。
+- build／export／相依檢查：證明指定環境可編譯連結，不等於硬體正常。
+- 既有 120 秒 Qt 實機測試：驗證該情境的 FPS 與 queue 穩定，不等於小時級漂移或嘴型精度。
+- 慢速輸出模擬：驗證過期預覽追趕與計數，不等於所有 GPU 的效能。
 
-## 閱讀程式碼的方式
+內部測試摘要放在 Playback 維護文件，客戶使用手冊不堆疊歷次除錯 log。
+既有 PDF 是產生當時的快照；未依本次 Markdown 重製的 PDF 不可視為目前版本的最新說明。
 
-遇到一個成員變數時，依序問：
-
-1. 它屬於哪個物件？
-2. 該物件由誰擁有？
-3. 它只是管理物件，還是真的影像資料？
-4. 哪個函式第一次設定它？
-5. 哪個函式清除它？
-6. 多執行緒存取時由 mutex、atomic 或其他規則保護？
-7. 發生錯誤時，狀態會保留供 retry，還是立即清除？
-
-閱讀 frame lifetime 時，最重要的是追蹤：
-
-```text
-read 成功
-    -> data pointer 交給 application
-    -> frameHeld/frame_held_ = true
-    -> application 同步使用或複製
-    -> release 成功
-    -> held state 清除
-```
-
-不要只看 pointer 指向哪裡，也要看誰有權決定它何時失效。
+讀任何成員時先問：誰擁有它、誰修改它、哪把鎖保護、資料何時失效、錯誤時是否還需 release。

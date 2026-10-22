@@ -232,6 +232,10 @@ namespace gvfg::internal
 
         if (!events_.hVideoFormatChangedEvent)
             return reject(GVFG_EIO, "Capture backend did not provide a video-format event");
+#ifndef NDEBUG
+        if (WaitForSingleObject(events_.hVideoFormatChangedEvent, 0) == WAIT_OBJECT_0)
+            OutputDebugStringA("[GVFG] Received VIDEO_FORMAT_CHANGED (before format reset)\n");
+#endif
         if (!ResetEvent(events_.hVideoFormatChangedEvent))
             return reject(GVFG_EIO, "Capture video-format event reset failed");
 
@@ -303,6 +307,10 @@ namespace gvfg::internal
                 return reject(GVFG_EIO, "Capture backend did not provide a video-format event");
             const DWORD wait = WaitForSingleObject(events_.hVideoFormatChangedEvent,
                                                    kVideoFormatChangeTimeoutMs);
+#ifndef NDEBUG
+            if (wait == WAIT_OBJECT_0)
+                OutputDebugStringA("[GVFG] Received VIDEO_FORMAT_CHANGED\n");
+#endif
             if (wait != WAIT_OBJECT_0 && wait != WAIT_TIMEOUT)
                 return reject(GVFG_EIO, "Capture video-format event wait failed");
 
@@ -441,6 +449,11 @@ namespace gvfg::internal
         const gvfg_status_t openStatus = ensure_vendor_channel_open();
         if (openStatus != GVFG_OK)
             return openStatus;
+#ifndef NDEBUG
+        if (events_.hVideoFormatChangedEvent &&
+            WaitForSingleObject(events_.hVideoFormatChangedEvent, 0) == WAIT_OBJECT_0)
+            OutputDebugStringA("[GVFG] Received VIDEO_FORMAT_CHANGED (before start reset)\n");
+#endif
         const gvfg_status_t resetStatus = from_vendor(GvfgResetEvents(&events_), "GvfgResetEvents");
         if (resetStatus != GVFG_OK)
             return resetStatus;
@@ -502,6 +515,11 @@ namespace gvfg::internal
                 result = stopStatus;
             if (stopStatus == GVFG_OK)
             {
+#ifndef NDEBUG
+                if (events_.hVideoFormatChangedEvent &&
+                    WaitForSingleObject(events_.hVideoFormatChangedEvent, 0) == WAIT_OBJECT_0)
+                    OutputDebugStringA("[GVFG] Received VIDEO_FORMAT_CHANGED (before stop reset)\n");
+#endif
                 const gvfg_status_t resetStatus = from_vendor(GvfgResetEvents(&events_),
                                                               "GvfgResetEvents");
                 if (result == GVFG_OK)
@@ -760,6 +778,9 @@ namespace gvfg::internal
                 return;
             if (kind == 1)
             {
+#ifndef NDEBUG
+                OutputDebugStringA("[GVFG] Received VIDEO_FORMAT_CHANGED\n");
+#endif
                 refresh_video_info();
                 emit_event(GVFG_EVENT_VIDEO_FORMAT_CHANGED);
             }
@@ -772,6 +793,9 @@ namespace gvfg::internal
                     recovery_pending_ = true;
                     SetEvent(recovery_event_);
                     recover_stream_after_plugin();
+                    // Recovery restarts the vendor stream. Refresh the geometry
+                    // again before publishing the plug-in event to clients.
+                    refresh_video_info();
                 }
                 emit_event(GVFG_EVENT_VIDEO_INPUT_PLUGIN);
             }
